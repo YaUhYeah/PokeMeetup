@@ -1,0 +1,102 @@
+[
+  {
+    "name": "Plains",
+    "type": "PLAINS",
+    "allowedTileTypes": [
+      1,
+      10
+    ],
+    "tileTextures": {
+      "1": "grass",
+      "10": "tall_grass"
+    },
+    "tileDistribution": {
+      "1": 90,
+      "10": 10
+    },
+    "spawnableObjects": [
+      "TREE"
+    ],
+    "spawnChances": {
+      "1": 0.08,
+      "10": 0.03
+    }
+  },
+  {
+    "name": "Forest",
+    "type": "FOREST",
+    "allowedTileTypes": [
+      1,
+      10
+    ],
+    "tileTextures": {
+      "1": "grass",
+      "10": "tall_grass"
+    },
+    "tileDistribution": {
+      "1": 70,
+      "10": 30
+    },
+    "spawnableObjects": [
+      "TREE"
+    ],
+    "spawnChances": {
+      "1": 0.20,
+      "10": 0.10
+    }
+  },
+  {
+    "name": "Snow",
+    "type": "SNOW",
+    "allowedTileTypes": [
+      4,
+      6
+    ],
+    "tileTextures": {
+      "4": "snow",
+      "6": "snow_tall_grass"
+    },
+    "tileDistribution": {
+      "4": 70,
+      "6": 30
+    },
+    "spawnableObjects": [
+      "SNOW_TREE"
+    ],
+    "spawnChances": {
+      "4": 0.08,
+      "6": 0.04
+    }
+  },
+  {
+    "name": "Haunted",
+    "type": "HAUNTED",
+    "allowedTileTypes": [
+      5,
+      7,
+      8,
+      9
+    ],
+    "tileTextures": {
+      "5": "haunted_grass",
+      "7": "haunted_tall_grass",
+      "8": "haunted_shroom",
+      "9": "haunted_shrooms"
+    },
+    "tileDistribution": {
+      "5": 70,
+      "7": 15,
+      "8": 5,
+      "9": 10
+    },
+    "spawnableObjects": [
+      "HAUNTED_TREE"
+    ],
+    "spawnChances": {
+      "5": 0.05,
+      "7": 0.06,
+      "8": 0.01,
+      "9": 0.02
+    }
+  }
+]
