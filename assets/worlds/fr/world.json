@@ -1,0 +1,37 @@
+{
+name: fr
+lastPlayed: 1730143958109
+config: {
+	seed: 0
+	treeSpawnRate: 0.15
+	pokemonSpawnRate: 0.05
+}
+players: {
+	fr: {
+		username: fr
+		hashedPassword: null
+		x: 0
+		y: 0
+		direction: 0
+		isMoving: false
+		wantsToRun: false
+		inventoryItemNames: []
+	}
+	Player: {
+		username: Player
+		hashedPassword: null
+		x: 4480
+		y: 2592
+		direction: down
+		isMoving: false
+		wantsToRun: false
+		inventoryItemNames: [
+			Pokeball:1
+			Potion:1
+			Elixir:1
+		]
+	}
+}
+entities: {}
+pluginConfigs: null
+}

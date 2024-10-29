@@ -1,78 +1,148 @@
 package io.github.pokemeetup.screens;
 
 import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.Input;
 import com.badlogic.gdx.Screen;
+import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
-import com.badlogic.gdx.scenes.scene2d.*;
+import com.badlogic.gdx.graphics.Pixmap;
+import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import com.badlogic.gdx.scenes.scene2d.Actor;
+import com.badlogic.gdx.scenes.scene2d.InputEvent;
+import com.badlogic.gdx.scenes.scene2d.InputListener;
+import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
+import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
 import com.badlogic.gdx.utils.Align;
-import com.badlogic.gdx.utils.Array;
+import com.badlogic.gdx.utils.SerializationException;
 import com.badlogic.gdx.utils.Timer;
 import io.github.pokemeetup.CreatureCaptureGame;
-import io.github.pokemeetup.managers.ServerStatusChecker;
-import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
-import io.github.pokemeetup.system.gameplay.overworld.World;
-import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
-import io.github.pokemeetup.system.inventory.Inventory;
-import io.github.pokemeetup.system.inventory.Item;
 
 import java.io.IOException;
 
-
 public class ModeSelectionScreen implements Screen {
-    private CreatureCaptureGame game;
-    private Stage stage;
-    private TextButton singlePlayerButton;
-    private TextButton multiplayerButton;
-    private Label serverStatusLabel;
-    private Skin skin;
-    private Timer timer;
-    private WorldManager worldManager;
+    private final CreatureCaptureGame game;
+    private final Stage stage;
+    private final Skin skin;
+    private final Timer timer;
+    private BitmapFont font;
 
     public ModeSelectionScreen(CreatureCaptureGame game) {
         this.game = game;
         this.stage = new Stage();
         Gdx.input.setInputProcessor(stage);
 
-        this.worldManager = new WorldManager();
-        skin = new Skin(Gdx.files.internal("Skins/uiskin.json"));
+        this.skin = new Skin();
+        this.timer = new Timer();
 
-        setupUI();
-        checkServerAvailability();
+        try {
+            this.font = initializeSkin();
+            Gdx.app.log("SkinSetup", "Successfully initialized the skin.");
+        } catch (Exception e) {
+            showError("Failed to initialize UI: " + e.getMessage());
+            Gdx.app.error("SkinSetup", "Failed to initialize UI", e);
+            return;
+        }
+
+        createUI();
     }
 
-    private void setupUI() {
-        Table table = new Table();
-        table.setFillParent(true);
-        stage.addActor(table);
+    private BitmapFont initializeSkin() {
+        // Add BitmapFont
+        BitmapFont font = new BitmapFont(); // Default font
+        skin.add("default", font);
 
+        // Define Colors
+        skin.add("white", new Color(1, 1, 1, 1));
+        skin.add("black", new Color(0, 0, 0, 1));
+        skin.add("gray", new Color(0.8f, 0.8f, 0.8f, 1));
+
+        // Create drawables
+        Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+        pixmap.setColor(Color.WHITE);
+        pixmap.fill();
+        skin.add("white", new Texture(pixmap));
+
+        // Create a TextureRegion for the window background
+        TextureRegion windowBackground = new TextureRegion(new Texture(pixmap));
+        skin.add("window", windowBackground);
+
+        // Create panel-background drawable
+        pixmap.setColor(new Color(0.2f, 0.2f, 0.2f, 1));
+        pixmap.fill();
+        skin.add("panel-background", new TextureRegionDrawable(new TextureRegion(new Texture(pixmap))));
+
+        // Clean up the pixmap
+        pixmap.dispose();
+
+        // Create styles
+        TextButton.TextButtonStyle textButtonStyle = new TextButton.TextButtonStyle();
+        textButtonStyle.up = skin.newDrawable("white", Color.DARK_GRAY);
+        textButtonStyle.down = skin.newDrawable("white", Color.DARK_GRAY);
+        textButtonStyle.checked = skin.newDrawable("white", Color.BLUE);
+        textButtonStyle.over = skin.newDrawable("white", Color.LIGHT_GRAY);
+        textButtonStyle.font = skin.getFont("default");
+        skin.add("default", textButtonStyle);
+
+        Label.LabelStyle labelStyle = new Label.LabelStyle();
+        labelStyle.font = skin.getFont("default");
+        skin.add("default", labelStyle);
+
+        // Create and add WindowStyle
+        Window.WindowStyle windowStyle = new Window.WindowStyle();
+        windowStyle.titleFont = skin.getFont("default");
+        windowStyle.background = skin.newDrawable("window", new Color(0.2f, 0.2f, 0.2f, 0.8f));
+        windowStyle.titleFontColor = Color.WHITE;
+        skin.add("default", windowStyle);
+
+        return font;
+    }
+
+    // Helper method to create a solid color drawable
+
+
+    private void createUI() {
+        // Main container table
+        Table mainContainer = new Table();
+        mainContainer.setFillParent(true);
+        mainContainer.pad(50);
+
+        // Add the main container to the stage
+        stage.addActor(mainContainer);
+
+        // Create Labels
         Label titleLabel = new Label("PokeMeetup", skin);
-        titleLabel.setFontScale(2);
-        titleLabel.setAlignment(Align.center);
+        titleLabel.setFontScale(2.0f);
 
-        singlePlayerButton = new TextButton("Single Player", skin);
-        multiplayerButton = new TextButton("Multiplayer", skin);
-        serverStatusLabel = new Label("", skin);
+        Label versionLabel = new Label("Version 1.0", skin);
+        versionLabel.setColor(skin.getColor("white"));
 
-        table.add(titleLabel).colspan(2).padBottom(20);
-        table.row();
-        table.add(singlePlayerButton).width(200).height(50).padBottom(10);
-        table.row();
-        table.add(multiplayerButton).width(200).height(50);
+        // Create Buttons
+        TextButton singlePlayerButton = new TextButton("Single Player", skin);
+        TextButton multiplayerButton = new TextButton("Multiplayer", skin);
+        TextButton exitButton = new TextButton("Exit Game", skin);
 
+        // Arrange UI elements using Table
+        mainContainer.add(titleLabel).padBottom(10).row();
+        mainContainer.add(versionLabel).padBottom(50).row();
+        mainContainer.add(singlePlayerButton).width(250).height(50).padBottom(20).row();
+        mainContainer.add(multiplayerButton).width(250).height(50).padBottom(20).row();
+        mainContainer.add(exitButton).width(250).height(50).padBottom(20).row();
+
+        // Add button listeners
         singlePlayerButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
-                GameClient singlePlayerClient = null;
                 try {
-                    singlePlayerClient = GameClientSingleton.getSinglePlayerInstance();
-                    showWorldSelectionDialog(singlePlayerClient, "Player");
+                    GameClientSingleton.getSinglePlayerInstance();
+                    game.setScreen(new WorldSelectionScreen(game));
+                    dispose();
                 } catch (IOException e) {
-                    showError("Failed to initialize game client: " + e.getMessage());
+                    showError("Failed to start single player mode: " + e.getMessage());
                 }
             }
         });
@@ -80,283 +150,67 @@ public class ModeSelectionScreen implements Screen {
         multiplayerButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
-                game.setScreen(new LoginScreen(game));
+                try {
+                    game.setScreen(new LoginScreen(game));
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
                 dispose();
             }
         });
 
-        multiplayerButton.setDisabled(true);
-    }
-
-    private void updateWorldList(List<String> worldList) {
-        // Refresh worlds from disk
-        worldManager.refreshWorlds();
-
-        // Update list items
-        Array<String> worldNames = new Array<>();
-        worldManager.getWorlds().keySet().forEach(worldNames::add);
-        worldList.setItems(worldNames);
-    }
-
-    private void showWorldSelectionDialog(GameClient client, String username) {
-        Dialog dialog = new Dialog("Select World", skin);
-        Table contentTable = new Table();
-        contentTable.setSkin(skin);
-        contentTable.pad(20);
-
-        // World list
-        List<String> worldList = new List<>(skin);
-        updateWorldList(worldList);
-
-        ScrollPane scrollPane = new ScrollPane(worldList, skin);
-        contentTable.add(scrollPane).width(300).height(200);
-        contentTable.row();
-
-        // Buttons
-        Table buttonTable = new Table();
-        TextButton selectButton = new TextButton("Select", skin);
-        TextButton createButton = new TextButton("Create New", skin);
-        TextButton deleteButton = new TextButton("Delete", skin);
-        TextButton backButton = new TextButton("Back", skin);
-
-        buttonTable.add(selectButton).padRight(10);
-        buttonTable.add(createButton).padRight(10);
-        buttonTable.add(deleteButton).padRight(10);
-        buttonTable.add(backButton);
-
-        contentTable.add(buttonTable).padTop(20);
-        dialog.getContentTable().add(contentTable);
-
-        // Button listeners
-        selectButton.addListener(new ChangeListener() {
+        exitButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
-                String selected = worldList.getSelected();
-                if (selected != null) {
-                    WorldData world = worldManager.getWorld(selected);
-                    if (world != null) {
-                        game.setScreen(new GameScreen(game,username, client,
-                            World.DEFAULT_X_POSITION, World.DEFAULT_Y_POSITION, selected));
-                        dialog.hide();
-                        dispose();
-                    }
-                }
+                Gdx.app.exit();
             }
         });
-
-        createButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                dialog.hide();
-                showCreateWorldDialog(client, username);
-            }
-        });
-
-        deleteButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                String selected = worldList.getSelected();
-                if (selected != null) {
-                    showDeleteConfirmation(selected, worldList);
-                }
-            }
-        });
-
-        backButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                dialog.hide();
-                // Return to previous screen (likely ModeSelectionScreen)
-                game.setScreen(new ModeSelectionScreen(game));
-                // Clean up resources if needed
-                dispose();
-            }
-        });
-
-
-
-
-        // Existing button listeners...
-
-        // Add listener for dialog close button (X)
-        dialog.addListener(new InputListener() {
-            @Override
-            public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
-                if (dialog.isModal() && x < 0 || x > dialog.getWidth() || y < 0 || y > dialog.getHeight()) {
-                    backButton.fire(new ChangeListener.ChangeEvent());
-                    return true;
-                }
-                return false;
-            }
-        });
-
-        dialog.show(stage);
-    }
-
-    private void showCreateWorldDialog(GameClient client, String username) {
-        Dialog dialog = new Dialog("Create New World", skin);
-        dialog.setModal(true);
-        dialog.setMovable(false);
-
-        Table content = new Table();
-        content.setSkin(skin);
-        content.pad(20);
-
-        final TextField nameField = new TextField("", skin);
-        final TextField seedField = new TextField("", skin);
-
-        content.add("World Name:").padRight(10);
-        content.add(nameField).width(200);
-        content.row().padTop(10);
-        content.add("Seed (optional):").padRight(10);
-        content.add(seedField).width(200);
-
-        // Add buttons in a row
-        Table buttonTable = new Table();
-        buttonTable.pad(20, 0, 0, 0);
-
-        TextButton createButton = new TextButton("Create", skin);
-        TextButton backButton = new TextButton("Back", skin);
-        TextButton cancelButton = new TextButton("Cancel", skin);
-
-        buttonTable.add(createButton).padRight(20);
-        buttonTable.add(backButton).padRight(20);
-        buttonTable.add(cancelButton);
-
-        content.row();
-        content.add(buttonTable).colspan(2).center();
-
-        dialog.getContentTable().add(content);
-
-        // Button listeners
-        createButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                String worldName = nameField.getText().trim();
-                if (!worldName.isEmpty()) {
-                    try {
-                        long seed = seedField.getText().isEmpty() ?
-                            System.currentTimeMillis() :
-                            Long.parseLong(seedField.getText());
-
-                        WorldData worldData = new WorldData(worldName, System.currentTimeMillis(),
-                            new WorldData.WorldConfig(seed));
-
-                        // Ensure world directory exists
-                        worldManager.ensureWorldDirectory(worldName);
-
-                        // Create and save the world
-                        worldManager.createWorld(worldName, seed, 0.15f, 0.05f);
-                        game.initializeWorld(worldName, false);
-
-                        dialog.hide();
-                        game.setScreen(new GameScreen(game,username, client,
-                            World.DEFAULT_X_POSITION, World.DEFAULT_Y_POSITION, worldName));
-                        dispose();
-                    } catch (Exception e) {
-                        showError("Failed to create world: " + e.getMessage());
-                    }
-                } else {
-                    showError("Please enter a world name");
-                }
-            }
-        });
-
-        backButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                dialog.hide();
-                showWorldSelectionDialog(client, username);
-            }
-        });
-
-        cancelButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                dialog.hide();
-                // Return to mode selection screen
-                game.setScreen(new ModeSelectionScreen(game));
-                dispose();
-            }
-        });
-
-        dialog.show(stage);
-    }
-
-    private void showDeleteConfirmation(String worldName, List<String> worldList) {
-        Dialog confirm = new Dialog("Confirm Delete", skin);
-        confirm.text("Are you sure you want to delete " + worldName + "?");
-
-        // Create buttons
-        TextButton yesButton = new TextButton("Yes", skin);
-        TextButton noButton = new TextButton("No", skin);
-
-        // Add listeners
-        yesButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                worldManager.deleteWorld(worldName);
-                Array<String> updatedNames = new Array<>();
-                worldManager.getWorlds().keySet().forEach(updatedNames::add);
-                worldList.setItems(updatedNames);
-                confirm.hide();
-            }
-        });
-
-        noButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                confirm.hide();
-            }
-        });
-
-        // Add buttons to dialog
-        confirm.getButtonTable().add(yesButton).padRight(20);
-        confirm.getButtonTable().add(noButton);
-
-        confirm.show(stage);
     }
 
     private void showError(String message) {
-        Dialog error = new Dialog("Error", skin);
-        error.text(message);
-        error.button("OK");
-        error.show(stage);
-    }
-
-    private void checkServerAvailability() {
-        timer = new Timer();
-        Timer.Task checkTask = new Timer.Task() {
-            @Override
-            public void run() {
-                ServerStatusChecker.checkServerAvailability(isAvailable -> {
-                    Gdx.app.postRunnable(() -> {
-                        if (isAvailable) {
-                            multiplayerButton.setDisabled(false);
-                            serverStatusLabel.setText("");
-                        } else {
-                            multiplayerButton.setDisabled(true);
-                            serverStatusLabel.setText("Multiplayer server is currently unavailable.");
-                        }
-                    });
-                });
-            }
-        };
-        timer.scheduleTask(checkTask, 0, 10); // Check every 10 seconds
+        try {
+            Dialog dialog = new Dialog("Error", skin);
+            dialog.text(message);
+            dialog.button("OK");
+            dialog.show(stage);
+        } catch (Exception e) {
+            // Fallback in case Dialog creation fails
+            Gdx.app.error("DialogError", "Failed to show error dialog: " + e.getMessage());
+            System.out.println("Error Dialog failed: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     @Override
     public void render(float delta) {
-        Gdx.gl.glClearColor(0, 0, 0, 1);
+        Gdx.gl.glClearColor(0, 0, 0, 1); // Clear with black
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
         stage.act(delta);
         stage.draw();
     }
 
-    // Implement other required methods (resize, pause, resume, hide, dispose)
     @Override
     public void resize(int width, int height) {
         stage.getViewport().update(width, height, true);
+    }
+
+    @Override
+    public void dispose() {
+        stage.dispose();
+        skin.dispose();
+        font.dispose();
+        if (timer != null) {
+            timer.clear();
+        }
+    }
+
+    // Other required Screen methods...
+    @Override
+    public void show() {
+    }
+
+    @Override
+    public void hide() {
     }
 
     @Override
@@ -365,19 +219,5 @@ public class ModeSelectionScreen implements Screen {
 
     @Override
     public void resume() {
-    }
-
-    @Override
-    public void hide() {
-    }
-
-    @Override
-    public void show() {
-    }
-
-    @Override
-    public void dispose() {
-        stage.dispose();
-        skin.dispose();
     }
 }

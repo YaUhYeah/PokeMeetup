@@ -2,6 +2,8 @@ package io.github.pokemeetup.system.gameplay.overworld;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.files.FileHandle;
+import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
@@ -10,26 +12,51 @@ import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Json;
 import com.badlogic.gdx.utils.JsonWriter;
+import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.managers.AutoSaveManager;
 import io.github.pokemeetup.managers.BiomeManager;
 import io.github.pokemeetup.multiplayer.client.GameClient;
+import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
+import io.github.pokemeetup.multiplayer.network.NetworkedWorldObject;
 import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
+import io.github.pokemeetup.system.gameplay.overworld.biomes.TransitionBiome;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
-import io.github.pokemeetup.system.inventory.Item;
-import io.github.pokemeetup.system.inventory.ItemManager;
+import io.github.pokemeetup.system.gameplay.inventory.Item;
+import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 import io.github.pokemeetup.utils.PerlinNoise;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 public class World {
     public static final int WORLD_SIZE = 1600; // Size in tiles
     public static final int TILE_SIZE = 32;
+    private static final float BIOME_SCALE = 0.004f;
+
+    private Player player;
+    private PlayerData currentPlayerData;
+    public long getWorldSeed() {
+        return worldSeed;
+    }
+
     private static final float INTERACTION_RANGE = 32f; // Adjust as needed
+    private static final float BIOME_BASE_SCALE = 0.005f; // Increase for smaller biome areas
+    private static final float DETAIL_SCALE = 0.01f;      // Increase for more detail variation
+    private static final int OCTAVES = 6;                 // Increased octaves
+    private static final float PERSISTENCE = 0.5f;
+    private static final float LACUNARITY = 2.0f;         // Adjusted to 2.0
+    private static final String SAVE_DIR = "assets/worlds/";
+    private static final String CHUNK_DATA_FILE = "chunks.json";
     public static int DEFAULT_X_POSITION = 800;
-    public static int DEFAULT_Y_POSITION = 800;
+    public static int DEFAULT_Y_POSITION = 800;    // Adjust these constants for biome size and transitions
+    // New noise generators
+    private final PerlinNoise temperatureNoiseGenerator;
+    private final PerlinNoise moistureNoiseGenerator;
+    private final Map<String, NetworkedWorldObject> syncedObjects;
     private final GameClient gameClient;
     private WorldObject nearestPokeball;
     private Map<Vector2, Chunk> chunks;
@@ -47,7 +74,6 @@ public class World {
     private WorldObject.WorldObjectManager objectManager;
     private PlayerData playerData; // Change from PlayerSaveData
     private List<Item> collectedItems = new ArrayList<>();
-    private Player player; // Add this field
 
     public World(String name, TextureAtlas atlas, Map<Integer, TextureRegion> tileTextures, int worldWidth, int worldHeight, long seed, GameClient gameClient) {
 
@@ -55,14 +81,17 @@ public class World {
         biomeManager = new BiomeManager(atlas);
         this.chunks = new HashMap<>();
         this.worldSeed = seed;
-        this.biomeNoiseGenerator = new PerlinNoise((int) seed);
         this.tileTextures = tileTextures;
         this.worldBounds = new Rectangle(0, 0, worldWidth, worldHeight);
         this.name = name;
         this.worldData = new WorldData(name, seed);
         this.autoSaveManager = new AutoSaveManager(this, gameClient);
         this.atlas = atlas;
-
+        this.biomeNoiseGenerator = new PerlinNoise((int) seed);
+        this.temperatureNoiseGenerator = new PerlinNoise((int) (seed + 100));
+        this.moistureNoiseGenerator = new PerlinNoise((int) (seed + 200));
+        this.syncedObjects = new ConcurrentHashMap<>();
+        initializeTextureAtlas(atlas);
         TextureRegion treeTexture = atlas.findRegion("tree");
         TextureRegion pokeballTexture = atlas.findRegion("pokeball");  // Debug texture loading
         if (treeTexture == null) {
@@ -71,14 +100,14 @@ public class World {
         if (pokeballTexture == null) {
             System.err.println("Failed to load pokeball texture from atlas");
         }
-        objectManager = new WorldObject.WorldObjectManager(atlas, worldSeed);
+        objectManager = new WorldObject.WorldObjectManager(atlas, worldSeed, gameClient);
         // Verify textures are loaded
         System.out.println("Tile textures loaded: " + tileTextures.size());
         for (Map.Entry<Integer, TextureRegion> entry : tileTextures.entrySet()) {
             System.out.println("Tile type " + entry.getKey() + ": " +
                 (entry.getValue() != null ? "loaded" : "null"));
         }// Load or create world data
-        FileHandle worldFile = Gdx.files.local("worlds/" + name + "/world.json");
+        FileHandle worldFile = Gdx.files.local("assets/worlds/" + name + "/world.json");
         if (worldFile.exists()) {
             try {
                 Json json = new Json();
@@ -100,6 +129,147 @@ public class World {
         }
     }    // Add setter for PlayerData
 
+    private double generateTemperatureNoise(double x, double y) {
+        double noise = 0;
+        double amplitude = 1;
+        double frequency = 1.0;
+        double maxValue = 0;
+
+        for (int i = 0; i < OCTAVES; i++) {
+            double rotatedX = x * Math.cos(0.3) - y * Math.sin(0.3);
+            double rotatedY = x * Math.sin(0.3) + y * Math.cos(0.3);
+
+            noise += amplitude * temperatureNoiseGenerator.noise(rotatedX, rotatedY);
+            maxValue += amplitude;
+            amplitude *= PERSISTENCE;
+            frequency *= LACUNARITY;
+        }
+
+        return noise / maxValue; // Normalize to [-1, 1]
+    }
+
+    private double generateMoistureNoise(double x, double y) {
+        double noise = 0;
+        double amplitude = 1;
+        double frequency = 1.0;
+        double maxValue = 0;
+
+        for (int i = 0; i < OCTAVES; i++) {
+            double rotatedX = x * Math.cos(0.3) - y * Math.sin(0.3);
+            double rotatedY = x * Math.sin(0.3) + y * Math.cos(0.3);
+
+            noise += amplitude * moistureNoiseGenerator.noise(rotatedX, rotatedY);
+            maxValue += amplitude;
+            amplitude *= PERSISTENCE;
+            frequency *= LACUNARITY;
+        }
+
+        return noise / maxValue; // Normalize to [-1, 1]
+    }
+
+
+    private double generateOctaveNoise(double x, double y) {
+        double noise = 0;
+        double amplitude = 1;
+        double frequency = 1.0;
+        double maxValue = 0;
+
+        for (int i = 0; i < OCTAVES; i++) {
+            double nx = x * frequency;
+            double ny = y * frequency;
+            double rotatedX = nx * Math.cos(0.3) - ny * Math.sin(0.3);
+            double rotatedY = nx * Math.sin(0.3) + ny * Math.cos(0.3);
+
+            noise += amplitude * biomeNoiseGenerator.noise(rotatedX, rotatedY);
+            maxValue += amplitude;
+            amplitude *= PERSISTENCE;
+            frequency *= 2.5;  // Increase lacunarity beyond typical value
+        }
+
+        return noise / maxValue;
+    }
+
+    private double generateDetailNoise(int worldX, int worldY) {
+        double perturbFactor = 0.01 * (Math.random() - 0.5); // Small random factor
+        double nx = (worldX + perturbFactor) * DETAIL_SCALE;
+        double ny = (worldY + perturbFactor) * DETAIL_SCALE;
+
+        double warpX = biomeNoiseGenerator.noise(ny * 0.5, nx * 0.5) * 4.0;
+        double warpY = biomeNoiseGenerator.noise(nx * 0.5, ny * 0.5) * 4.0;
+
+        return biomeNoiseGenerator.noise(nx + warpX, ny + warpY);
+    }
+
+    // Optional debug method to verify distribution
+    public void validateBiomeDistribution() {
+        int sampleSize = 100;
+        int samples = sampleSize * sampleSize;
+        Map<BiomeType, Integer> counts = new HashMap<>();
+
+        for (int x = 0; x < sampleSize; x++) {
+            for (int y = 0; y < sampleSize; y++) {
+                Biome biome = getBiomeAt(
+                    (x - sampleSize / 2) * 100,
+                    (y - sampleSize / 2) * 100
+                );
+                counts.merge(biome.getType(), 1, Integer::sum);
+            }
+        }
+
+        System.out.println("\nBiome Distribution Analysis:");
+        counts.forEach((type, count) -> {
+            double percentage = (count * 100.0) / samples;
+            System.out.printf("%s: %.1f%%\n", type, percentage);
+        });
+    }
+
+    private Biome smoothTransition(BiomeType type1, BiomeType type2, double t) {
+        // Improved smooth step function
+        t = t * t * (3 - 2 * t);
+
+        // Ensure we're always returning a valid biome
+        return t < 0.5 ?
+            biomeManager.getBiome(type1) :
+            biomeManager.getBiome(type2);
+    }
+
+    private void validateBiomeGeneration(int x, int y, Biome biome) {
+        if (biome == null) {
+            throw new IllegalStateException(
+                String.format("Generated null biome at (%d, %d)", x, y)
+            );
+        }
+    }
+
+    // Add this method to World class for debugging biome distribution
+    public void debugBiomeDistribution() {
+        int sampleSize = 1000;
+        Map<BiomeType, Integer> distribution = new HashMap<>();
+
+        for (int i = 0; i < sampleSize; i++) {
+            for (int j = 0; j < sampleSize; j++) {
+                Biome biome = getBiomeAt(i, j);
+                distribution.merge(biome.getType(), 1, Integer::sum);
+            }
+        }
+
+        System.out.println("Biome Distribution Analysis:");
+        distribution.forEach((type, count) -> {
+            double percentage = (count * 100.0) / (sampleSize * sampleSize);
+            System.out.printf("%s: %.2f%%\n", type, percentage);
+        });
+    }
+
+    private void initializeTextureAtlas(TextureAtlas atlas) {
+        // Add 1px padding to prevent texture bleeding
+        for (TextureAtlas.AtlasRegion region : atlas.getRegions()) {
+            region.setRegionX(region.getRegionX() + 1);
+            region.setRegionY(region.getRegionY() + 1);
+            region.setRegionWidth(region.getRegionWidth() - 2);
+            region.setRegionHeight(region.getRegionHeight() - 2);
+        }
+    }
+
     // Add getter/setter
     public long getLastPlayed() {
         return lastPlayed;
@@ -109,9 +279,6 @@ public class World {
         this.lastPlayed = lastPlayed;
     }
 
-    public PlayerData getPlayerData() {
-        return this.playerData;
-    }
 
     public void setPlayerData(PlayerData playerData) {
         this.playerData = playerData;
@@ -121,71 +288,122 @@ public class World {
         return player;
     }
 
-    public void setPlayer(Player player) {
-        this.player = player;
-        if (player != null && worldData != null) {
-            // Load existing player data or create new
-            PlayerData existingData = worldData.getPlayerData(player.getUsername());
-            if (existingData != null) {
-                player.setX(existingData.getX());
-                player.setY(existingData.getY());
-                player.setDirection(existingData.convertDirectionIntToString(existingData.getDirection()));
-                player.setRunning(existingData.isWantsToRun());
-            }
 
-        }
-    }
 
-    public void save() {
+    public void saveChunkData(Vector2 chunkPos, Chunk chunk, boolean isMultiplayer) {
         try {
-            if (worldData == null) {
-                System.err.println("Cannot save - world data is null");
-                return;
+            // Create base save directory based on whether it's multiplayer
+            String baseDir = isMultiplayer ?
+                "assets/multiplayer/worlds/" + name + "/chunks/" :
+                "assets/worlds/" + name + "/chunks/";
+
+            FileHandle saveDir = Gdx.files.local(baseDir);
+            if (!saveDir.exists()) {
+                saveDir.mkdirs();
             }
 
-            // Update last played time
-            this.lastPlayed = System.currentTimeMillis();
-            worldData.updateLastPlayed();
+            // Get objects in chunk
+            List<WorldObject> objects = objectManager.getObjectsForChunk(chunkPos);
+            List<WorldObjectData> objectDataList = objects.stream()
+                .map(WorldObjectData::new)
+                .collect(Collectors.toList());
 
-            // Save current player data if available
-            if (player != null && player.getPlayerData() != null) {
-                PlayerData currentData = player.getPlayerData();
-                currentData.setPosition(player.getX(), player.getY());
-                currentData.setDirection(player.getDirection());
-                currentData.setMoving(player.isMoving());
-                currentData.setWantsToRun(player.isRunning());
-                currentData.setInventory(player.getInventory().getItemNames());
+            // Create chunk data
+            ChunkData chunkData = new ChunkData(chunk, objectDataList, isMultiplayer);
 
-                worldData.savePlayerData(player.getUsername(), currentData);
-                System.out.println("Saved player data in world for: " + player.getUsername());
-            }
+            // Save to file with chunk coordinates in filename
+            String filename = String.format("chunk_%d_%d.json", (int) chunkPos.x, (int) chunkPos.y);
+            FileHandle chunkFile = saveDir.child(filename);
 
-            // Ensure world directory exists
-            FileHandle worldDir = Gdx.files.local("worlds/" + name);
-            if (!worldDir.exists()) {
-                worldDir.mkdirs();
-            }
-
-            // Save world data
-            FileHandle worldFile = worldDir.child("world.json");
             Json json = new Json();
             json.setOutputType(JsonWriter.OutputType.json);
-            String jsonData = json.prettyPrint(worldData);
-            worldFile.writeString(jsonData, false);
-            System.out.println("Saved world: " + name);
-            System.out.println("World data: " + jsonData);
+            chunkFile.writeString(json.prettyPrint(chunkData), false);
 
-            // Run auto-save if available
-            if (autoSaveManager != null) {
-                autoSaveManager.performAutoSave();
-            }
+            System.out.println("Saved chunk data: " + filename +
+                (isMultiplayer ? " (multiplayer)" : " (single-player)"));
 
         } catch (Exception e) {
-            System.err.println("Error saving world: " + e.getMessage());
+            System.err.println("Error saving chunk data: " + e.getMessage());
             e.printStackTrace();
         }
     }
 
+    private Chunk loadChunkData(Vector2 chunkPos, boolean isMultiplayer) {
+        try {
+            String baseDir = isMultiplayer ?
+                "assets/multiplayer/worlds/" + name + "/chunks/" :
+                "assets/worlds/" + name + "/chunks/";
+
+            String filename = String.format("chunk_%d_%d.json", (int) chunkPos.x, (int) chunkPos.y);
+            FileHandle chunkFile = Gdx.files.local(baseDir + filename);
+
+            if (!chunkFile.exists()) {
+                return null;
+            }
+
+            Json json = new Json();
+            ChunkData chunkData = json.fromJson(ChunkData.class, chunkFile.readString());
+            chunkData.validate();
+
+            // Create new chunk with saved data
+            Biome biome = biomeManager.getBiome(chunkData.biomeType);
+            Chunk chunk = new Chunk(chunkData.x, chunkData.y, biome, biome.getTileTextures(), worldSeed);
+
+            // Restore tile data
+            int[][] chunkTileData = chunk.getTileData();
+            for (int i = 0; i < Chunk.CHUNK_SIZE; i++) {
+                System.arraycopy(chunkData.tileData[i], 0, chunkTileData[i], 0, Chunk.CHUNK_SIZE);
+            }
+
+            // Restore objects
+            for (WorldObjectData objData : chunkData.objects) {
+                WorldObject obj = objectManager.createObject(objData.type, objData.x, objData.y);
+                objectManager.addObjectToChunk(chunkPos, obj);
+            }
+
+            System.out.println("Loaded chunk data: " + filename +
+                (isMultiplayer ? " (multiplayer)" : " (single-player)"));
+
+            return chunk;
+
+        } catch (Exception e) {
+            System.err.println("Error loading chunk data: " + e.getMessage());
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    public Map<Vector2, Chunk> getChunks() {
+        return chunks;
+    }
+
+    // Update the save method to include chunk saving
+    public void setPlayer(Player player) {
+        this.player = player;
+        // Initialize player data
+        this.currentPlayerData = new PlayerData(player.getUsername());
+        this.currentPlayerData.updateFromPlayer(player);
+    }
+
+    public void updatePlayerData() {
+        if (player != null && currentPlayerData != null) {
+            currentPlayerData.updateFromPlayer(player);
+        }
+    }
+
+    public PlayerData getPlayerData() {
+        updatePlayerData(); // Always get latest state
+        return currentPlayerData;
+    }
+
+    public void save() {
+        if (player != null) {
+            updatePlayerData();
+            System.out.println("Saving latest player state:");
+            System.out.println("Position: " + currentPlayerData.getX() + "," + currentPlayerData.getY());
+            System.out.println("Inventory: " + currentPlayerData.getInventoryItems());
+        }
+    }
     public String getName() {
         return name;
     }
@@ -194,14 +412,152 @@ public class World {
         return worldData;
     }
 
+    public Biome getBiomeAt(int worldX, int worldY) {
+        // Make biomes even larger
+        double noiseScale = 0.001;  // Reduced further for larger biomes
+
+        // Get coordinates relative to world center
+        double nx = (worldX - WORLD_SIZE / 2) * noiseScale;
+        double ny = (worldY - WORLD_SIZE / 2) * noiseScale;
+
+        // Primary noise for base biome distribution
+        double noise = biomeNoiseGenerator.noise(nx, ny);
+
+        // Secondary noise rotated 45 degrees for variation
+        double angle = Math.PI / 4;
+        double nx2 = nx * Math.cos(angle) - ny * Math.sin(angle);
+        double ny2 = nx * Math.sin(angle) + ny * Math.cos(angle);
+        double noise2 = biomeNoiseGenerator.noise(nx2, ny2) * 0.3;
+
+        // Strong temperature gradient based on y-coordinate
+        double temperatureGradient = (double) (worldY - WORLD_SIZE / 2) / (WORLD_SIZE / 2);
+
+        // Combine noises
+        double finalNoise = noise + noise2 + temperatureGradient;
+        finalNoise = (finalNoise + 1.5) / 3.0;
+
+        // More extreme distribution
+        if (temperatureGradient > 0.3) {  // Northern regions
+            return biomeManager.getBiome(BiomeType.SNOW);
+        } else if (finalNoise < 0.4) {
+            return biomeManager.getBiome(BiomeType.HAUNTED);
+        } else if (finalNoise < 0.7) {
+            return biomeManager.getBiome(BiomeType.PLAINS);
+        } else {
+            return biomeManager.getBiome(BiomeType.FOREST);
+        }
+    }
+
+    private void loadOrGenerateChunk(Vector2 chunkPos) {
+        boolean isMultiplayer = gameClient != null && !gameClient.isSinglePlayer();
+
+        // Try to load existing chunk
+        Chunk chunk = loadChunkData(chunkPos, isMultiplayer);
+
+        if (chunk == null) {
+            // Generate new chunk if no saved data exists
+            int worldX = (int) (chunkPos.x * Chunk.CHUNK_SIZE);
+            int worldY = (int) (chunkPos.y * Chunk.CHUNK_SIZE);
+            Biome biome = getBiomeAt(worldX, worldY);
+
+            chunk = new Chunk(
+                (int) chunkPos.x,
+                (int) chunkPos.y,
+                biome,
+                biome.getTileTextures(),
+                worldSeed
+            );
+
+            // Generate objects for new chunk
+            objectManager.generateObjectsForChunk(chunkPos, chunk, biome);
+
+            // Save the newly generated chunk
+            saveChunkData(chunkPos, chunk, isMultiplayer);
+
+            System.out.println("Generated new chunk at " + chunkPos.x + "," + chunkPos.y +
+                " with biome " + biome.getName() +
+                (isMultiplayer ? " (multiplayer)" : " (single-player)"));
+        }
+
+        chunks.put(chunkPos, chunk);
+    }
+
+    private Chunk loadChunkFromSave(Vector2 chunkPos) {
+        if (worldData == null) return null;
+
+        try {
+            // Look for chunk data in the saved world data
+            Json json = new Json();
+            FileHandle chunkFile = Gdx.files.local(SAVE_DIR + name + "/chunks/" +
+                chunkPos.x + "_" + chunkPos.y + ".json");
+
+            if (!chunkFile.exists()) return null;
+
+            // Load chunk data
+            String chunkContent = chunkFile.readString();
+            ChunkData chunkData = json.fromJson(ChunkData.class, chunkContent);
+
+            if (chunkData != null) {
+                // Recreate chunk from saved data
+                Biome biome = biomeManager.getBiome(chunkData.biomeType);
+                Chunk chunk = new Chunk(
+                    (int) chunkPos.x,
+                    (int) chunkPos.y,
+                    biome,
+                    biome.getTileTextures(),
+                    worldSeed
+                );
+
+                // Restore tile data
+                if (chunkData.tileData != null) {
+                    for (int x = 0; x < Chunk.CHUNK_SIZE; x++) {
+                        for (int y = 0; y < Chunk.CHUNK_SIZE; y++) {
+                            chunk.getTileData()[x][y] = chunkData.tileData[x][y];
+                        }
+                    }
+                }
+
+                // Restore any saved objects
+                if (chunkData.objects != null) {
+                    for (WorldObjectData objData : chunkData.objects) {
+                        WorldObject obj = objectManager.createObject(
+                            objData.type,
+                            objData.x,
+                            objData.y
+                        );
+                        objectManager.addObjectToChunk(chunkPos, obj);
+                    }
+                }
+
+                System.out.println("Loaded chunk from save at " + chunkPos.x + "," + chunkPos.y);
+                return chunk;
+            }
+        } catch (Exception e) {
+            System.err.println("Error loading chunk: " + e.getMessage());
+        }
+
+        return null;
+    }
+
     public void update(float delta, Vector2 playerPosition, float viewportWidth, float viewportHeight) {
-        // Calculate how many chunks are needed to cover the viewport
-        int chunksHorizontally = (int) Math.ceil(viewportWidth / (Chunk.CHUNK_SIZE * TILE_SIZE)) + 2; // +2 for buffer
+        int chunksHorizontally = (int) Math.ceil(viewportWidth / (Chunk.CHUNK_SIZE * TILE_SIZE)) + 2;
         int chunksVertically = (int) Math.ceil(viewportHeight / (Chunk.CHUNK_SIZE * TILE_SIZE)) + 2;
 
         int playerChunkX = (int) Math.floor(playerPosition.x / (Chunk.CHUNK_SIZE * TILE_SIZE));
         int playerChunkY = (int) Math.floor(playerPosition.y / (Chunk.CHUNK_SIZE * TILE_SIZE));
 
+        // Load or generate needed chunks
+        for (int x = playerChunkX - chunksHorizontally / 2; x <= playerChunkX + chunksHorizontally / 2; x++) {
+            for (int y = playerChunkY - chunksVertically / 2; y <= playerChunkY + chunksVertically / 2; y++) {
+                Vector2 chunkPos = new Vector2(x, y);
+                if (!chunks.containsKey(chunkPos)) {
+                    loadOrGenerateChunk(chunkPos);
+                }
+            }
+        }
+        Biome currentBiome = getBiomeAt((int) playerPosition.x / TILE_SIZE, (int) playerPosition.y / TILE_SIZE);
+        AudioManager.getInstance().updateBiomeMusic(currentBiome.getType());
+        AudioManager.getInstance().update(delta);
         int startX = playerChunkX - chunksHorizontally / 2;
         int endX = playerChunkX + chunksHorizontally / 2;
         int startY = playerChunkY - chunksVertically / 2;
@@ -234,18 +590,30 @@ public class World {
         autoSaveManager.update(delta);
     }
 
+
     public void render(SpriteBatch batch, Rectangle viewBounds, Player player) {
+        batch.setBlendFunction(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
         // First render terrain and tree bases
+        for (TextureRegion region : tileTextures.values()) {
+            region.getTexture().setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+        }
+        for (Map.Entry<Vector2, Chunk> entry : chunks.entrySet()) {
+            if (isChunkVisible(entry.getKey(), viewBounds)) {
+                renderChunkWithoutSeams(batch, entry.getValue(), entry.getKey());
+            }
+        }
         for (Map.Entry<Vector2, Chunk> entry : chunks.entrySet()) {
             Vector2 pos = entry.getKey();
             if (isChunkVisible(pos, viewBounds)) {
-                // Render terrain
-                entry.getValue().render(batch, TILE_SIZE);
-
-                // Render tree bases and other objects
                 List<WorldObject> objects = objectManager.getObjectsForChunk(pos);
                 for (WorldObject obj : objects) {
                     if (obj.getType() == WorldObject.ObjectType.TREE) {
+                        objectManager.renderTreeBase(batch, obj);
+                    }
+                    if (obj.getType() == WorldObject.ObjectType.HAUNTED_TREE) {
+                        objectManager.renderTreeBase(batch, obj);
+                    }
+                    if (obj.getType() == WorldObject.ObjectType.SNOW_TREE) {
                         objectManager.renderTreeBase(batch, obj);
                     } else if (obj.getType() == WorldObject.ObjectType.POKEBALL) {
                         obj.render(batch);
@@ -276,6 +644,12 @@ public class World {
                     if (obj.getType() == WorldObject.ObjectType.TREE) {
                         objectManager.renderTreeTop(batch, obj);
                     }
+                    if (obj.getType() == WorldObject.ObjectType.HAUNTED_TREE) {
+                        objectManager.renderTreeTop(batch, obj);
+                    }
+                    if (obj.getType() == WorldObject.ObjectType.SNOW_TREE) {
+                        objectManager.renderTreeTop(batch, obj);
+                    }
                 }
             }
         }
@@ -283,6 +657,32 @@ public class World {
         // If player is behind trees, render them after tree tops
         if (!playerBehindTree) {
             player.render(batch);
+        }
+
+        batch.setBlendFunction(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+    }
+
+    private void renderChunkWithoutSeams(SpriteBatch batch, Chunk chunk, Vector2 chunkPos) {
+        float xOffset = chunkPos.x * Chunk.CHUNK_SIZE * TILE_SIZE;
+        float yOffset = chunkPos.y * Chunk.CHUNK_SIZE * TILE_SIZE;
+
+        for (int x = 0; x < Chunk.CHUNK_SIZE; x++) {
+            for (int y = 0; y < Chunk.CHUNK_SIZE; y++) {
+                float worldX = xOffset + x * TILE_SIZE;
+                float worldY = yOffset + y * TILE_SIZE;
+
+                // Add a small overlap to prevent seams
+                float overlap = 0.5f;
+                float width = TILE_SIZE + overlap;
+                float height = TILE_SIZE + overlap;
+
+                int tileType = chunk.getTileType(x, y);
+                TextureRegion tileTexture = tileTextures.get(tileType);
+
+                if (tileTexture != null) {
+                    batch.draw(tileTexture, worldX, worldY, width, height);
+                }
+            }
         }
     }
 
@@ -295,38 +695,131 @@ public class World {
         return viewBounds.overlaps(chunkBounds);
     }
 
-    public Biome getBiomeAt(int worldX, int worldY) {
-        // Reduced scale for larger, more spread out biomes
-        double noiseScale = 0.004; // Reduced from 0.015 for larger biomes
+    private double[] calculateBiomeWeights(int x, int y, int size) {
+        double[] weights = new double[4];
+        double fx = (double) x / size;
+        double fy = (double) y / size;
 
-        double nx = worldX * noiseScale;
-        double ny = worldY * noiseScale;
+        // Smooth interpolation
+        fx = smoothstep(fx);
+        fy = smoothstep(fy);
 
-        // Calculate base noise
-        double noise = biomeNoiseGenerator.noise(nx, ny);
+        weights[0] = (1 - fx) * (1 - fy);
+        weights[1] = fx * (1 - fy);
+        weights[2] = (1 - fx) * fy;
+        weights[3] = fx * fy;
 
-        // Add rotated secondary noise for more natural transitions
-        double angle = Math.PI / 4;
-        double nx2 = nx * Math.cos(angle) - ny * Math.sin(angle);
-        double ny2 = nx * Math.sin(angle) + ny * Math.cos(angle);
-        double noise2 = biomeNoiseGenerator.noise(nx2, ny2) * 0.5;
+        return weights;
+    }
 
-        // Combine noises
-        double finalNoise = noise + noise2;
+    private Biome createTransitionBiome(Map<BiomeType, Float> biomeWeights) {
+        // Find the two most dominant biomes
+        BiomeType primaryBiome = null;
+        BiomeType secondaryBiome = null;
+        float primaryWeight = 0;
+        float secondaryWeight = 0;
 
-        // Smoother transitions but still distinct biomes
-        finalNoise = Math.sin(finalNoise * Math.PI) * 0.5;
-
-        // Adjusted thresholds for more even distribution
-        if (finalNoise < -0.25) {
-            return biomeManager.getBiome(BiomeType.SNOW);
-        } else if (finalNoise < 0) {
-            return biomeManager.getBiome(BiomeType.HAUNTED);
-        } else if (finalNoise < 0.25) {
-            return biomeManager.getBiome(BiomeType.PLAINS);
-        } else {
-            return biomeManager.getBiome(BiomeType.FOREST);
+        for (Map.Entry<BiomeType, Float> entry : biomeWeights.entrySet()) {
+            if (entry.getValue() > primaryWeight) {
+                secondaryBiome = primaryBiome;
+                secondaryWeight = primaryWeight;
+                primaryBiome = entry.getKey();
+                primaryWeight = entry.getValue();
+            } else if (entry.getValue() > secondaryWeight) {
+                secondaryBiome = entry.getKey();
+                secondaryWeight = entry.getValue();
+            }
         }
+
+        // If one biome is strongly dominant, return it directly
+        if (primaryWeight > 0.75f) {
+            return biomeManager.getBiome(primaryBiome);
+        }
+
+        // Create a transition biome
+        TransitionBiome transitionBiome = new TransitionBiome(
+            biomeManager.getBiome(primaryBiome),
+            biomeManager.getBiome(secondaryBiome),
+            primaryWeight
+        );
+
+        // Add tile distributions based on weights
+        for (Map.Entry<Integer, Integer> entry :
+            biomeManager.getBiome(primaryBiome).getTileDistribution().entrySet()) {
+            transitionBiome.addTileDistribution(
+                entry.getKey(),
+                (int) (entry.getValue() * primaryWeight)
+            );
+        }
+
+        for (Map.Entry<Integer, Integer> entry :
+            biomeManager.getBiome(secondaryBiome).getTileDistribution().entrySet()) {
+            transitionBiome.addTileDistribution(
+                entry.getKey(),
+                (int) (entry.getValue() * (1 - primaryWeight))
+            );
+        }
+
+        return transitionBiome;
+    }
+
+
+    // In World.java
+
+    private double smoothstep(double x) {
+        // Improved smoothstep for better transitions
+        x = MathUtils.clamp((x - (double) 0), 0.0, 1.0);
+        return x * x * x * (x * (x * 6 - 15) + 10);
+    }
+
+
+    private void sendObjectUpdate(NetworkedWorldObject object, NetworkProtocol.NetworkObjectUpdateType type) {
+        NetworkProtocol.WorldObjectUpdate update = new NetworkProtocol.WorldObjectUpdate();
+        update.objectId = object.getId();
+        update.type = type;
+        update.x = object.getX();
+        update.y = object.getY();
+        update.objectType = object.getType();
+
+        gameClient.sendWorldObjectUpdate(update);
+    }
+
+    public void removeNetworkedObject(String objectId) {
+        NetworkedWorldObject object = syncedObjects.remove(objectId);
+        if (object != null && gameClient != null && !gameClient.isSinglePlayer()) {
+            sendObjectUpdate(object, NetworkProtocol.NetworkObjectUpdateType.REMOVE);
+        }
+    }
+
+    public void handleNetworkObjectUpdate(NetworkProtocol.WorldObjectUpdate update) {
+        switch (update.type) {
+            case ADD:
+                NetworkedWorldObject newObject = NetworkedWorldObject.createFromUpdate(update);
+                syncedObjects.put(update.objectId, newObject);
+                break;
+
+            case UPDATE:
+                NetworkedWorldObject existing = syncedObjects.get(update.objectId);
+                if (existing != null) {
+                    existing.updateFromNetwork(update);
+                }
+                break;
+
+            case REMOVE:
+                syncedObjects.remove(update.objectId);
+                break;
+        }
+    }
+
+    public void updateNetworkedObject(NetworkedWorldObject object) {
+        syncedObjects.put(object.getId(), object);
+        if (gameClient != null && !gameClient.isSinglePlayer()) {
+            sendObjectUpdate(object, NetworkProtocol.NetworkObjectUpdateType.UPDATE);
+        }
+    }
+
+    public WorldObject.WorldObjectManager getObjectManager() {
+        return objectManager;
     }
 
     // Optional debug method to help find biomes
@@ -335,14 +828,6 @@ public class World {
         int worldY = (int) playerY / TILE_SIZE;
         Biome currentBiome = getBiomeAt(worldX, worldY);
         System.out.println("Current position: (" + worldX + ", " + worldY + ") Biome: " + currentBiome.getName());
-    }
-
-    private Biome smoothTransition(BiomeType type1, BiomeType type2, double t) {
-        // Smooth step function for nicer transitions
-        t = t * t * (3 - 2 * t);
-        return t < 0.5 ?
-            biomeManager.getBiome(type1) :
-            biomeManager.getBiome(type2);
     }
 
     private Biome getTransitionBiome(BiomeType type1, BiomeType type2, double noise, double threshold) {
@@ -438,7 +923,6 @@ public class World {
         return nearestPokeball;
     }
 
-
     private Item generateRandomItem() {
         List<String> itemNames = new ArrayList<>(ItemManager.getAllItemNames());
         int index = MathUtils.random(itemNames.size() - 1);
@@ -446,7 +930,7 @@ public class World {
         return ItemManager.getItem(itemName);
     }
 
-
+    // Update the unloadDistantChunks method
     private void unloadDistantChunks(int playerChunkX, int playerChunkY, int chunksHorizontally, int chunksVertically) {
         int startX = playerChunkX - chunksHorizontally;
         int endX = playerChunkX + chunksHorizontally;
@@ -459,6 +943,12 @@ public class World {
             int x = (int) chunkPos.x;
             int y = (int) chunkPos.y;
             if (x < startX || x > endX || y < startY || y > endY) {
+                // Save chunk before removing it
+                Chunk chunk = chunks.get(chunkPos);
+                if (chunk != null) {
+                    boolean isMultiplayer = gameClient != null && !gameClient.isSinglePlayer();
+                    saveChunkData(chunkPos, chunk, isMultiplayer);
+                }
                 chunksToRemove.add(chunkPos);
             }
         }
@@ -466,7 +956,62 @@ public class World {
         // Remove distant chunks
         for (Vector2 chunkPos : chunksToRemove) {
             chunks.remove(chunkPos);
-            // Optional: Dispose of chunk resources if needed
+        }
+    }
+
+    private static class ChunkData {
+        public int x;
+        public int y;
+        public BiomeType biomeType;
+        public int[][] tileData;
+        public List<WorldObjectData> objects;
+        public long lastModified;
+        public boolean isMultiplayer;
+
+        // Empty constructor for serialization
+        public ChunkData() {
+            this.tileData = new int[Chunk.CHUNK_SIZE][Chunk.CHUNK_SIZE];
+            this.objects = new ArrayList<>();
+        }
+
+        public ChunkData(Chunk chunk, List<WorldObjectData> objects, boolean isMultiplayer) {
+            this.x = chunk.getChunkX();
+            this.y = chunk.getChunkY();
+            this.biomeType = chunk.getBiome().getType();
+            this.objects = objects;
+            this.isMultiplayer = isMultiplayer;
+            this.lastModified = System.currentTimeMillis();
+
+            // Deep copy tile data
+            this.tileData = new int[Chunk.CHUNK_SIZE][Chunk.CHUNK_SIZE];
+            int[][] sourceTileData = chunk.getTileData();
+            for (int i = 0; i < Chunk.CHUNK_SIZE; i++) {
+                System.arraycopy(sourceTileData[i], 0, this.tileData[i], 0, Chunk.CHUNK_SIZE);
+            }
+        }
+
+        public void validate() {
+            if (tileData == null) {
+                tileData = new int[Chunk.CHUNK_SIZE][Chunk.CHUNK_SIZE];
+            }
+            if (objects == null) {
+                objects = new ArrayList<>();
+            }
+        }
+    }
+
+    private static class WorldObjectData {
+        public float x;
+        public float y;
+        public WorldObject.ObjectType type;
+
+        public WorldObjectData() {
+        }
+
+        public WorldObjectData(WorldObject obj) {
+            this.x = obj.getPixelX();
+            this.y = obj.getPixelY();
+            this.type = obj.getType();
         }
     }
 

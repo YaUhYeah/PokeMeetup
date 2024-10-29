@@ -46,6 +46,10 @@ public class Chunk {
         generateChunkData();
     }
 
+    public Biome getBiome() {
+        return biome;
+    }
+
     public int getTileType(int localX, int localY) {
         if (localX < 0 || localX >= CHUNK_SIZE || localY < 0 || localY >= CHUNK_SIZE) {
             return -1; // Invalid tile position

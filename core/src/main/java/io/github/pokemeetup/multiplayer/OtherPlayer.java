@@ -4,10 +4,11 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.*;
+import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
-import io.github.pokemeetup.managers.Network;
+import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.system.Player;
-import io.github.pokemeetup.system.inventory.Inventory;
+import io.github.pokemeetup.system.gameplay.inventory.Inventory;
 
 public class OtherPlayer {
     private static final float LERP_ALPHA = 0.2f;
@@ -42,24 +43,69 @@ public class OtherPlayer {
         this.isMoving = false;
         this.wantsToRun = false;
         this.stateTime = 0;
-
-        font = new BitmapFont();
-        font = new BitmapFont(Gdx.files.internal("Fonts/pkmn.fnt"));
-        font.getData().setScale(0.8f);
-
         initializeAnimations(atlas);
     }
+
+    public Vector2 getTargetPosition() {
+        return targetPosition;
+    }
+
+    public void setTargetPosition(Vector2 targetPosition) {
+        this.targetPosition = targetPosition;
+    }
+
+    public void update(float delta) {
+        // Interpolate position
+        if (targetPosition != null) {
+            x = MathUtils.lerp(x, targetPosition.x, LERP_ALPHA);
+            y = MathUtils.lerp(y, targetPosition.y, LERP_ALPHA);
+        }
+        // Update animation
+        updateCurrentFrame();
+    }
+
+    public void updateFromNetwork(NetworkProtocol.PlayerUpdate netUpdate) {
+        if (netUpdate != null) {
+            // Update the position, direction, and movement state based on the network update
+            this.targetPosition = new Vector2(netUpdate.x, netUpdate.y);
+            this.x = netUpdate.x;
+            this.y = netUpdate.y;
+            this.direction = netUpdate.direction != null ? netUpdate.direction : "down";
+            this.isMoving = netUpdate.isMoving;
+            this.wantsToRun = netUpdate.wantsToRun;
+
+            System.out.println("Updated OtherPlayer " + netUpdate.username + " to position (" + netUpdate.x + ", " + netUpdate.y + ")");
+        }
+    }
+
 
     public Inventory getInventory() {
         return inventory;
     }
 
+    public void setInventory(Inventory inventory) {
+        this.inventory = inventory;
+    }
 
+    private void ensureFontLoaded() {
+        if (font == null) {
+            try {
+                font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
+                font.getData().setScale(0.8f);
+            } catch (Exception e) {
+                System.err.println("Error loading font: " + e.getMessage());
+                font = new BitmapFont(); // Fallback to default font
+            }
+        }
+    }
 
     public void render(SpriteBatch batch) {
         updateCurrentFrame();
+//        System.out.println(STR."Rendering OtherPlayer \{username} at position (\{x}, \{y})");
         batch.draw(currentFrame, x, y, Player.FRAME_WIDTH, Player.FRAME_HEIGHT);
-        if (username != null && font != null) {
+
+        if (username != null) {
+            ensureFontLoaded(); // Ensure font is loaded before use
             GlyphLayout layout = new GlyphLayout(font, username);
             float textWidth = layout.width;
             font.draw(batch, username, x + (Player.FRAME_WIDTH - textWidth) / 2,
@@ -75,21 +121,90 @@ public class OtherPlayer {
         return x;
     }
 
+    public void setX(float x) {
+        this.x = x;
+    }
+
+    public void setRunUpAnimation(Animation<TextureRegion> runUpAnimation) {
+        this.runUpAnimation = runUpAnimation;
+    }
+
+    public void setRunDownAnimation(Animation<TextureRegion> runDownAnimation) {
+        this.runDownAnimation = runDownAnimation;
+    }
+
+    public void setRunLeftAnimation(Animation<TextureRegion> runLeftAnimation) {
+        this.runLeftAnimation = runLeftAnimation;
+    }
+
+    public void setRunRightAnimation(Animation<TextureRegion> runRightAnimation) {
+        this.runRightAnimation = runRightAnimation;
+    }
+
+    public void setWalkUpAnimation(Animation<TextureRegion> walkUpAnimation) {
+        this.walkUpAnimation = walkUpAnimation;
+    }
+
+    public void setWalkDownAnimation(Animation<TextureRegion> walkDownAnimation) {
+        this.walkDownAnimation = walkDownAnimation;
+    }
+
+    public void setWalkLeftAnimation(Animation<TextureRegion> walkLeftAnimation) {
+        this.walkLeftAnimation = walkLeftAnimation;
+    }
+
+    public void setWalkRightAnimation(Animation<TextureRegion> walkRightAnimation) {
+        this.walkRightAnimation = walkRightAnimation;
+    }
+
+    public void setCurrentFrame(TextureRegion currentFrame) {
+        this.currentFrame = currentFrame;
+    }
+
+    public void setFont(BitmapFont font) {
+        this.font = font;
+    }
+
+    public void setCurrentPosition(Vector2 currentPosition) {
+        this.currentPosition = currentPosition;
+    }
+
+    public void setStateTime(float stateTime) {
+        this.stateTime = stateTime;
+    }
+
     public float getY() {
         return y;
+    }
+
+    public void setY(float y) {
+        this.y = y;
     }
 
     public String getDirection() {
         return direction;
     }
 
+    public void setDirection(String direction) {
+        this.direction = direction;
+    }
+
     public boolean isMoving() {
         return isMoving;
+    }
+
+    public void setMoving(boolean moving) {
+        isMoving = moving;
     }
 
     public boolean isWantsToRun() {
         return wantsToRun;
     }
+
+    public void setWantsToRun(boolean wantsToRun) {
+        this.wantsToRun = wantsToRun;
+    }
+
     private void updateCurrentFrame() {
         Animation<TextureRegion> currentAnimation;
 
@@ -124,7 +239,28 @@ public class OtherPlayer {
     }
 
     // Update the updateFromNetwork method to include null safety
-    public void updateFromNetwork(Network.PlayerUpdate update) {
+    public void updateFromNetwork(Object update) {
+        if (update instanceof NetworkProtocol.PlayerUpdate netUpdate) {
+            this.x = netUpdate.x; // Update position
+            this.y = netUpdate.y;
+            this.targetPosition = new Vector2(netUpdate.x, netUpdate.y); // Update the target position
+
+            this.direction = netUpdate.direction; // Ensure direction is updated if necessary
+            this.isMoving = netUpdate.isMoving;
+            this.wantsToRun = netUpdate.wantsToRun;
+            if (netUpdate.inventoryItemNames != null) {
+                this.inventory.loadFromStrings(netUpdate.inventoryItemNames);  // Load inventory items
+                System.out.println("Updated inventory for " + username + ": " + netUpdate.inventoryItemNames);
+            }
+            handlePlayerUpdate((NetworkProtocol.PlayerUpdate) update);
+        } else if (update instanceof OtherPlayer) {
+            handleOtherPlayerUpdate((OtherPlayer) update);
+        } else {
+            System.err.println("Unknown update type: " + update.getClass().getName());
+        }
+    }
+
+    private void handlePlayerUpdate(NetworkProtocol.PlayerUpdate update) {
         if (update == null) return;
 
         this.x = update.x;
@@ -132,7 +268,46 @@ public class OtherPlayer {
         this.direction = update.direction != null ? update.direction : "down";
         this.isMoving = update.isMoving;
         this.wantsToRun = update.wantsToRun;
-        targetPosition.set(update.x, update.y);
+        if (this.targetPosition == null) {
+            this.targetPosition = new Vector2();
+        }
+        this.targetPosition.set(update.x, update.y);
+
+        // Update inventory if present
+        if (update.inventoryItemNames != null && this.inventory != null) {
+            this.inventory.loadFromStrings(update.inventoryItemNames);
+        }
+
+        // Update state time for animations
+        if (this.isMoving) {
+            this.stateTime += Gdx.graphics.getDeltaTime();
+        } else {
+            this.stateTime = 0;
+        }
+
+        updateCurrentFrame();
+    }
+
+    private void handleOtherPlayerUpdate(OtherPlayer otherPlayer) {
+        if (otherPlayer == null) return;
+
+        this.x = otherPlayer.getX();
+        this.y = otherPlayer.getY();
+        this.direction = otherPlayer.getDirection() != null ? otherPlayer.getDirection() : "down";
+        this.isMoving = otherPlayer.isMoving();
+        this.wantsToRun = otherPlayer.isWantsToRun();
+        if (this.targetPosition == null) {
+            this.targetPosition = new Vector2();
+        }
+        this.targetPosition.set(otherPlayer.getX(), otherPlayer.getY());
+
+        // Update inventory if available
+        if (otherPlayer.getInventory() != null && this.inventory != null) {
+            this.inventory = otherPlayer.getInventory();
+        }
+
+        // Update animations
+        updateCurrentFrame();
     }
 
     private boolean validateFrames(TextureRegion[] frames) {

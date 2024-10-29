@@ -1,24 +1,21 @@
 package io.github.pokemeetup.screens;
 
 import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.files.FileHandle;
+import com.badlogic.gdx.Preferences;
+import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.InputEvent;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
+import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
 import com.badlogic.gdx.scenes.scene2d.utils.ClickListener;
-import com.badlogic.gdx.utils.Json;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import io.github.pokemeetup.CreatureCaptureGame;
+import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
-import io.github.pokemeetup.system.inventory.Item;
-
-
-import java.util.ArrayList;
-import java.util.List;
 
 public class GameMenu {
     private static final float BUTTON_WIDTH = 200f;
@@ -33,6 +30,11 @@ public class GameMenu {
     private Window menuWindow;
     private Table menuTable;
     private boolean isVisible;
+    private Window optionsWindow;
+    private Slider musicSlider;
+    private Slider soundSlider;
+    private CheckBox musicEnabled;
+    private CheckBox soundEnabled;
 
     public GameMenu(GameScreen gameScreen, CreatureCaptureGame game, Skin skin, Player player, GameClient gameClient) {
         this.gameScreen = gameScreen;
@@ -44,6 +46,139 @@ public class GameMenu {
         createMenu();
         menuWindow.setVisible(false);  // Start with window hidden
         hide(); // Start hidden
+    }
+
+    // Update the createMenu method to handle the options button
+
+    private void createOptionsMenu() {
+        optionsWindow = new Window("Options", skin);
+        optionsWindow.setMovable(false);
+
+        Table optionsTable = new Table();
+        optionsTable.pad(MENU_PADDING);
+
+        // Music volume slider
+        Label musicLabel = new Label("Music Volume", skin);
+        musicSlider = new Slider(0f, 1f, 0.1f, false, skin);
+        musicSlider.setValue(AudioManager.getInstance().getMusicVolume());
+
+        // Music enabled checkbox
+        musicEnabled = new CheckBox(" Music Enabled", skin);
+        musicEnabled.setChecked(AudioManager.getInstance().isMusicEnabled());
+
+        // Sound volume slider
+        Label soundLabel = new Label("Sound Volume", skin);
+        soundSlider = new Slider(0f, 1f, 0.1f, false, skin);
+        soundSlider.setValue(AudioManager.getInstance().getSoundVolume());
+
+        // Sound enabled checkbox
+        soundEnabled = new CheckBox(" Sound Enabled", skin);
+        soundEnabled.setChecked(AudioManager.getInstance().isSoundEnabled());
+
+        // Add listeners
+        musicSlider.addListener(new ChangeListener() {
+            @Override
+            public void changed(ChangeEvent event, Actor actor) {
+                AudioManager.getInstance().setMusicVolume(musicSlider.getValue());
+                // Play a short music preview when adjusting
+                if (musicEnabled.isChecked()) {
+                    // Optional: Play a short music preview
+                }
+            }
+        });
+
+        musicEnabled.addListener(new ChangeListener() {
+            @Override
+            public void changed(ChangeEvent event, Actor actor) {
+                AudioManager.getInstance().setMusicEnabled(musicEnabled.isChecked());
+            }
+        });
+
+        soundSlider.addListener(new ChangeListener() {
+            @Override
+            public void changed(ChangeEvent event, Actor actor) {
+                AudioManager.getInstance().setSoundVolume(soundSlider.getValue());
+                // Play a sound effect when adjusting
+                if (soundEnabled.isChecked()) {
+                    AudioManager.getInstance().playSound(AudioManager.SoundEffect.MENU_SELECT);
+                }
+            }
+        });
+
+        soundEnabled.addListener(new ChangeListener() {
+            @Override
+            public void changed(ChangeEvent event, Actor actor) {
+                AudioManager.getInstance().setSoundEnabled(soundEnabled.isChecked());
+            }
+        });
+
+        // Save button
+        TextButton saveButton = new TextButton("Save", skin);
+        saveButton.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                saveAudioSettings();
+                hideOptions();
+            }
+        });
+
+        // Layout
+        optionsTable.add(musicLabel).left().padBottom(10).row();
+        optionsTable.add(musicSlider).width(200).padBottom(5).row();
+        optionsTable.add(musicEnabled).left().padBottom(20).row();
+
+        optionsTable.add(soundLabel).left().padBottom(10).row();
+        optionsTable.add(soundSlider).width(200).padBottom(5).row();
+        optionsTable.add(soundEnabled).left().padBottom(20).row();
+
+        optionsTable.add(saveButton).width(100).padTop(20);
+
+        optionsWindow.add(optionsTable);
+        optionsWindow.pack();
+        optionsWindow.setPosition(
+            (Gdx.graphics.getWidth() - optionsWindow.getWidth()) / 2,
+            (Gdx.graphics.getHeight() - optionsWindow.getHeight()) / 2
+        );
+        optionsWindow.setVisible(false);
+        stage.addActor(optionsWindow);
+    }
+
+    private void showOptions() {
+        menuWindow.setVisible(false);
+        optionsWindow.setVisible(true);
+
+        // Update slider and checkbox values to current settings
+        musicSlider.setValue(AudioManager.getInstance().getMusicVolume());
+        soundSlider.setValue(AudioManager.getInstance().getSoundVolume());
+        musicEnabled.setChecked(AudioManager.getInstance().isMusicEnabled());
+        soundEnabled.setChecked(AudioManager.getInstance().isSoundEnabled());
+    }
+
+    private void hideOptions() {
+        optionsWindow.setVisible(false);
+        menuWindow.setVisible(true);
+    }
+
+    // Update the resize method
+
+    private void saveAudioSettings() {
+        // Save to preferences
+        Preferences prefs = Gdx.app.getPreferences("audio_settings");
+        prefs.putFloat("music_volume", musicSlider.getValue());
+        prefs.putFloat("sound_volume", soundSlider.getValue());
+        prefs.putBoolean("music_enabled", musicEnabled.isChecked());
+        prefs.putBoolean("sound_enabled", soundEnabled.isChecked());
+        prefs.flush();
+
+        // Show save confirmation
+        Dialog dialog = new Dialog("Settings Saved", skin) {
+            public void result(Object obj) {
+                hide();
+            }
+        };
+        dialog.text("Audio settings have been saved.");
+        dialog.button("OK");
+        dialog.show(stage);
     }
 
     public Stage getStage() {
@@ -81,11 +216,10 @@ public class GameMenu {
 
         bagButton.addListener(notImplementedListener);
         pokemonButton.addListener(notImplementedListener);
-        optionsButton.addListener(notImplementedListener);
         exitButton.addListener(new ClickListener() {
             @Override
             public void clicked(InputEvent event, float x, float y) {
-                game.saveGameState();
+                game.performAutoSave();
                 Gdx.app.exit();
             }
         });
@@ -104,57 +238,21 @@ public class GameMenu {
             (Gdx.graphics.getWidth() - menuWindow.getWidth()) / 2,
             (Gdx.graphics.getHeight() - menuWindow.getHeight()) / 2
         );
+        optionsButton.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                showOptions();
+            }
+        });
 
+        // Create the options menu
+        createOptionsMenu();
         stage.addActor(menuWindow);
     }
 
     // Add these helper methods from AutoSaveManager
-    private void updatePlayerData(PlayerData playerData) {
-        if (player != null) {
-            playerData.setPosition(player.getX(), player.getY());
-            playerData.setDirection(player.getDirection());
-            playerData.setMoving(player.isMoving());
-            playerData.setWantsToRun(player.isRunning());
 
-            // Update inventory
-            List<String> inventoryStrings = new ArrayList<>();
-            for (Item item : player.getInventory().getItems()) {
-                if (item != null) {
-                    inventoryStrings.add(item.getName() + ":" + item.getCount());
-                }
-            }
-            playerData.setInventory(inventoryStrings);
-        }
-    }
 
-    private void saveWorldData() {
-        try {
-            Json json = new Json();
-            json.setUsePrototypes(false);
-
-            FileHandle worldDir = Gdx.files.local("worlds/" + game.getCurrentWorld().getName());
-            if (!worldDir.exists()) {
-                worldDir.mkdirs();
-            }
-
-            WorldData worldData = game.getCurrentWorld().getWorldData();
-
-            // Update current player data before saving
-            PlayerData currentPlayer = game.getCurrentWorld().getPlayerData();
-            if (currentPlayer != null) {
-                updatePlayerData(currentPlayer);
-                worldData.savePlayerData(currentPlayer.getUsername(), currentPlayer);
-            }
-
-            worldData.updateLastPlayed();
-            FileHandle worldFile = worldDir.child("world.json");
-
-            String jsonString = json.prettyPrint(worldData);
-            worldFile.writeString(jsonString, false);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to save world: " + e.getMessage(), e);
-        }
-    }
 
     private void showNotImplementedMessage() {
         com.badlogic.gdx.scenes.scene2d.ui.Dialog dialog = new com.badlogic.gdx.scenes.scene2d.ui.Dialog("Notice", skin) {
@@ -168,34 +266,21 @@ public class GameMenu {
     }
 
     private void saveGame() {
+        System.out.println("Attempting to save game");
         try {
             if (gameClient != null && player.getWorld() != null) {
                 // Get current world
                 World currentWorld = player.getWorld();
 
                 // Get current player
-                if (player == null || player.getUsername() == null) {
+                if (player.getUsername() == null) {
                     throw new Exception("Invalid player state");
                 }
 
                 // Create new PlayerData with explicit username
                 PlayerData playerData = new PlayerData(player.getUsername());
 
-                // Update player state
-                playerData.setPosition(player.getX(), player.getY());
-                playerData.setDirection(player.getDirection());
-                playerData.setMoving(player.isMoving());
-                playerData.setWantsToRun(player.isRunning());
-
-                // Update inventory - maintain item counts
-                List<String> inventoryStrings = new ArrayList<>();
-                for (Item item : player.getInventory().getItems()) {
-                    if (item != null) {
-                        // Format: "ItemName:Count"
-                        inventoryStrings.add(String.format("%s:%d", item.getName(), item.getCount()));
-                    }
-                }
-                playerData.setInventory(inventoryStrings);
+                playerData.updateFromPlayer(player);
 
                 // Save based on game mode
                 if (gameClient.isSinglePlayer()) {
@@ -203,12 +288,12 @@ public class GameMenu {
                     WorldData worldData = currentWorld.getWorldData();
                     worldData.savePlayerData(player.getUsername(), playerData);
                     game.getWorldManager().saveWorld(worldData);
-                    System.out.println("Saved single player data for: " + player.getUsername());
+//                    System.out.println(STR."Saved single player data for: \{player.getUsername()}");
                 } else {
                     // Multiplayer save
                     gameClient.updateLastKnownState(playerData);
                     gameClient.savePlayerState(playerData);
-                    System.out.println("Saved multiplayer data for: " + player.getUsername());
+//                    System.out.println(printlnSTR."Saved multiplayer data for: \{player.getUsername()}");
                 }
 
                 // Show success dialog
@@ -223,7 +308,7 @@ public class GameMenu {
                 dialog.show(stage);
 
             } else {
-                System.out.println("client: " + (gameClient == null) + " world: " + (game.getCurrentWorld() == null));
+//                System.out.println(STR."client: \{gameClient == null} world: \{game.getCurrentWorld() == null}");
                 throw new Exception("Game state is invalid");
             }
         } catch (Exception e) {
@@ -239,6 +324,7 @@ public class GameMenu {
             dialog.show(stage);
         }
     }
+
     public void show() {
         isVisible = true;
         menuWindow.setVisible(true);  // Make sure window is visible
@@ -257,12 +343,19 @@ public class GameMenu {
         }
     }
 
+
     public void resize(int width, int height) {
         stage.getViewport().update(width, height, true);
         if (menuWindow != null) {
             menuWindow.setPosition(
                 (width - menuWindow.getWidth()) / 2,
                 (height - menuWindow.getHeight()) / 2
+            );
+        }
+        if (optionsWindow != null) {
+            optionsWindow.setPosition(
+                (width - optionsWindow.getWidth()) / 2,
+                (height - optionsWindow.getHeight()) / 2
             );
         }
     }

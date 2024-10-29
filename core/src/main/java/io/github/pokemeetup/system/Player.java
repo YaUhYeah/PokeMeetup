@@ -9,7 +9,7 @@ import com.badlogic.gdx.graphics.g2d.*;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Json;
 import io.github.pokemeetup.system.gameplay.overworld.World;
-import io.github.pokemeetup.system.inventory.Inventory;
+import io.github.pokemeetup.system.gameplay.inventory.Inventory;
 
 public class Player {
     public static final int FRAME_WIDTH = 32;
@@ -22,10 +22,11 @@ public class Player {
     private static final float WALK_FRAME_TIME = MOVE_TIME / 4;  // Show all 4 frames during one movement
     private static final float RUN_FRAME_TIME = (MOVE_TIME / RUN_SPEED_MULTIPLIER) / 4;
     private static final float LERP_ALPHA = 0.2f; // Adjust for smoother/faster interpolation
-    private static final String SAVE_FILE = "save/player.json";
+    private static final String SAVE_FILE = "assets/save/player.json";
     private static final float PICKUP_RANGE = 32f;
     // New fields for username rendering
     private final String username;
+    private final World world; // Reference to the game world
     private float currentSpeedMultiplier = 1.0f;
     private float speedTransitionTimer = 0f;
     private Texture placeholderTexture;
@@ -39,7 +40,6 @@ public class Player {
     private float stateTime;
     private String queuedDirection;
     private Inventory inventory;
-    private World world; // Reference to the game world
     private Animation<TextureRegion> walkUpAnimation;
     private Animation<TextureRegion> walkDownAnimation;
     private Animation<TextureRegion> walkLeftAnimation;
@@ -55,6 +55,7 @@ public class Player {
     private Vector2 currentPosition;
     private PlayerData playerData;
     private Vector2 previousPosition;
+
     public Player(int startTileX, int startTileY, World world, TextureAtlas atlas, String username) {
         this.targetPosition = new Vector2(startTileX, startTileY);
         this.currentPosition = new Vector2(startTileX, startTileY);
@@ -75,45 +76,45 @@ public class Player {
         this.inventory = new Inventory();
         this.speedTransitionTimer = 0f;
         this.playerData = new PlayerData(username);
-        this.playerData.setPosition(x, y);
-        this.playerData.setDirection(direction);
+        playerData.updateFromPlayer(this);
 
         this.username = username; // Initialize username
-        font = new BitmapFont(Gdx.files.internal("Fonts/pkmn.fnt"));
+        font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
 
         font.getData().setScale(0.8f); // Optional: Adjust font size
         font.setColor(Color.WHITE);    // Optional: Set font color
-
+        if (world != null && world.getWorldData() != null) {
+            PlayerData savedData = world.getWorldData().getPlayerData(username);
+            if (savedData != null) {
+                System.out.println("Loading saved player state for: " + username);
+                updateFromState(); // Use saved state if available
+            } else {
+                // Initialize with default values if no saved state
+                this.x = startTileX;
+                this.y = startTileY;
+                this.direction = "down";
+                this.isMoving = false;
+                this.wantsToRun = false;
+                this.inventory = new Inventory();
+            }
+        }
         initializeAnimations(atlas);
+    }
+
+
+
+    public void updatePlayerData() {
+        if (playerData != null) {
+            playerData.updateFromPlayer(this);
+        }
     }
 
     public void setCurrentPosition(Vector2 currentPosition) {
         this.currentPosition = currentPosition;
     }
 
-    public void setX(float x) {
-        this.x = x;
-    }
-
     public World getWorld() {
         return world;
-    }
-
-    public void setY(float y) {
-        this.y = y;
-    }
-
-    public static PlayerData loadPlayerData() {
-        FileHandle file = Gdx.files.local(SAVE_FILE);
-        if (file.exists()) {
-            try {
-                Json json = new Json();
-                return json.fromJson(PlayerData.class, file.readString());
-            } catch (Exception e) {
-                System.err.println("Failed to load player data: " + e.getMessage());
-            }
-        }
-        return null;
     }
 
     public PlayerData getPlayerData() {
@@ -124,13 +125,12 @@ public class Player {
         try {
             Json json = new Json();
             PlayerData data = new PlayerData(username);
-            data.setPosition(x, y);
-            data.setDirection(direction);
+            data.updateFromPlayer(this);
 
             FileHandle file = Gdx.files.local(SAVE_FILE);
             file.writeString(json.toJson(data), false);
         } catch (Exception e) {
-            System.err.println("Failed to save player data: " + e.getMessage());
+            //            System.err.println(STR."Failed to save player data: \{e.getMessage()}");
         }
     }
 
@@ -160,6 +160,9 @@ public class Player {
     }
 
     public Inventory getInventory() {
+        if (inventory == null) {
+            inventory = new Inventory();
+        }
         return inventory;
     }
 
@@ -186,6 +189,7 @@ public class Player {
                 float progress = moveTimer / (wantsToRun ? MOVE_TIME : (MOVE_TIME / RUN_SPEED_MULTIPLIER));
                 moveTimer = progress * (wantsToRun ? (MOVE_TIME / RUN_SPEED_MULTIPLIER) : MOVE_TIME);
             }
+            updatePlayerData(); // Add this
         }
     }
 
@@ -195,11 +199,18 @@ public class Player {
 
     public void render(SpriteBatch batch) {
         batch.draw(currentFrame, x, y, FRAME_WIDTH, FRAME_HEIGHT);
-        if (username != null && !username.isEmpty() && font != null) {
+        if (username != null && !username.isEmpty() && font != null && !username.equals("Player")) {
             GlyphLayout layout = new GlyphLayout(font, username);
             float textWidth = layout.width;
             font.draw(batch, username, x + (FRAME_WIDTH - textWidth) / 2, y + FRAME_HEIGHT + 15);
+
         }
+    }
+
+
+
+    public void updateFromState() {
+   updatePlayerData();
     }
 
     public void update(float deltaTime) {
@@ -220,6 +231,7 @@ public class Player {
                 currentPosition.set(x, y);
                 targetPosition.set(x, y);
 
+                updatePlayerData(); // Add this
                 // Check for queued movement
                 if (queuedDirection != null) {
                     move(queuedDirection);
@@ -239,6 +251,7 @@ public class Player {
                 y = startY + (endY - startY) * progress;
 
                 currentPosition.set(x, y);
+                updatePlayerData(); // Add this
             }
         }
 
@@ -247,12 +260,10 @@ public class Player {
             currentPosition.lerp(targetPosition, LERP_ALPHA);
             x = currentPosition.x;
             y = currentPosition.y;
+            updatePlayerData(); // Add this
         }
 
-        playerData.setPosition(x, y);
-        playerData.setDirection(direction);
-        playerData.setMoving(isMoving);
-        playerData.setWantsToRun(wantsToRun);
+        playerData.updateFromPlayer(this);
         updateCurrentFrame();
     }
 
@@ -350,6 +361,10 @@ public class Player {
         return x * x * (3 - 2 * x);
     }
 
+    public void setInventory(Inventory inventory) {
+        this.inventory = inventory;
+    }
+
     public boolean move(String newDirection) {
         if (isMoving) {
             queuedDirection = newDirection;
@@ -379,10 +394,12 @@ public class Player {
         if (world.isPassable(targetTileX, targetTileY)) {
             isMoving = true;
             moveTimer = 0;
+            updatePlayerData(); // Add this
             return true;
         } else {
             targetTileX = tileX;
             targetTileY = tileY;
+            updatePlayerData(); // Add this
             return false;
         }
     }
@@ -546,12 +563,20 @@ public class Player {
     }
 
     // Getters and setters
-    public float getX() {
-        return x;
+    public int getX() {
+        return (int) x;
     }
 
-    public float getY() {
-        return y;
+    public void setX(float x) {
+        this.x = x;
+    }
+
+    public int getY() {
+        return (int) y;
+    }
+
+    public void setY(float y) {
+        this.y = y;
     }
 
     public int getTileX() {
@@ -564,5 +589,9 @@ public class Player {
 
     public boolean isMoving() {
         return isMoving;
+    }
+
+    public void setMoving(boolean moving) {
+        isMoving = moving;
     }
 }

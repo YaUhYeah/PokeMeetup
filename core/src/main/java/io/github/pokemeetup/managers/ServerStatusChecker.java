@@ -1,6 +1,8 @@
 package io.github.pokemeetup.managers;
 
 import com.esotericsoftware.kryonet.Client;
+import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
+import io.github.pokemeetup.multiplayer.server.config.ServerConfig;
 
 import java.io.IOException;
 
@@ -9,13 +11,19 @@ public class ServerStatusChecker {
         void onServerStatusChecked(boolean isAvailable);
     }
 
+    /**
+     * Checks the availability of the server using configurations from ServerConfig.
+     *
+     * @param listener The listener to notify about the server status.
+     */
     public static void checkServerAvailability(ServerStatusListener listener) {
         new Thread(() -> {
             Client client = new Client();
             try {
-                Network.registerClasses(client.getKryo());
+                NetworkProtocol.registerClasses(client.getKryo());
                 client.start();
-                client.connect(3000, Network.SERVER_IP, Network.PORT, Network.UDP_PORT); // 3000 ms timeout
+                ServerConfig config = ServerConfig.getInstance();
+                client.connect(3000, config.getServerIP(), config.getTcpPort(), config.getUdpPort()); // 3000 ms timeout
                 client.stop();
                 listener.onServerStatusChecked(true);
             } catch (IOException e) {

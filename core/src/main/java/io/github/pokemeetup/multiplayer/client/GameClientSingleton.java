@@ -1,67 +1,51 @@
-    package io.github.pokemeetup.multiplayer.client;
+package io.github.pokemeetup.multiplayer.client;
 
-    import io.github.pokemeetup.managers.Network;
 
-    import java.io.IOException;
-    import java.util.List;
-    import java.util.Map;
-    import java.util.concurrent.ConcurrentHashMap;
+import io.github.pokemeetup.multiplayer.server.config.ClientConfig;
+import io.github.pokemeetup.multiplayer.server.config.ServerConfig;
+import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-    public class GameClientSingleton {
-        private static GameClient instance;
-        private static DummyGameClient singlePlayerInstance;
+import java.io.IOException;
 
-        // Private constructor to prevent instantiation
-        private GameClientSingleton() {}
+public class GameClientSingleton {
+    private static GameClient instance;
+    private static final Object lock = new Object();
+    private static final Logger logger = LoggerFactory.getLogger(GameClientSingleton.class);
 
-        public static synchronized GameClient getInstance() throws IOException {
+    private GameClientSingleton() {}
+
+    public static GameClient getInstance(ServerConnectionConfig config) throws IOException {
+        synchronized (lock) {
             if (instance == null) {
-                instance = new GameClient(false); // false for multiplayer mode
+                instance = new GameClient(config, false,
+                    config.getServerIP(),
+                    config.getTcpPort(),
+                    config.getUdpPort());
+            } else if (!instance.isConnected()) {
+                // If instance exists but not connected, recreate with new config
+                instance.dispose();
+                instance = new GameClient(config, false,
+                    config.getServerIP(),
+                    config.getTcpPort(),
+                    config.getUdpPort());
             }
             return instance;
         }
-
-        public static synchronized GameClient getSinglePlayerInstance() throws IOException {
-            if (singlePlayerInstance == null) {
-                singlePlayerInstance = new DummyGameClient();
-            }
-            return singlePlayerInstance;
+    }  public static synchronized GameClient getSinglePlayerInstance() throws IOException {
+        if (instance == null) {
+            instance = new GameClient(ServerConnectionConfig.getDefault(),true, "localhost", 0, 0); // Ports 0 for single player
         }
+        return instance;
+    }
 
-        public static synchronized void dispose() {
+    public static synchronized void dispose() {
+       synchronized (lock) {
             if (instance != null) {
                 instance.dispose();
                 instance = null;
             }
-            if (singlePlayerInstance != null) {
-                singlePlayerInstance.dispose();
-                singlePlayerInstance = null;
-            }
-        }
-
-        private static class DummyGameClient extends GameClient {
-            public DummyGameClient() throws IOException {
-                super(true); // true for single player mode
-            }
-
-            @Override
-            public void sendPlayerUpdate(Network.PlayerUpdate update) {
-                // Do nothing in single player
-            }
-
-            @Override
-            public void sendInventoryUpdate(String username, List<String> itemNames) {
-                // Do nothing in single player
-            }
-
-            @Override
-            public void dispose() {
-                super.dispose();
-            }
-
-            @Override
-            public Map<String, Network.PlayerUpdate> getOtherPlayers() {
-                return new ConcurrentHashMap<>(); // Return empty map for single player
-            }
         }
     }
+}

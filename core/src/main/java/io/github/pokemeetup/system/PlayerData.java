@@ -1,116 +1,96 @@
 package io.github.pokemeetup.system;
 
-import com.badlogic.gdx.utils.Json;
-import com.badlogic.gdx.utils.JsonValue;
-import io.github.pokemeetup.system.inventory.Item;
+import io.github.pokemeetup.multiplayer.ServerPlayer;
+import io.github.pokemeetup.system.gameplay.inventory.Inventory;
+import io.github.pokemeetup.system.gameplay.inventory.Item;
+import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class PlayerData {
     private String username;
+    private String hashedPassword; // Store hashed password
     private float x, y;
-    private int direction;
+    private String direction;
     private boolean isMoving;
     private boolean wantsToRun;
     private List<String> inventoryItemNames;
 
-    public PlayerData() {
-        System.out.println("Creating empty PlayerData");
-    }
+    // Constructor
     public PlayerData(String username) {
-        System.out.println("Creating PlayerData for: " + username);
         this.username = username;
         this.inventoryItemNames = new ArrayList<>();
+        // Default values
+        this.x = 0;
+        this.y = 0;
+        this.direction = "down";
+        this.isMoving = false;
+        this.wantsToRun = false;
     }
-
-    // Position methods
-    public void setPosition(float x, float y) {
-        this.x = x;
-        this.y = y;
-    }
-
-    public void write(Json json) {
-        json.writeValue("username", username);
-        json.writeValue("x", x);
-        json.writeValue("y", y);
-        json.writeValue("direction", direction);
-        json.writeValue("isMoving", isMoving);
-        json.writeValue("wantsToRun", wantsToRun);
-        json.writeValue("inventoryItemNames", inventoryItemNames);
-    }
-
-
-
-    public float getX() {
-        return x;
+    public PlayerData() {
     }
 
     public void setX(float x) {
         this.x = x;
     }
 
-    public float getY() {
-        return y;
-    }
-
     public void setY(float y) {
         this.y = y;
     }
 
-    public boolean isMoving() {
-        return isMoving;
-    }
-
-    public void setMoving(boolean moving) {
-        isMoving = moving;
-    }
-
-    public int getDirection() {
-        return direction;
-    }
-
     public void setDirection(String direction) {
-        // Convert string direction to int
-        switch (direction) {
-            case "up":
-                this.direction = 0;
-                break;
-            case "down":
-                this.direction = 1;
-                break;
-            case "left":
-                this.direction = 2;
-                break;
-            case "right":
-                this.direction = 3;
-                break;
-            default:
-                this.direction = 1; // default to down
-        }
-    }
-
-    public void setDirection(int direction) {
         this.direction = direction;
     }
 
-    public boolean isWantsToRun() {
-        return wantsToRun;
-    }
+    // Updates the full state from a Player object
+    public void updateFromPlayer(Player player) {
+        if (player == null) return;
 
-    public void setWantsToRun(boolean wantsToRun) {
-        this.wantsToRun = wantsToRun;
-    }
+        // Update position and movement
+        this.x = player.getX();
+        this.y = player.getY();
+        this.direction = player.getDirection();
+        this.isMoving = player.isMoving();
+        this.wantsToRun = player.isRunning();
+        this.inventoryItemNames = new ArrayList<>();
 
-    public List<String> getInventoryItemNames() {
-        return inventoryItemNames;
-    }
+        // Update inventory
+        for (Item item : player.getInventory().getItems()) {
+            if (item != null) {
+                // Save in format: "itemName:count"
+                this.inventoryItemNames.add(item.getName() + ":" + item.getCount());
+            }
+        }
 
-    public void setInventoryItemNames(List<String> inventoryItemNames) {
-        this.inventoryItemNames = inventoryItemNames;
-    }
+        System.out.println("Updated player data:");
+        System.out.println("Position: " + x + "," + y);
+        System.out.println("Direction: " + direction);
+        System.out.println("Inventory items: " + inventoryItemNames);
+    } public void updateFromPlayer(ServerPlayer player) {
+        if (player == null) return;
 
-    public String convertDirectionIntToString(int direction) {
+        // Update position and movement
+        this.x = player.getPosition().x;
+        this.y = player.getPosition().y;
+        this.direction = player.getDirection();
+        this.isMoving = player.isMoving();
+        this.wantsToRun = player.isRunning();
+
+        // Update inventory
+        this.inventoryItemNames.clear();
+        for (String item : player.getInventory()) {
+            if (item != null) {
+                // Save in format: "itemName:count"
+                this.inventoryItemNames.add(item);
+            }
+        }
+
+        System.out.println("Updated player data:");
+        System.out.println("Position: " + x + "," + y);
+        System.out.println("Direction: " + direction);
+        System.out.println("Inventory items: " + inventoryItemNames);
+    }    public String convertDirectionIntToString(int direction) {
         switch (direction) {
             case 0:
                 return "up";
@@ -124,45 +104,66 @@ public class PlayerData {
                 return "down"; // default to down
         }
     }
-
-    public List<String> getInventory() {
-        if (inventoryItemNames != null) {
-            return inventoryItemNames;
-        }
-        return null;
+    public String getHashedPassword() {
+        return hashedPassword;
     }
 
-    // In PlayerData.java
-    public void setInventory(List<String> itemStrings) {
-        if (itemStrings != null) {
-            this.inventoryItemNames = itemStrings;
-            System.out.println("Set inventory with " + itemStrings.size() + " items: " +
-                String.join(", ", itemStrings));
-        } else {
-            this.inventoryItemNames = new ArrayList<>();
-            System.out.println("Set empty inventory");
-        }
+    public void setHashedPassword(String hashedPassword) {
+        this.hashedPassword = hashedPassword;
     }
 
-    // Inventory methods
+    // Creates a new Player object from this data
+    public void applyToPlayer(Player player) {
+        if (player == null) return;
 
+        // Set position and movement
+        player.setX(this.x);
+        player.setY(this.y);
+        player.setDirection(this.direction);
+        player.setMoving(this.isMoving);
+        player.setRunning(this.wantsToRun);
 
-    public void setInventoryFromItems(List<Item> items) {
-        List<String> itemStrings = new ArrayList<>();
-        for (Item item : items) {
-            if (item != null) {
-                itemStrings.add(item.getName() + ":" + item.getCount());
+        // Set inventory
+        Inventory inventory = player.getInventory();
+
+        for (String itemString : this.inventoryItemNames) {
+            String[] parts = itemString.split(":");
+            if (parts.length == 2) {
+                String itemName = parts[0];
+                int count = Integer.parseInt(parts[1]);
+
+                Item item = ItemManager.getItem(itemName);
+                if (item != null) {
+                    item.setCount(count);
+                    inventory.addItem(item);
+                }
             }
-        }
-        setInventory(itemStrings);
+        }player.setInventory(inventory);
+
+        System.out.println("Applied player data to player:");
+        System.out.println("Position: " + x + "," + y);
+        System.out.println("Direction: " + direction);
+        System.out.println("Inventory items: " + inventoryItemNames);
     }
 
-    // Username getter
-    public String getUsername() {
-        return username;
-    }
+    // Required getters/setters
+    public String getUsername() { return username; }
+    public float getX() { return x; }
+    public float getY() { return y; }
+    public String getDirection() { return direction; }
+    public boolean isMoving() { return isMoving; }
+    public boolean isWantsToRun() { return wantsToRun; }
+    public List<String> getInventoryItems() { return inventoryItemNames; }
 
-    public void setUsername(String username) {
-        this.username = username;
+    // Deep copy method
+    public PlayerData copy() {
+        PlayerData copy = new PlayerData(this.username);
+        copy.x = this.x;
+        copy.y = this.y;
+        copy.direction = this.direction;
+        copy.isMoving = this.isMoving;
+        copy.wantsToRun = this.wantsToRun;
+        copy.inventoryItemNames = new ArrayList<>(this.inventoryItemNames);
+        return copy;
     }
 }

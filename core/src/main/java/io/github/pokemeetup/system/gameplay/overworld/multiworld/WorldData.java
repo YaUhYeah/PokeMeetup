@@ -1,43 +1,52 @@
 package io.github.pokemeetup.system.gameplay.overworld.multiworld;
 
 import com.badlogic.gdx.files.FileHandle;
+import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Json;
 import com.badlogic.gdx.utils.JsonValue;
 import com.badlogic.gdx.utils.ObjectMap;
+import io.github.pokemeetup.multiplayer.server.entity.CreatureEntity;
+import io.github.pokemeetup.multiplayer.server.entity.Entity;
+import io.github.pokemeetup.multiplayer.server.entity.EntityType;
+import io.github.pokemeetup.multiplayer.server.entity.PokeballEntity;
 import io.github.pokemeetup.system.PlayerData;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+
+import static io.github.pokemeetup.multiplayer.server.entity.EntityType.POKEBALL;
 
 public class WorldData {
     private String name;
     private long lastPlayed;
     private WorldConfig config;
-    private ObjectMap<String, PlayerData> players; // Change to ObjectMap for libGDX compatibility
+    private ObjectMap<String, PlayerData> players; // Change to ObjectMap for libGDX compatibility    private ObjectMap<String, PlayerData> players; // Change to ObjectMap for libGDX compatibility
+    private ObjectMap<UUID, Entity> entities; // Add this field for entities
     private Map<String, PluginConfig> pluginConfigs; // For plugin system
 
     public WorldData() {
         this.players = new ObjectMap<>();
+        this.entities = new ObjectMap<>();
     } // Required for Json serialization
 
     public WorldData(String name, long seed) {
         this.name = name;
         this.lastPlayed = System.currentTimeMillis();
         this.config = new WorldConfig(seed);
+        this.entities = new ObjectMap<>();
         this.players = new ObjectMap<>();
     }
 
 
     public WorldData(String name, long lastPlayed, WorldConfig config) {
         this.name = name;
+        this.entities = new ObjectMap<>();
         this.lastPlayed = lastPlayed;
+        this.players = new ObjectMap<>();
         this.config = config;
     }
 
     public static void setupJson(Json json) {
-        json.setSerializer(HashMap.class, new Json.Serializer<HashMap>() {
+        json.setSerializer(HashMap.class, new Json.Serializer<>() {
             @Override
             public void write(Json json, HashMap map, Class knownType) {
                 // Write map entries directly
@@ -59,50 +68,135 @@ public class WorldData {
                 return result;
             }
         });
+
+        // Register Entity serialization
+        json.setSerializer(Entity.class, new Json.Serializer<>() {
+            @Override
+            public void write(Json json, Entity entity, Class knownType) {
+                json.writeObjectStart();
+                json.writeValue("id", entity.getId().toString());
+                json.writeValue("position", entity.getPosition());
+                json.writeValue("velocity", entity.getVelocity());
+                json.writeValue("type", entity.getType().name());
+                json.writeValue("isDead", entity.isDead());
+                json.writeObjectEnd();
+            }
+
+            @Override
+            public Entity read(Json json, JsonValue jsonData, Class type) {
+                String idStr = jsonData.getString("id");
+                UUID id = UUID.fromString(idStr);
+                Vector2 position = json.readValue(Vector2.class, jsonData.get("position"));
+                Vector2 velocity = json.readValue(Vector2.class, jsonData.get("velocity"));
+                String typeStr = jsonData.getString("type");
+                EntityType entityType;
+                try {
+                    entityType = EntityType.valueOf(typeStr);
+                } catch (IllegalArgumentException e) {
+                    entityType = EntityType.ITEM; // Default type if unknown
+                }
+                boolean isDead = jsonData.getBoolean("isDead");
+                float width = jsonData.getFloat("width");
+                float height = jsonData.getFloat("height");
+
+                // Instantiate concrete Entity subclasses based on EntityType
+                Entity entity;
+                switch (entityType) {
+                    case POKEBALL:
+                        entity = new PokeballEntity(position.x, position.y);
+                        break;
+                    default:
+                        entity = new CreatureEntity(position.x, position.y);
+                }
+                return entity;
+            }
+        });
     }
 
+    // In WorldData class
     public void savePlayerData(String username, PlayerData data) {
-        System.out.println("Saving player data for: " + username);
         if (players == null) {
             players = new ObjectMap<>();
         }
-        players.put(username, data);
-        System.out.println("Saved position: " + data.getX() + "," + data.getY());
+
+        if (data == null || username == null) {
+            return;
+        }
+
+        // Create deep copy to avoid reference issues
+        PlayerData copy = data.copy();
+        players.put(username, copy);
+
+        // Verify save
+        PlayerData saved = players.get(username);
+        if (saved != null) {
+            System.out.println("Saved state verified for: " + username +
+                " at " + saved.getX() + "," + saved.getY());
+        }
     }
 
+    // Improve player data retrieval
     public PlayerData getPlayerData(String username) {
-        System.out.println("Getting player data for: " + username);
-        if (players != null) {
-            PlayerData data = players.get(username);
-            System.out.println("Found data? " + (data != null));
-            return data;
+        if (username == null || players == null) {
+            System.out.println("either username or players is null");
+            return null;
         }
-        System.out.println("Players map is null");
+
+        PlayerData data = players.get(username);
+        if (data != null) {
+            // Return a deep copy
+            return data.copy();
+        }
+
         return null;
     }
+    // Methods for managing entities
 
-//    private void loadWorld(FileHandle file) {
-//        try {
-//            Json json = new Json();
-//            setupJson(json);
-//            String content = file.readString();
-//            System.out.println("Loading world data: " + content);
-//            WorldData loaded = json.fromJson(WorldData.class, content);
-//            this.name = loaded.name;
-//            this.lastPlayed = loaded.lastPlayed;
-//            this.config = loaded.config;
-//            this.players = loaded.players != null ? loaded.players : new HashMap<>();
-//        } catch (Exception e) {
-//            System.err.println("Failed to load world: " + e.getMessage());
-//            e.printStackTrace();
-//        }
-//    }
-// These are needed for proper serialization
-public ObjectMap<String, PlayerData> getPlayers() {
-    return players;
-}  public void setPlayers(ObjectMap<String, PlayerData> players) {
+    /**
+     * Adds a new entity to the world.
+     *
+     * @param entity The entity to add.
+     */
+    public void addEntity(Entity entity) {
+        if (entities == null) {
+            entities = new ObjectMap<>();
+        }
+        entities.put(entity.getId(), entity);
+        System.out.println("Added entity: ID=" + entity.getId() + ", Type=" + entity.getType());
+    }
+
+    /**
+     * Removes an entity from the world.
+     *
+     * @param entityId The UUID of the entity to remove.
+     */
+    public void removeEntity(UUID entityId) {
+        if (entities != null && entities.containsKey(entityId)) {
+            entities.remove(entityId);
+            System.out.println("Removed entity: ID=" + entityId);
+        }
+    }
+
+    /**
+     * Retrieves all entities in the world.
+     *
+     * @return A collection of all entities.
+     */
+    public Collection<Entity> getEntities() {
+        if (entities != null) {
+            return new ArrayList<>((Collection) entities.values());
+        }
+        return new ArrayList<>();
+    }
+
+    public ObjectMap<String, PlayerData> getPlayers() {
+        return players;
+    }
+
+    public void setPlayers(ObjectMap<String, PlayerData> players) {
         this.players = players;
     }
+
     public void addPlayer(String username, PlayerData data) {
         this.players.put(username, data);
     }

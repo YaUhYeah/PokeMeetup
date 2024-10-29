@@ -8,8 +8,8 @@ import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
-import io.github.pokemeetup.system.inventory.Item;
-import io.github.pokemeetup.system.inventory.ItemManager;
+import io.github.pokemeetup.system.gameplay.inventory.Item;
+import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -53,27 +53,20 @@ public class AutoSaveManager {
         // Get current player state from world
         Player player = world.getPlayer(); // Need to add this getter to World
         if (player != null) {
-            playerData.setPosition(player.getX(), player.getY());
-            playerData.setDirection(player.getDirection());
-            playerData.setMoving(player.isMoving());
-            playerData.setWantsToRun(player.isRunning());
 
-            // Update inventory
-            List<String> inventoryStrings = new ArrayList<>();
-            for (Item item : player.getInventory().getItems()) {
-                if (item != null) {
-                    inventoryStrings.add(item.getName() + ":" + item.getCount());
-                }
-            }
-            playerData.setInventory(inventoryStrings);
+            playerData.updateFromPlayer(player);
         }
     }
+
     private void saveWorldData() {
         try {
+            if (Gdx.files == null) {
+                return;
+            }
             Json json = new Json();
             json.setUsePrototypes(false); // Important for clean serialization
 
-            FileHandle worldDir = Gdx.files.local("worlds/" + world.getName());
+            FileHandle worldDir = Gdx.files.local("assets/worlds/" + world.getName());
             if (!worldDir.exists()) {
                 worldDir.mkdirs();
             }
@@ -101,6 +94,7 @@ public class AutoSaveManager {
             e.printStackTrace();
         }
     }
+
     private List<String> convertInventoryToStrings(String[] inventory) {
         List<String> result = new ArrayList<>();
         if (inventory != null) {

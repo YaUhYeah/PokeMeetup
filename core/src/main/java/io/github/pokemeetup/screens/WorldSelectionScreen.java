@@ -4,85 +4,228 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
-import com.badlogic.gdx.graphics.g2d.BitmapFont;
-import com.badlogic.gdx.scenes.scene2d.*;
+import com.badlogic.gdx.scenes.scene2d.Actor;
+import com.badlogic.gdx.scenes.scene2d.InputEvent;
+import com.badlogic.gdx.scenes.scene2d.InputListener;
+import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
-import com.badlogic.gdx.scenes.scene2d.utils.ClickListener;
-import com.badlogic.gdx.utils.Array;
-import com.badlogic.gdx.utils.Timer;
+import com.badlogic.gdx.utils.Align;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import io.github.pokemeetup.CreatureCaptureGame;
-import io.github.pokemeetup.multiplayer.client.GameClient;
+import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
 import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
-import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
-import io.github.pokemeetup.system.inventory.Inventory;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
 public class WorldSelectionScreen implements Screen {
-    private CreatureCaptureGame game;
-    private Stage stage;
-    private Skin skin;
-    private WorldManager worldManager;
-    private Table worldList;
-    private GameClient gameClient;
-    private String username;
-    private BitmapFont font;
+    private static final String DEFAULT_PLAYER_NAME = "Player";
+    private final CreatureCaptureGame game;
+    private final Stage stage;
+    private final Skin skin;
 
-    public WorldSelectionScreen(CreatureCaptureGame game, GameClient gameClient, String username) {
+    // UI Components
+    private Table mainTable;
+    private ScrollPane worldListScroll;
+    private Table worldListTable;
+    private Table infoPanel;
+    private WorldData selectedWorld;
+
+    // Buttons
+    private TextButton playButton;
+    private TextButton createButton;
+    private TextButton deleteButton;
+    private TextButton backButton;
+
+    // Tabs
+    private ButtonGroup<TextButton> tabGroup;
+    private String currentTab = "All";
+
+    public WorldSelectionScreen(CreatureCaptureGame game) {
         this.game = game;
-        this.gameClient = gameClient;
-        this.username = username;
+        this.stage = new Stage(new ScreenViewport());
+        this.skin = new Skin(Gdx.files.internal("Skins/uiskin.json"));
 
-        stage = new Stage(new ScreenViewport());
         Gdx.input.setInputProcessor(stage);
-
-        skin = new Skin(Gdx.files.internal("Skins/uiskin.json"));
-        worldManager = new WorldManager();
-        worldManager.init();
-
-        // Initialize font
-        font = new BitmapFont(Gdx.files.internal("Fonts/pkmn.fnt"));
-        font.getData().setScale(1.0f); // Adjust scale as needed
-
         createUI();
+        refreshWorldList();
     }
 
     private void createUI() {
-        Table mainTable = new Table();
+        // Main layout
+        mainTable = new Table();
         mainTable.setFillParent(true);
+        mainTable.pad(20);
 
         // Title
-        Label titleLabel = new Label("Select World", skin);
-        titleLabel.setFontScale(2);
-        mainTable.add(titleLabel).padBottom(20);
+        Label titleLabel = new Label("Select World", skin, "title");
+        mainTable.add(titleLabel).colspan(3).pad(10);
+        mainTable.row();
+
+        // Tab buttons
+        Table tabTable = new Table();
+        tabGroup = new ButtonGroup<>();
+
+        String[] tabs = {"All", "Recent", "Multiplayer"};
+        for (String tab : tabs) {
+            TextButton tabButton = new TextButton(tab, skin, "toggle");
+            tabGroup.add(tabButton);
+            tabTable.add(tabButton).pad(5);
+
+            tabButton.addListener(new ChangeListener() {
+                @Override
+                public void changed(ChangeEvent event, Actor actor) {
+                    if (tabButton.isChecked()) {
+                        currentTab = tab;
+                        refreshWorldList();
+                    }
+                }
+            });
+        }
+        tabGroup.getButtons().get(0).setChecked(true);
+
+        mainTable.add(tabTable).colspan(3).pad(10);
         mainTable.row();
 
         // World list
-        worldList = new Table(skin);
-        ScrollPane scrollPane = new ScrollPane(worldList, skin);
-        mainTable.add(scrollPane).expand().fill().padBottom(20);
+        worldListTable = new Table();
+        worldListTable.top();
+        worldListScroll = new ScrollPane(worldListTable, skin);
+        worldListScroll.setFadeScrollBars(false);
+
+        // Info panel
+        infoPanel = new Table(skin);
+        infoPanel.background("default-pane");
+        infoPanel.pad(10);
+
+        // Layout main sections
+        Table contentTable = new Table();
+        contentTable.add(worldListScroll).width(400).expandY().fillY().padRight(20);
+        contentTable.add(infoPanel).width(300).expandY().fillY();
+
+        mainTable.add(contentTable).expand().fill();
         mainTable.row();
 
-        // Buttons
+        // Bottom buttons
         Table buttonTable = new Table();
-        TextButton createButton = new TextButton("Create New World", skin);
-        TextButton deleteButton = new TextButton("Delete World", skin);
-        TextButton backButton = new TextButton("Back", skin);
 
-        buttonTable.add(createButton).padRight(10);
-        buttonTable.add(deleteButton).padRight(10);
-        buttonTable.add(backButton);
+        createButton = new TextButton("Create New World", skin);
+        playButton = new TextButton("Play Selected World", skin);
+        deleteButton = new TextButton("Delete World", skin);
+        backButton = new TextButton("Back", skin);
 
-        mainTable.add(buttonTable);
+        playButton.setDisabled(true);
+        deleteButton.setDisabled(true);
 
-        stage.addActor(mainTable);
+        buttonTable.add(createButton).pad(5).width(200);
+        buttonTable.add(playButton).pad(5).width(200);
+        buttonTable.add(deleteButton).pad(5).width(200);
+        buttonTable.row();
+        buttonTable.add(backButton).colspan(3).width(200).pad(5);
+
+        mainTable.add(buttonTable).colspan(3).pad(10);
 
         // Add listeners
+        addButtonListeners();
+
+        stage.addActor(mainTable);
+    }
+// Update the createWorldEntry method in WorldSelectionScreen:
+
+    private Table createWorldEntry(WorldData world) {
+        Table entry = new Table(skin);
+        entry.setBackground(skin.newDrawable("default-pane"));
+        entry.pad(10);
+
+        // Create clickable button instead of just labels
+        TextButton worldButton = new TextButton(world.getName(), skin);
+        worldButton.align(Align.left);
+        Label timeLabel = new Label("Last played: " + formatDate(world.getLastPlayed()), skin, "small");
+
+        entry.add(worldButton).expandX().fillX();
+        entry.row();
+        entry.add(timeLabel).expandX().left().padTop(5);
+
+        // Add click listener to the button
+        worldButton.addListener(new ChangeListener() {
+            @Override
+            public void changed(ChangeEvent event, Actor actor) {
+                // Update visual selection
+                resetWorldEntryStyles();
+                entry.setBackground(skin.newDrawable("default-pane", new Color(0.4f, 0.4f, 0.4f, 1))); // Highlight selected
+
+                selectWorld(world);
+            }
+        });
+
+        // Store reference to track selection
+        entry.setUserObject(world);
+
+        return entry;
+    }
+
+    // Add this helper method to reset selection styling
+    private void resetWorldEntryStyles() {
+        for (Actor actor : worldListTable.getChildren()) {
+            if (actor instanceof Table) {
+                ((Table) actor).setBackground(skin.newDrawable("default-pane"));
+            }
+        }
+    }
+
+    // Update the refreshWorldList method to maintain selection:
+    private void refreshWorldList() {
+        worldListTable.clear();
+        WorldData previousSelection = selectedWorld; // Store current selection
+
+        for (WorldData world : game.getWorldManager().getWorlds().values()) {
+            if (!shouldShowWorld(world)) {
+                continue;
+            }
+
+            Table worldEntry = createWorldEntry(world);
+
+            // Restore selection highlight if this was the selected world
+            if (world.equals(previousSelection)) {
+                worldEntry.setBackground(skin.newDrawable("default-pane", new Color(0.4f, 0.4f, 0.4f, 1)));
+                selectedWorld = world;
+            }
+
+            worldListTable.add(worldEntry).expandX().fillX().pad(5);
+            worldListTable.row();
+        }
+
+        // Update button states
+        playButton.setDisabled(selectedWorld == null);
+        deleteButton.setDisabled(selectedWorld == null);
+
+        // Update info panel
+        updateInfoPanel();
+    }
+
+    // Add hover effect by implementing these methods in createWorldEntry:
+    private void addHoverEffect(Table entry) {
+        entry.addListener(new InputListener() {
+            @Override
+            public void enter(InputEvent event, float x, float y, int pointer, Actor fromActor) {
+                if (entry.getUserObject() != selectedWorld) {
+                    entry.setBackground(skin.newDrawable("default-pane", new Color(0.3f, 0.3f, 0.3f, 1)));
+                }
+            }
+
+            @Override
+            public void exit(InputEvent event, float x, float y, int pointer, Actor toActor) {
+                if (entry.getUserObject() != selectedWorld) {
+                    entry.setBackground(skin.newDrawable("default-pane"));
+                }
+            }
+        });
+    }
+
+    private void addButtonListeners() {
         createButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
@@ -90,10 +233,21 @@ public class WorldSelectionScreen implements Screen {
             }
         });
 
+        playButton.addListener(new ChangeListener() {
+            @Override
+            public void changed(ChangeEvent event, Actor actor) {
+                if (selectedWorld != null) {
+                    loadSelectedWorld();
+                }
+            }
+        });
+
         deleteButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
-                showDeleteWorldDialog();
+                if (selectedWorld != null) {
+                    showDeleteConfirmDialog();
+                }
             }
         });
 
@@ -104,283 +258,192 @@ public class WorldSelectionScreen implements Screen {
                 dispose();
             }
         });
+    }
 
-        updateWorldList();
+
+
+    private boolean shouldShowWorld(WorldData world) {
+        switch (currentTab) {
+            case "Recent":
+                return (System.currentTimeMillis() - world.getLastPlayed()) < (24 * 60 * 60 * 1000);
+            case "Multiplayer":
+                return world.getName().equals(CreatureCaptureGame.MULTIPLAYER_WORLD_NAME);
+            default:
+                return true;
+
+        }
+    }
+
+    private void selectWorld(WorldData world) {
+        selectedWorld = world;
+        updateInfoPanel();
+        playButton.setDisabled(false);
+        deleteButton.setDisabled(false);
+    }
+
+    private void updateInfoPanel() {
+        infoPanel.clear();
+
+        if (selectedWorld == null) {
+            infoPanel.add(new Label("Select a world to view details", skin)).expand();
+            return;
+        }
+
+        infoPanel.defaults().left().pad(5);
+
+        infoPanel.add(new Label(selectedWorld.getName(), skin, "title")).expandX();
+        infoPanel.row();
+        infoPanel.add(new Label("Last played: " + formatDate(selectedWorld.getLastPlayed()), skin));
+        infoPanel.row();
+        infoPanel.add(new Label("World size: " + World.WORLD_SIZE + "x" + World.WORLD_SIZE, skin));
+        infoPanel.row();
+        infoPanel.add(new Label("Seed: " + selectedWorld.getSeed(), skin));
+    }
+
+    private String formatDate(long timestamp) {
+        if (timestamp == 0) return "Never";
+        return new SimpleDateFormat("MMM d, yyyy HH:mm").format(new Date(timestamp));
     }
 
     private void showCreateWorldDialog() {
         Dialog dialog = new Dialog("Create New World", skin) {
             @Override
-            public void hide() {
-                super.hide();
-                remove(); // Ensure dialog is removed from stage
+            protected void result(Object object) {
+                if ((Boolean) object) {
+                    TextField nameField = findActor("nameField");
+                    TextField seedField = findActor("seedField");
+
+                    String worldName = nameField.getText().trim();
+                    String seedText = seedField.getText().trim();
+
+                    try {
+                        long seed = seedText.isEmpty() ? System.currentTimeMillis() : Long.parseLong(seedText);
+                        createNewWorld(worldName, seed);
+                    } catch (NumberFormatException e) {
+                        showError("Invalid seed number");
+                    }
+                }
             }
         };
 
-        Table content = new Table();
+        Table content = new Table(skin);
         content.pad(20);
 
-        final TextField nameField = new TextField("", skin);
-        final TextField seedField = new TextField("", skin);
+        TextField nameField = new TextField("", skin);
+        nameField.setName("nameField");
+        nameField.setMessageText("World name");
 
-        content.add("World Name:").padRight(10);
-        content.add(nameField).width(200);
-        content.row().padTop(10);
-        content.add("Seed (optional):").padRight(10);
-        content.add(seedField).width(200);
+        TextField seedField = new TextField("", skin);
+        seedField.setName("seedField");
+        seedField.setMessageText("Seed (optional)");
 
-        // Buttons
-        Table buttonTable = new Table();
-        TextButton createButton = new TextButton("Create", skin);
-        TextButton backButton = new TextButton("Back", skin);
-        TextButton cancelButton = new TextButton("Cancel", skin);
-
-        buttonTable.add(createButton).padRight(20);
-        buttonTable.add(backButton).padRight(20);
-        buttonTable.add(cancelButton);
-
-        content.row().padTop(20);
-        content.add(buttonTable).colspan(2);
+        content.add(new Label("World Name:", skin)).left();
+        content.row();
+        content.add(nameField).width(300).pad(5);
+        content.row();
+        content.add(new Label("Seed:", skin)).left();
+        content.row();
+        content.add(seedField).width(300).pad(5);
 
         dialog.getContentTable().add(content);
-
-        // Button Listeners
-        createButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                String worldName = nameField.getText().trim();
-                if (!worldName.isEmpty()) {
-                    try {
-                        long seed = seedField.getText().isEmpty() ?
-                            System.currentTimeMillis() :
-                            Long.parseLong(seedField.getText());
-
-                        // Create and save the world
-                        WorldData worldData = worldManager.createWorld(worldName, seed, 0.15f, 0.05f);
-
-                        // Save initial player data for the world
-                        saveInitialPlayerData(worldName, username);
-
-                        dialog.hide();
-                        game.setScreen(new GameScreen(game, username, gameClient,
-                            World.DEFAULT_X_POSITION, World.DEFAULT_Y_POSITION, worldName));
-                        dispose();
-                    } catch (NumberFormatException e) {
-                        showError("Invalid seed number.");
-                    } catch (Exception e) {
-                        showError("Failed to create world: " + e.getMessage());
-                    }
-                } else {
-                    showError("Please enter a world name.");
-                }
-            }
-        });
-
-        backButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                dialog.hide();
-                // Optionally, refresh the world list or perform other actions
-                // For now, do nothing
-            }
-        });
-
-        cancelButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                dialog.hide();
-                // Optionally, navigate to another screen
-            }
-        });
-
+        dialog.button("Create", true);
+        dialog.button("Cancel", false);
         dialog.show(stage);
     }
 
-    private void showDeleteWorldDialog() {
-        Dialog deleteDialog = new Dialog("Delete World", skin) {
-            @Override
-            public void hide() {
-                super.hide();
-                remove(); // Ensure dialog is removed from stage
-            }
-        };
-
-        Table content = new Table();
-        content.pad(20);
-
-        final TextField nameField = new TextField("", skin);
-
-        content.add("World Name:").padRight(10);
-        content.add(nameField).width(200);
-        content.row().padTop(10);
-
-        // Buttons
-        Table buttonTable = new Table();
-        TextButton deleteButton = new TextButton("Delete", skin);
-        TextButton cancelButton = new TextButton("Cancel", skin);
-
-        buttonTable.add(deleteButton).padRight(20);
-        buttonTable.add(cancelButton);
-
-        content.row().padTop(20);
-        content.add(buttonTable).colspan(2);
-
-        deleteDialog.getContentTable().add(content);
-
-        // Button Listeners
-        deleteButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                String worldName = nameField.getText().trim();
-                if (!worldName.isEmpty()) {
-                    try {
-                        boolean success = worldManager.getWorlds().containsKey(worldName);
-                        if (success) {
-                            worldManager.deleteWorld(worldName);
-                            deleteDialog.hide();
-                            showInfo("World '" + worldName + "' deleted successfully.");
-                            updateWorldList();
-                        } else {
-                            showError("World '" + worldName + "' does not exist.");
-                        }
-                    } catch (Exception e) {
-                        showError("Error deleting world: " + e.getMessage());
-                    }
-                } else {
-                    showError("Please enter a world name.");
-                }
-            }
-        });
-
-        cancelButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                deleteDialog.hide();
-            }
-        });
-
-        deleteDialog.show(stage);
-
-
-        cancelButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                deleteDialog.hide();
-            }
-        });
-
-        deleteDialog.show(stage);
-    }
-
-    private void saveInitialPlayerData(String worldName, String username) {
-        WorldData worldData = worldManager.getWorld(worldName);
-        if (worldData != null) {
-            // Initialize player's starting position and inventory
-            PlayerData playerData = new PlayerData(username);
-            worldData.addPlayer(username, playerData);
-            worldManager.saveWorld(worldData);
-            System.out.println("Initial player data saved for world: " + worldName + ", Username: " + username);
-        } else {
-            showError("World data not found for saving player data.");
+    private void createNewWorld(String name, long seed) {
+        if (name.isEmpty()) {
+            showError("World name cannot be empty");
+            return;
         }
-    }
 
-
-    private void showError(String message) {
-        Dialog errorDialog = new Dialog("Error", skin) {
-            @Override
-            public void hide() {
-                super.hide();
-                remove(); // Ensure dialog is removed from stage
-            }
-        };
-
-        Label errorLabel = new Label(message, new Label.LabelStyle(font, Color.RED));
-        errorLabel.setWrap(true);
-
-        errorDialog.getContentTable().add(errorLabel).width(300).pad(20);
-        errorDialog.button("OK", true);
-        errorDialog.show(stage);
-    }
-
-    private void showInfo(String message) {
-        Dialog infoDialog = new Dialog("Info", skin) {
-            @Override
-            public void hide() {
-                super.hide();
-                remove(); // Ensure dialog is removed from stage
-            }
-        };
-
-        Label infoLabel = new Label(message, new Label.LabelStyle(font, Color.GREEN));
-        infoLabel.setWrap(true);
-
-        infoDialog.getContentTable().add(infoLabel).width(300).pad(20);
-        infoDialog.button("OK", true);
-        infoDialog.show(stage);
-    }
-
-    private void updateWorldList() {
-        worldList.clear();
-
-        for (WorldData world : worldManager.getWorlds().values()) {
-            Table worldEntry = new Table(skin);
-            Label nameLabel = new Label(world.getName(), skin);
-            Label lastPlayedLabel = new Label(formatDate(world.getLastPlayed()), skin);
-
-            worldEntry.add(nameLabel).expandX().left().padRight(10);
-            worldEntry.add(lastPlayedLabel).right();
-
-            // Add click listener to select the world
-            worldEntry.addListener(new ClickListener() {
-                @Override
-                public void clicked(InputEvent event, float x, float y) {
-                    selectWorld(world.getName());
-                }
-            });
-
-            worldList.add(worldEntry).expandX().fillX().padBottom(5);
-            worldList.row();
-        }
-    }
-
-    private String formatDate(long timestamp) {
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        return sdf.format(new Date(timestamp));
-    }
-
-    private void selectWorld(String worldName) {
         try {
-            // Initialize the selected world
-            game.initializeWorld(worldName, gameClient.isSinglePlayer());
+            WorldData world = game.getWorldManager().createWorld(name, seed, 0.15f, 0.05f);
+            PlayerData playerData = new PlayerData(DEFAULT_PLAYER_NAME);
+            world.savePlayerData(DEFAULT_PLAYER_NAME, playerData);
+            game.getWorldManager().saveWorld(world);
 
-            // Save initial player data if necessary
-            saveInitialPlayerData(worldName, username);
+            refreshWorldList();
+            selectWorld(world);
+        } catch (Exception e) {
+            showError("Failed to create world: " + e.getMessage());
+        }
+    }
 
-            // Transition to GameScreen
-            game.setScreen(new GameScreen(game, username, gameClient,
-                World.DEFAULT_X_POSITION, World.DEFAULT_Y_POSITION, worldName));
+    private void showDeleteConfirmDialog() {
+        Dialog dialog = new Dialog("Delete World", skin) {
+            @Override
+            protected void result(Object object) {
+                if ((Boolean) object) {
+                    deleteSelectedWorld();
+                }
+            }
+        };
+
+        dialog.text("Are you sure you want to delete '" + selectedWorld.getName() + "'?\nThis cannot be undone!");
+        dialog.button("Delete", true);
+        dialog.button("Cancel", false);
+        dialog.show(stage);
+    }
+
+    private void deleteSelectedWorld() {
+        try {
+            game.getWorldManager().deleteWorld(selectedWorld.getName());
+            selectedWorld = null;
+            refreshWorldList();
+            updateInfoPanel();
+            playButton.setDisabled(true);
+            deleteButton.setDisabled(true);
+        } catch (Exception e) {
+            showError("Failed to delete world: " + e.getMessage());
+        }
+    }
+
+    private void loadSelectedWorld() {
+        try {
+            game.initializeWorld(selectedWorld.getName(), false);
+            PlayerData playerData = selectedWorld.getPlayerData(DEFAULT_PLAYER_NAME);
+
+            if (playerData == null) {
+                playerData = new PlayerData(DEFAULT_PLAYER_NAME);
+                selectedWorld.savePlayerData(DEFAULT_PLAYER_NAME, playerData);
+                game.getWorldManager().saveWorld(selectedWorld);
+            }
+
+            game.setScreen(new GameScreen(
+                game,
+                DEFAULT_PLAYER_NAME,
+                GameClientSingleton.getSinglePlayerInstance(),
+                (int) playerData.getX(),
+                (int) playerData.getY(),
+                selectedWorld.getName()
+            ));
             dispose();
         } catch (Exception e) {
             showError("Failed to load world: " + e.getMessage());
         }
     }
 
+    private void showError(String message) {
+        Dialog dialog = new Dialog("Error", skin);
+        dialog.text(message);
+        dialog.button("OK");
+        dialog.show(stage);
+    }
+
     @Override
     public void show() {
-
     }
 
     @Override
     public void render(float delta) {
-        Gdx.gl.glClearColor(0, 0, 0, 1);
+        Gdx.gl.glClearColor(0.2f, 0.2f, 0.2f, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
         stage.act(delta);
         stage.draw();
     }
 
-    // Implement other required methods (resize, pause, resume, hide, dispose)
     @Override
     public void resize(int width, int height) {
         stage.getViewport().update(width, height, true);
@@ -401,7 +464,5 @@ public class WorldSelectionScreen implements Screen {
     @Override
     public void dispose() {
         stage.dispose();
-        skin.dispose();
-        font.dispose();
     }
 }

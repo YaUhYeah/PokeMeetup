@@ -5,6 +5,8 @@ import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
+import io.github.pokemeetup.multiplayer.client.GameClient;
+import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
@@ -19,12 +21,14 @@ public class WorldObject {
     private float pixelY;  // Remove static
     private TextureRegion texture;
     private ObjectType type;  // Remove static
+    private String id;
+    private boolean isDirty;
     private boolean isCollidable;
     private float spawnTime;
     private float renderOrder;
     private int tileX, tileY;
 
-    public WorldObject(int tileX, int tileY, TextureRegion texture, ObjectType type) {
+    public WorldObject(int tileX, int tileY, TextureRegion texture, ObjectType type) {    this.id = UUID.randomUUID().toString();    this.id = UUID.randomUUID().toString();
         this.tileX = tileX;
         this.tileY = tileY;
         this.pixelX = tileX * World.TILE_SIZE;
@@ -34,6 +38,39 @@ public class WorldObject {
         this.isCollidable = type.isCollidable;
         this.spawnTime = type.isPermanent ? 0 : System.currentTimeMillis() / 1000f;
         this.renderOrder = type == ObjectType.TREE ? pixelY + World.TILE_SIZE : pixelY;
+        this.isDirty = true;
+    }    // Add network-related methods
+    public String getId() {
+        return id;
+    }
+
+    public boolean isDirty() {
+        return isDirty;
+    }
+    public Map<String, Object> getSerializableData() {
+        Map<String, Object> data = new HashMap<>();
+        data.put("tileX", tileX);
+        data.put("tileY", tileY);
+        data.put("type", type.name());
+        data.put("spawnTime", spawnTime);
+        data.put("isCollidable", isCollidable);
+        return data;
+    }  public void updateFromNetwork(NetworkProtocol.WorldObjectUpdate update) {
+        this.tileX = (int) update.data.get("tileX");
+        this.tileY = (int) update.data.get("tileY");
+        this.pixelX = tileX * World.TILE_SIZE;
+        this.pixelY = tileY * World.TILE_SIZE;
+        this.spawnTime = (float) update.data.get("spawnTime");
+        this.isCollidable = (boolean) update.data.get("isCollidable");
+        isDirty = false;
+    }
+
+    public void clearDirty() {
+        isDirty = false;
+    }
+
+    public void markDirty() {
+        isDirty = true;
     }
 
     public ObjectType getType() {
@@ -129,7 +166,8 @@ public class WorldObject {
         TREE(true, true, 2, 3),      // 2 tiles wide, 3 tiles tall
         POKEBALL(false, true, 1, 1), // 1x1 tile
 
-        SNOW_TREE(true, true, 2, 3), HAUNTED_TREE(true, true, 2, 3);
+        SNOW_TREE(true, true, 2, 3),
+        HAUNTED_TREE(true, true, 2, 3);
         final boolean isPermanent;
         final boolean isCollidable;
         final int widthInTiles;
@@ -144,7 +182,8 @@ public class WorldObject {
     }
 
     public static class WorldObjectManager {
-        private static final float POKEBALL_SPAWN_CHANCE = 0.01f;
+        private static final float POKEBALL_SPAWN_CHANCE = 0.001f;
+        private final GameClient gameClient;
         private static final int MAX_POKEBALLS_PER_CHUNK = 2;
         private static final float TREE_SPAWN_CHANCE = 0.15f; // Increased chance
         private static final float POKEBALL_SPAWN_INTERVAL = 10f; // Try spawning every 10 seconds
@@ -156,9 +195,10 @@ public class WorldObject {
 
         private long worldSeed;
 
-        public WorldObjectManager(TextureAtlas atlas, long seed) {
+        public WorldObjectManager(TextureAtlas atlas, long seed, GameClient gameClient) {
             this.worldSeed = seed;
 
+            this.gameClient = gameClient;
             chunkObjects = new HashMap<>();
             objectTextures = new HashMap<>();
             this.atlas = atlas;
@@ -222,6 +262,14 @@ public class WorldObject {
                     if (objects != null) {
                         for (WorldObject obj : objects) {
                             if (obj.getType() == ObjectType.TREE) {
+                                if (obj.isUnderTree(playerX, playerY, playerWidth, playerHeight)) {
+                                    return true;
+                                }
+                            } if (obj.getType() == ObjectType.HAUNTED_TREE) {
+                                if (obj.isUnderTree(playerX, playerY, playerWidth, playerHeight)) {
+                                    return true;
+                                }
+                            } if (obj.getType() == ObjectType.SNOW_TREE) {
                                 if (obj.isUnderTree(playerX, playerY, playerWidth, playerHeight)) {
                                     return true;
                                 }
@@ -294,24 +342,109 @@ public class WorldObject {
                     }
 
                     if (locationClear) {
-                        // Retrieve the pokeball texture from the objectTextures map
                         TextureRegion pokeballTexture = objectTextures.get(WorldObject.ObjectType.POKEBALL);
-                        if (pokeballTexture == null) {
-                            System.err.println("Pokeball texture not found in objectTextures map!");
-                            return;
-                        }
+                        if (pokeballTexture != null) {
+                            WorldObject pokeball = new WorldObject(worldTileX, worldTileY,
+                                pokeballTexture, WorldObject.ObjectType.POKEBALL);
+                            objects.add(pokeball);
 
-                        WorldObject pokeball = new WorldObject(worldTileX, worldTileY,
-                            pokeballTexture, WorldObject.ObjectType.POKEBALL);
-                        objects.add(pokeball);
-                        System.out.println("Spawned pokeball at: " + worldTileX + "," + worldTileY);
-                        return;
+                            // Send network update if in multiplayer
+                            if (gameClient != null && !gameClient.isSinglePlayer()) {
+                                sendObjectSpawn(pokeball);
+                            }
+
+                            System.out.println("Spawned pokeball at: " + worldTileX + "," + worldTileY);
+                        }
                     }
                 }
             }
+        }     public void handleNetworkUpdate(NetworkProtocol.WorldObjectUpdate update) {
+            Vector2 chunkPos = calculateChunkPos(update);
+            List<WorldObject> objects = chunkObjects.computeIfAbsent(chunkPos, k -> new ArrayList<>());
+
+            switch (update.type) {
+                case ADD:
+                    // Create new object from network data
+                    WorldObject newObject = createObjectFromUpdate(update);
+                    objects.add(newObject);
+                    break;
+
+                case REMOVE:
+                    // Remove object by ID
+                    objects.removeIf(obj -> obj.getId().equals(update.objectId));
+                    break;
+
+                case UPDATE:
+                    // Update existing object
+                    objects.stream()
+                        .filter(obj -> obj.getId().equals(update.objectId))
+                        .findFirst()
+                        .ifPresent(obj -> obj.updateFromNetwork(update));
+                    break;
+            }
         }
 
+        private Vector2 calculateChunkPos(NetworkProtocol.WorldObjectUpdate update) {
+            int tileX = (int) update.data.get("tileX");
+            int tileY = (int) update.data.get("tileY");
+            int chunkX = Math.floorDiv(tileX, Chunk.CHUNK_SIZE);
+            int chunkY = Math.floorDiv(tileY, Chunk.CHUNK_SIZE);
+            return new Vector2(chunkX, chunkY);
+        }
 
+        private WorldObject createObjectFromUpdate(NetworkProtocol.WorldObjectUpdate update) {
+            ObjectType type = ObjectType.valueOf((String) update.data.get("type"));
+            TextureRegion texture = objectTextures.get(type);
+            return new WorldObject(
+                (int) update.data.get("tileX"),
+                (int) update.data.get("tileY"),
+                texture,
+                type
+            );
+        }
+
+        private void sendObjectSpawn(WorldObject object) {
+            if (gameClient == null || gameClient.isSinglePlayer()) return;
+
+            NetworkProtocol.WorldObjectUpdate update = new NetworkProtocol.WorldObjectUpdate();
+            update.objectId = object.getId();
+            update.type = NetworkProtocol.NetworkObjectUpdateType.ADD;
+            update.data = object.getSerializableData();
+
+            gameClient.sendWorldObjectUpdate(update);
+        }
+
+        private void sendObjectRemove(WorldObject object) {
+            if (gameClient == null || gameClient.isSinglePlayer()) return;
+
+            NetworkProtocol.WorldObjectUpdate update = new NetworkProtocol.WorldObjectUpdate();
+            update.objectId = object.getId();
+            update.type = NetworkProtocol.NetworkObjectUpdateType.REMOVE;
+
+            gameClient.sendWorldObjectUpdate(update);
+        }
+
+        public void addObjectToChunk(Vector2 chunkPos, WorldObject object) {
+            List<WorldObject> objects = chunkObjects.computeIfAbsent(chunkPos, k -> new ArrayList<>());
+            objects.add(object);
+
+            // Send network update if in multiplayer
+            if (gameClient != null && !gameClient.isSinglePlayer()) {
+                sendObjectSpawn(object);
+            }
+        }
+
+        public WorldObject createObject(WorldObject.ObjectType type, float x, float y) {
+            TextureRegion texture = objectTextures.get(type);
+            if (texture == null) {
+                throw new IllegalStateException("No texture found for object type: " + type);
+            }
+
+            int tileX = (int)(x / World.TILE_SIZE);
+            int tileY = (int)(y / World.TILE_SIZE);
+
+            return new WorldObject(tileX, tileY, texture, type);
+        }
         public void generateObjectsForChunk(Vector2 chunkPos, Chunk chunk, Biome biome) {
             List<WorldObject> objects = chunkObjects.computeIfAbsent(chunkPos, k -> new ArrayList<>());
             long chunkSeed = worldSeed ^ ((long) chunk.getChunkX() << 32 | (chunk.getChunkY() & 0xffffffffL));
