@@ -11,34 +11,25 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class Inventory {
-    public static final int HOTBAR_SIZE = 9;  // Only 9 slots for hotbar
+    public static final int HOTBAR_SIZE = 9;  // First 9 slots
     public static final int INVENTORY_ROWS = 3;
     public static final int INVENTORY_COLS = 9;
-    public static final int INVENTORY_SIZE = INVENTORY_ROWS * INVENTORY_COLS;  // Total 27 slots
+    public static final int INVENTORY_SIZE = INVENTORY_ROWS * INVENTORY_COLS;
+    public static final int INVENTORY_CAPACITY = INVENTORY_SIZE * 64;  // Total 27 slots
 
     public static final int CRAFTING_GRID_SIZE = 4; // 2x2 for inventory crafting
     private static final String SAVE_FILE = "assets/save/inventory.json";
     private final List<Item> items;
-    private float heldItemX;
-    private float heldItemY;public void updateHeldItemPosition(float mouseX, float mouseY) {
-        // Offset the icon a bit from the cursor to make it more visible
-        heldItemX = mouseX - 16;
-        heldItemY = mouseY - 16;
-    }
-    public void renderHeldItem(SpriteBatch batch) {
-        if (heldItem != null) {
-            // Directly draw the held item's icon without calling begin/end
-            batch.draw(heldItem.getIcon(), heldItemX, heldItemY, 32, 32);
-        }
-    }
-
-
     private final Item[][] craftingGrid;
+    private float heldItemX;
+    private float heldItemY;
     private String[] itemNames; // Array of item names for serialization
     private Item craftingResult;
     private int selectedHotbarSlot;
     private Item heldItem = null;  // Currently held item
     private int heldItemCount = 0; // Count of held item
+    private List<Item> hotbarCache;
+
     public Inventory() {
         items = new ArrayList<>(INVENTORY_SIZE);
         // Initialize with null slots
@@ -48,15 +39,25 @@ public class Inventory {
         craftingGrid = new Item[2][2];
         selectedHotbarSlot = 0;
         System.out.println("Created new inventory with " + INVENTORY_SIZE + " slots");
-    }public Item getItemAt(int row, int col) {
-        // Check that the row and column are within the bounds of the crafting grid
-        if (row >= 0 && row < craftingGrid.length && col >= 0 && col < craftingGrid[row].length) {
-            return craftingGrid[row][col];
-        } else {
-            return null; // Return null if the indices are out of bounds
+    }    // Update getSelectedIndex to work with first 9 slots
+    public int getSelectedIndex() {
+        return selectedHotbarSlot;  // This should be 0-8
+    }
+
+    public void selectItem(int index) {
+        if (index >= 0 && index < HOTBAR_SIZE) {  // Only allow selecting first 9 slots
+            selectedHotbarSlot = index;
         }
     }
 
+    // Update hotbar-related methods to use first 9 slots
+    public void updateHotbarDisplay() {
+        for (int i = 0; i < HOTBAR_SIZE; i++) {
+            if (hotbarCache != null) {
+                hotbarCache.set(i, getItem(i));
+            }
+        }
+    }
 
     public static Inventory loadInventory() {
         FileHandle file = Gdx.files.local(SAVE_FILE);
@@ -82,6 +83,28 @@ public class Inventory {
             }
         }
         return new Inventory();
+    }
+
+    public void updateHeldItemPosition(float mouseX, float mouseY) {
+        // Offset the icon a bit from the cursor to make it more visible
+        heldItemX = mouseX - 16;
+        heldItemY = mouseY - 16;
+    }
+
+    public void renderHeldItem(SpriteBatch batch) {
+        if (heldItem != null) {
+            // Directly draw the held item's icon without calling begin/end
+            batch.draw(heldItem.getIcon(), heldItemX, heldItemY, 32, 32);
+        }
+    }
+
+    public Item getItemAt(int row, int col) {
+        // Check that the row and column are within the bounds of the crafting grid
+        if (row >= 0 && row < craftingGrid.length && col >= 0 && col < craftingGrid[row].length) {
+            return craftingGrid[row][col];
+        } else {
+            return null; // Return null if the indices are out of bounds
+        }
     }
 
     // Check if currently holding an item
@@ -229,15 +252,7 @@ public class Inventory {
         // Optionally, update the UI or notify listeners
     }
 
-    public void selectItem(int index) {
-        if (index >= 0 && index < items.size()) {
-            selectedHotbarSlot = index;
-        }
-    }
 
-    public int getSelectedIndex() {
-        return selectedHotbarSlot;
-    }
 
     public List<String> getItemNames() {
         List<String> names = new ArrayList<>();
@@ -304,6 +319,51 @@ public class Inventory {
         } catch (Exception e) {
             System.err.println("Failed to save inventory: " + e.getMessage());
         }
+    }
+
+    public void setHotbarCache(List<Item> items) {
+        this.hotbarCache = new ArrayList<>();
+        for (Item item : items) {
+            this.hotbarCache.add(item != null ? item.copy() : null);
+        }
+    }    public List<Item> getHotbarCache() {
+        return hotbarCache;
+    }
+
+    public void restoreHotbarFromCache() {
+        if (hotbarCache != null) {
+            int startIndex = INVENTORY_SIZE - HOTBAR_SIZE;
+            for (int i = 0; i < HOTBAR_SIZE; i++) {
+                setItem(startIndex + i, hotbarCache.get(i));
+            }
+        }
+    }
+
+
+
+    public boolean canAddItem(Item item) {
+        if (item == null) return false;
+
+        // First check if we can stack with existing items
+        for (Item existingItem : items) {
+            if (existingItem != null && existingItem.canStackWith(item)) {
+                if (existingItem.getCount() + item.getCount() <= Item.MAX_STACK_SIZE) {
+                    return true;
+                }
+            }
+        }
+
+        // Then check for empty slots
+        return getFirstEmptySlot() != -1;
+    }
+
+    private int getFirstEmptySlot() {
+        for (int i = 0; i < items.size(); i++) {
+            if (items.get(i) == null) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static class InventoryData {

@@ -1,6 +1,6 @@
 {
 name: fr
-lastPlayed: 1730143958109
+lastPlayed: 1730172669085
 config: {
 	seed: 0
 	treeSpawnRate: 0.15
@@ -20,15 +20,16 @@ players: {
 	Player: {
 		username: Player
 		hashedPassword: null
-		x: 4480
-		y: 2592
+		x: 5280
+		y: 3232
 		direction: down
 		isMoving: false
 		wantsToRun: false
 		inventoryItemNames: [
-			Pokeball:1
-			Potion:1
-			Elixir:1
+			Elixir:10
+			Pokeball:14
+			Potion:4
+			Stick:4
 		]
 	}
 }

@@ -1,78 +1,293 @@
 package io.github.pokemeetup.screens;
 
-import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.Input;
-import com.badlogic.gdx.Screen;
+import com.badlogic.gdx.*;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.Pixmap;
+import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
+import com.badlogic.gdx.graphics.g2d.Sprite;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.InputEvent;
-import com.badlogic.gdx.scenes.scene2d.InputListener;
 import com.badlogic.gdx.scenes.scene2d.Stage;
-import com.badlogic.gdx.scenes.scene2d.ui.Skin;
-import com.badlogic.gdx.scenes.scene2d.ui.Table;
+import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.DragAndDrop;
+import com.badlogic.gdx.scenes.scene2d.utils.Drawable;
+import com.badlogic.gdx.scenes.scene2d.utils.SpriteDrawable;
+import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
+import com.badlogic.gdx.utils.Timer;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import io.github.pokemeetup.system.Player;
-import io.github.pokemeetup.system.gameplay.inventory.Inventory;
-import io.github.pokemeetup.system.gameplay.inventory.InventorySlot;
-import io.github.pokemeetup.system.gameplay.inventory.Item;
-import io.github.pokemeetup.system.gameplay.inventory.ResultSlot;
+import io.github.pokemeetup.system.PlayerData;
+import io.github.pokemeetup.system.gameplay.inventory.*;
 import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingSlot;
 import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingSystem;
+import io.github.pokemeetup.utils.TextureManager;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class InventoryScreen implements Screen {
+    private static final float BACKGROUND_OPACITY = 0.5f;
     private static final int SLOT_SIZE = 40;
     private static final int PADDING = 10;
 
     private final Stage stage;
+    private final SpriteBatch batch;
+    private final ShapeRenderer shapeRenderer;
     private final Skin skin;
-    private final Player player;
+    private final Inventory inventory;
     private final CraftingSystem craftingSystem;
-    private final Table craftingTable;
-    private final DragAndDrop dragAndDrop;
-    private Table inventoryTable;
-    private SpriteBatch batch;
+    private final Player player;
 
+    // UI Components
+    private final Table mainTable;
+    private final Table craftingTable;
+    private final Table inventoryTable;
+    private final Table hotbarTable;
+    private final DragAndDrop dragAndDrop;
+
+    // Track drag and drop state
+    private Item heldItem;
+    private int heldItemCount;
+    private boolean isDragging;
 
     public InventoryScreen(Player player, Skin skin) {
         this.player = player;
         this.skin = skin;
-        this.stage = new Stage(new ScreenViewport());
-        Gdx.input.setInputProcessor(stage); // Directly after stage initialization
+        this.inventory = player.getInventory();
+        this.batch = new SpriteBatch();
+        this.shapeRenderer = new ShapeRenderer();
+        this.stage = new Stage(new ScreenViewport(), batch);
+
+        // Initialize UI components
+        this.mainTable = new Table();
+        this.craftingTable = new Table();
+        this.inventoryTable = new Table();
+        this.hotbarTable = new Table();
         this.dragAndDrop = new DragAndDrop();
-        this.craftingSystem = new CraftingSystem(player.getInventory());
 
+        // Initialize crafting system
+        this.craftingSystem = new CraftingSystem(inventory);
+        if (player.getInventory().getHotbarCache() != null) {
+            player.getInventory().restoreHotbarFromCache();
+        }
+        setupUI();
+        setupInput();
+        loadInventoryContents();
+    }
 
-        this.batch = new SpriteBatch(); // Initialize the SpriteBatch here
-        // Dark overlay background
-        Table background = new Table();
-        background.setFillParent(true);
-        background.setBackground(skin.newDrawable("white", new Color(0, 0, 0, 0.7f)));
-//        stage.addActor(background);
-
-        // Main layout
-        Table mainTable = new Table();
-        mainTable.setFillParent(true);
-        mainTable.center();
-        mainTable.pad(PADDING); // Enable expansion for dynamic resizing
-
-        // Initialize components
-        inventoryTable = createInventoryTable();
-        craftingTable = createCraftingTable();
-
-        // Add to main layout
-        mainTable.add(craftingTable).pad(PADDING).top().expand();
-        mainTable.add(inventoryTable).pad(PADDING).top().expand();
-
-        stage.addActor(mainTable);
-
-        // Escape key handler
-        stage.addListener(new InputListener() {
+    private void setupPeriodicSync() {
+        Timer.schedule(new Timer.Task() {
             @Override
-            public boolean keyDown(InputEvent event, int keycode) {
+            public void run() {
+                if (Gdx.app.getGraphics() != null) {
+                    Gdx.app.postRunnable(() -> {
+                        synchronizeInventoryWithHotbar();
+                        inventory.updateHotbarDisplay();
+                    });
+                }
+            }
+        }, 0, 0.1f); // Update every 100ms
+    }
+
+    private void synchronizeInventoryWithHotbar() {
+        // Update both inventory and hotbar slots
+        for (Actor actor : stage.getActors()) {
+            if (actor instanceof InventorySlot) {
+                InventorySlot slot = (InventorySlot) actor;
+                slot.refreshFromInventory();
+            }
+        }
+    }
+
+    public Inventory getInventory() {
+        return inventory;
+    }
+
+    private Texture createColoredTexture(float r, float g, float b, float a) {
+        Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+        pixmap.setColor(r, g, b, a);
+        pixmap.fill();
+        Texture texture = new Texture(pixmap);
+        pixmap.dispose();
+        return texture;
+    }
+
+    private void setupUI() {
+        // Main container setup
+        Table container = new Table();
+        container.setFillParent(true);
+
+        // Don't set container background - let the ShapeRenderer handle it
+
+        // Crafting area (top)
+        setupCraftingArea(container);
+
+        // Main inventory (middle)
+        setupMainInventory(container);
+
+        // Hotbar (bottom)
+        setupHotbar(container);
+
+        stage.addActor(container);
+    }
+
+    private void setupCraftingArea(Table container) {
+        Table craftingArea = new Table();
+        craftingArea.setBackground(new TextureRegionDrawable(createColoredTexture(0.2f, 0.2f, 0.2f, 0.9f)));
+        craftingArea.pad(PADDING);
+
+        // 2x2 crafting grid
+        Table grid = new Table();
+        for (int i = 0; i < 2; i++) {
+            for (int j = 0; j < 2; j++) {
+                CraftingSlot slot = new CraftingSlot(craftingSystem, i, j, skin, dragAndDrop);
+                // Set slot background from atlas
+                slot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_normal")));
+                grid.add(slot).size(SLOT_SIZE).space(2);
+            }
+            grid.row();
+        }
+
+        // Arrow and result slot
+        Image arrow = new Image(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("arrow")));
+        ResultSlot resultSlot = new ResultSlot(craftingSystem, skin);
+        resultSlot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_normal")));
+
+        craftingArea.add(grid);
+        craftingArea.add(arrow).size(32, 32).pad(10);
+        craftingArea.add(resultSlot).size(SLOT_SIZE);
+
+        container.add(craftingArea).pad(20).row();
+    }
+
+    public void updateSlotBackgrounds() {
+        for (Actor actor : stage.getActors()) {
+            if (actor instanceof InventorySlot) {
+                InventorySlot slot = (InventorySlot) actor;
+                int index = slot.getIndex();
+                if (index >= Inventory.INVENTORY_SIZE - Inventory.HOTBAR_SIZE) {
+                    // This is a hotbar slot
+                    if (inventory.getSelectedIndex() == index) {
+                        slot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_selected")));
+                    } else {
+                        slot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_normal")));
+                    }
+                }
+            }
+        }
+    }
+
+    private void setupMainInventory(Table container) {
+        Table mainInventoryArea = new Table();
+        mainInventoryArea.setBackground(new TextureRegionDrawable(createColoredTexture(0.2f, 0.2f, 0.2f, 0.9f)));
+        mainInventoryArea.pad(PADDING);
+
+        // Show all inventory slots including hotbar
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 9; col++) {
+                int index = row * 9 + col;
+                InventorySlot slot = new InventorySlot(
+                    inventory,
+                    index,
+                    stage,
+                    skin,
+                    dragAndDrop,
+                    craftingSystem
+                );
+                slot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_normal")));
+                mainInventoryArea.add(slot).size(SLOT_SIZE).space(2);
+            }
+            mainInventoryArea.row();
+        }
+
+        container.add(mainInventoryArea).pad(20).row();
+    }
+
+    private void setupHotbar(Table container) {
+        Table hotbarArea = new Table();
+        hotbarArea.pad(PADDING);
+
+        // Create slots for first 9 slots (0-8)
+        for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
+            InventorySlot slot = new InventorySlot(
+                inventory,
+                i,  // Use index 0-8
+                stage,
+                skin,
+                dragAndDrop,
+                craftingSystem
+            );
+
+            // Copy the item from the inventory
+            Item item = inventory.getItem(i);
+            if (item != null) {
+                slot.setItem(item.copy());
+            }
+
+            hotbarArea.add(slot).size(SLOT_SIZE).space(2);
+        }
+
+        container.add(hotbarArea).pad(20);
+    }
+
+    private void loadInventoryContents() {
+        // Load main inventory slots
+        for (int i = 0; i < Inventory.INVENTORY_SIZE - Inventory.HOTBAR_SIZE; i++) {
+            Item item = inventory.getItem(i);
+            if (item != null) {
+                InventorySlot slot = findSlotByIndex(i);
+                if (slot != null) {
+                    slot.setItem(item.copy());
+                }
+            }
+        }
+
+        // Load hotbar slots
+        for (int i = Inventory.INVENTORY_SIZE - Inventory.HOTBAR_SIZE; i < Inventory.INVENTORY_SIZE; i++) {
+            Item item = inventory.getItem(i);
+            if (item != null) {
+                InventorySlot slot = findHotbarSlotByIndex(i);
+                if (slot != null) {
+                    slot.setItem(item.copy());
+                }
+            }
+        }
+    }
+
+    private InventorySlot findSlotByIndex(int index) {
+        for (Actor actor : inventoryTable.getChildren()) {
+            if (actor instanceof InventorySlot) {
+                InventorySlot slot = (InventorySlot) actor;
+                if (slot.getIndex() == index) {
+                    return slot;
+                }
+            }
+        }
+        return null;
+    }
+
+    private InventorySlot findHotbarSlotByIndex(int index) {
+        for (Actor actor : hotbarTable.getChildren()) {
+            if (actor instanceof InventorySlot) {
+                InventorySlot slot = (InventorySlot) actor;
+                if (slot.getIndex() == index) {
+                    return slot;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void setupInput() {
+        InputMultiplexer multiplexer = new InputMultiplexer(stage);
+        multiplexer.addProcessor(new InputAdapter() {
+            @Override
+            public boolean keyDown(int keycode) {
                 if (keycode == Input.Keys.ESCAPE || keycode == Input.Keys.E) {
                     hide();
                     return true;
@@ -80,100 +295,59 @@ public class InventoryScreen implements Screen {
                 return false;
             }
         });
+        Gdx.input.setInputProcessor(multiplexer);
     }
 
-    private Table createInventoryTable() {
-        System.out.println("Creating inventory table...");
-        Table table = new Table();
-        table.defaults().size(SLOT_SIZE).space(2);
-
-        List<Item> items = player.getInventory().getItems();
-
-        for (int i = 0; i < items.size(); i++) {
-            InventorySlot slot = new InventorySlot(player.getInventory(), i, stage, skin, dragAndDrop);
-            slot.updateSlotContents();  // Load item into slot
-            table.add(slot);
-            System.out.println("Added item to slot " + i + ": " + (items.get(i) != null ? items.get(i).getName() : "empty"));
-            if ((i + 1) % Inventory.HOTBAR_SIZE == 0) table.row();
-        }
-
-        return table;
-    }
-
-
-
-    private void refreshInventoryTable() {
-        System.out.println("refreshInventoryTable called");
-        inventoryTable.clear();  // Clear all existing slots
-        inventoryTable = createInventoryTable(); // Recreate the table with updated items
-
-        // Force the display to reload all items from the player's inventory
-        List<Item> items = player.getInventory().getItems();
-        for (int i = 0; i < items.size(); i++) {
-            InventorySlot slot = new InventorySlot(player.getInventory(), i, stage, skin, dragAndDrop);
-            slot.updateSlotContents();
-            inventoryTable.add(slot);
-            System.out.println("Added item to slot " + i + ": " + (items.get(i) != null ? items.get(i).getName() : "empty"));
-            if ((i + 1) % Inventory.HOTBAR_SIZE == 0) inventoryTable.row();
-        }
-
-    }
-
-
-    private Table createCraftingTable() {
-        Table table = new Table();
-        table.defaults().size(SLOT_SIZE).space(2);
-
-        // 3x3 crafting grid
-        for (int row = 0; row < 3; row++) {
-            table.row();
-            for (int col = 0; col < 3; col++) {
-                CraftingSlot slot = new CraftingSlot(player.getInventory(), row, col, stage, skin, dragAndDrop);
-                table.add(slot);
+    public void updateAllSlots() {
+        // Update main inventory slots
+        for (Actor actor : inventoryTable.getChildren()) {
+            if (actor instanceof InventorySlot) {
+                ((InventorySlot) actor).updateVisuals();
             }
         }
 
-        // Result slot
-        table.row().padTop(10);
-        ResultSlot resultSlot = new ResultSlot(craftingSystem);
-        table.add(resultSlot).colspan(3).center();
-
-        return table;
+        // Update hotbar slots
+        for (Actor actor : hotbarTable.getChildren()) {
+            if (actor instanceof InventorySlot) {
+                ((InventorySlot) actor).updateVisuals();
+            }
+        }
     }
-
 
     @Override
     public void show() {
-        Gdx.input.setInputProcessor(stage); // Ensure input is set here once
-        refreshInventoryTable();
+        Gdx.input.setInputProcessor(stage);
+        loadInventoryContents();
     }
 
 
     @Override
     public void render(float delta) {
-        Gdx.input.setInputProcessor(stage);
+        // Enable blending for transparency
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
 
-        // Update cursor position for held item
-        float mouseX = Gdx.input.getX();
-        float mouseY = Gdx.graphics.getHeight() - Gdx.input.getY();
-        player.getInventory().updateHeldItemPosition(mouseX, mouseY);
+        // Draw semi-transparent background
+        shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+        shapeRenderer.setColor(0, 0, 0, BACKGROUND_OPACITY);
+        shapeRenderer.rect(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+        shapeRenderer.end();
 
-        // Standard rendering
+        // Update and draw stage
         stage.act(delta);
         stage.draw();
 
-        // Begin batch for rendering the held item following the cursor
-        batch.begin();
-        player.getInventory().renderHeldItem(batch); // Use the batch for drawing the held item
-        batch.end();
-
+        // Ensure proper state sync on every frame
+        synchronizeInventoryWithHotbar();
     }
 
     @Override
     public void resize(int width, int height) {
         stage.getViewport().update(width, height, true);
+    }
+
+    public Stage getStage() {
+        return stage;
     }
 
     @Override
@@ -186,20 +360,14 @@ public class InventoryScreen implements Screen {
 
     @Override
     public void hide() {
-        if (stage != null) {
-            stage.unfocusAll();
-            stage.clear();
-        }
+        craftingSystem.returnItemsToInventory();
+        inventory.updateHotbarDisplay();
     }
 
     @Override
     public void dispose() {
         stage.dispose();
-        batch.dispose(); // Dispose of SpriteBatch to prevent memory leaks
-    }
-
-
-    public Stage getStage() {
-        return stage;
+        batch.dispose();
+        shapeRenderer.dispose();
     }
 }

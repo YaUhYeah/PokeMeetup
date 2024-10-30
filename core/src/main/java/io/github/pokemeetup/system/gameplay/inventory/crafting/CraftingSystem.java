@@ -1,112 +1,117 @@
 package io.github.pokemeetup.system.gameplay.inventory.crafting;
 
+import com.badlogic.gdx.graphics.Color;
+import com.badlogic.gdx.scenes.scene2d.Stage;
+import com.badlogic.gdx.scenes.scene2d.ui.Image;
+import com.badlogic.gdx.scenes.scene2d.ui.Label;
+import com.badlogic.gdx.scenes.scene2d.ui.Skin;
+import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
 import io.github.pokemeetup.system.gameplay.inventory.Item;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
+import io.github.pokemeetup.utils.TextureManager;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 
 public class CraftingSystem {
-    private Item heldItem;  // Currently held item
-    private int heldCount;  // Count of held item
-    public static final int INVENTORY_CRAFTING_SIZE = 2;
-    public static final int TABLE_CRAFTING_SIZE = 3;
+    private static final int GRID_SIZE = 2; // 2x2 crafting grid
     private final Item[][] craftingGrid;
-    private final int gridSize;
+    private final List<CraftingRecipe> recipes;
+    private Item craftingResult;
+    private final Inventory playerInventory;
 
-    private Map<String, CraftingRecipe> recipes;
-    private Inventory playerInventory;
-    private static final Map<String, CraftingRecipe> RECIPES = new HashMap<>();
-    static {
-        // Initialize recipes
-        RECIPES.put("crafting_table", new CraftingRecipe(
-                "crafting_table",
-                new String[][] {
-                        {"stick", "stick"},
-                        {"stick", "stick"}
-                    },
-                    1
-                ));
-    }public Item getHeldItem() {
-        return heldItem;
-    }
+    // Constants for textures
+    private static final String SLOT_NORMAL = "slot_normal";
+    private static final String SLOT_SELECTED = "slot_selected";
+    private static final String HOTBAR_BG = "hotbar_bg";
+    private static final String COUNT_BUBBLE = "count_bubble";
 
-    public void setHeldItem(Item item) {
-        this.heldItem = item;
-    }
-
-    public Optional<Item> checkRecipe() {
-        // Get the current crafting grid contents
-        for (int i = 0; i < gridSize; i++) {
-            for (int j = 0; j < gridSize; j++) {
-                if (craftingGrid[i][j] == null) {
-                    return Optional.empty();
-                }
-            }
-        }
-
-        // Check against known recipes
-        for (CraftingRecipe recipe : RECIPES.values()) {
-            if (recipe.matches(craftingGrid, gridSize)) {
-                Item result = ItemManager.getItem(recipe.getResult()).copy();
-                result.setCount(recipe.getCount());
-                return Optional.of(result);
-            }
-        }
-
-        return Optional.empty();
-    }
-
-    // Method to update the crafting grid
-    public void setItemInGrid(int row, int col, Item item) {
-        if (row >= 0 && row < gridSize && col >= 0 && col < gridSize) {
-            craftingGrid[row][col] = item;
-        }
-    }
-
-    public Inventory getPlayerInventory() {
-        return playerInventory;
-    }
-
-    private boolean isUsingCraftingTable;
+    // Held item state
+    private Item heldItem;
+    private int heldCount;
+    private Stage stage;
+    private Image itemImage;
+    private Label countLabel;
+    private int row;
+    private int col;
 
     public CraftingSystem(Inventory playerInventory) {
         this.playerInventory = playerInventory;
-        this.recipes = new HashMap<>();
-        this.gridSize = 2; // 2x2 crafting grid
-        this.craftingGrid = new Item[gridSize][gridSize];
+        this.stage = stage;
+        this.craftingGrid = new Item[GRID_SIZE][GRID_SIZE];
+        this.recipes = new ArrayList<>();
         this.heldItem = null;
         this.heldCount = 0;
+        this.craftingResult = null;
         initializeRecipes();
     }
-    public boolean isHoldingItem() {
-        return heldItem != null;
+
+    public void initializeVisuals(Skin skin) {
+        itemImage = new Image();
+        itemImage.setSize(32, 32);
+
+        countLabel = new Label("", skin);
+        countLabel.setColor(Color.WHITE);
     }
 
-    // Get the currently held item
+    private void initializeRecipes() {
+        recipes.add(new CraftingRecipe(
+            "CraftingTable",
+            new String[][] {
+                {"Stick", "Stick"},
+                {"Stick", "Stick"}
+            },
+            1
+        ));
 
+        recipes.add(new CraftingRecipe(
+            "Stick",
+            new String[][] {
+                {"Plank", null},
+                {"Plank", null}
+            },
+            4
+        ));
+    }
 
-    // Get count of held item
+    // Getters and setters
+    public boolean isHoldingItem() {
+        return heldItem != null && heldCount > 0;
+    }
+
+    public Item getHeldItem() {
+        return heldItem;
+    }
+
+    public int getHeldCount() {
+        return heldCount;
+    }
+
     public int getHeldItemCount() {
         return heldCount;
     }
 
-    // Decrease held item count by 1
-    public void decrementHeldItem() {
-        if (heldCount > 0) {
-            heldCount--;
-            if (heldItem != null) {
-                heldItem.setCount(heldCount);
-            }
-            if (heldCount == 0) {
-                clearHeldItem();
-            }
-        }
+    public Stage getStage() {
+        return stage;
     }
 
-    // Set an item with specific count as held
+    public Image getItemImage() {
+        return itemImage;
+    }
+
+    public Label getCountLabel() {
+        return countLabel;
+    }
+
+    public int getRow() {
+        return row;
+    }
+
+    public int getCol() {
+        return col;
+    }
+
     public void setHeldItem(Item item, int count) {
         this.heldItem = item;
         this.heldCount = count;
@@ -120,27 +125,89 @@ public class CraftingSystem {
         this.heldCount = 0;
     }
 
-    private void initializeRecipes() {
-        // Crafting Table Recipe
-        CraftingRecipe craftingTable = new CraftingRecipe(
-            "crafting_table",
-            new String[][] {
-                {"stick", "stick"},
-                {"stick", "stick"}
-            },
-            1
-        );
-        recipes.put("crafting_table", craftingTable);
+    public Item getItemFromGrid(int row, int col) {
+        if (row >= 0 && row < GRID_SIZE && col >= 0 && col < GRID_SIZE) {
+            return craftingGrid[row][col];
+        }
+        return null;
     }
 
-    public Optional<Item> tryCraft(Item[][] grid) {
-        int size = isUsingCraftingTable ? TABLE_CRAFTING_SIZE : INVENTORY_CRAFTING_SIZE;
+    public void setItemInGrid(int row, int col, Item item) {
+        if (row >= 0 && row < GRID_SIZE && col >= 0 && col < GRID_SIZE) {
+            craftingGrid[row][col] = item;
+            updateCraftingResult();
+        }
+    }
 
-        for (CraftingRecipe recipe : recipes.values()) {
-            if (recipe.matches(grid, size)) {
-                return Optional.of(ItemManager.getItem(recipe.getResult()));
+    public void clearGrid() {
+        for (int i = 0; i < GRID_SIZE; i++) {
+            for (int j = 0; j < GRID_SIZE; j++) {
+                craftingGrid[i][j] = null;
             }
         }
-        return Optional.empty();
+        updateCraftingResult();
+    }
+
+    public Item getCraftingResult() {
+        return craftingResult;
+    }
+
+    private void updateCraftingResult() {
+        craftingResult = null;
+        for (CraftingRecipe recipe : recipes) {
+            if (recipe.matches(craftingGrid)) {
+                Item result = ItemManager.getItem(recipe.getResult());
+                if (result != null) {
+                    craftingResult = result.copy();
+                    craftingResult.setCount(recipe.getOutputCount());
+                    break;
+                }
+            }
+        }
+    }
+
+    public void craftItem() {
+        if (craftingResult != null) {
+            if (playerInventory.canAddItem(craftingResult)) {
+                // Consume ingredients
+                for (int i = 0; i < GRID_SIZE; i++) {
+                    for (int j = 0; j < GRID_SIZE; j++) {
+                        if (craftingGrid[i][j] != null) {
+                            craftingGrid[i][j].setCount(craftingGrid[i][j].getCount() - 1);
+                            if (craftingGrid[i][j].getCount() <= 0) {
+                                craftingGrid[i][j] = null;
+                            }
+                        }
+                    }
+                }
+
+                // Add result to inventory
+                playerInventory.addItem(craftingResult.copy());
+                updateCraftingResult();
+            }
+        }
+    }
+
+    public void returnItemsToInventory() {
+        for (int i = 0; i < GRID_SIZE; i++) {
+            for (int j = 0; j < GRID_SIZE; j++) {
+                if (craftingGrid[i][j] != null) {
+                    playerInventory.addItem(craftingGrid[i][j]);
+                    craftingGrid[i][j] = null;
+                }
+            }
+        }
+
+        if (isHoldingItem()) {
+            playerInventory.addItem(heldItem);
+            clearHeldItem();
+        }
+
+        updateCraftingResult();
+    }
+
+    public TextureRegionDrawable getSlotBackground(boolean selected) {
+        String regionName = selected ? SLOT_SELECTED : SLOT_NORMAL;
+        return new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion(regionName));
     }
 }

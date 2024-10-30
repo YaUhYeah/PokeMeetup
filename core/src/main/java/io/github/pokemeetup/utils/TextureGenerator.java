@@ -36,7 +36,7 @@ public class TextureGenerator {
         }
     }
 
-    private static void generateWhiteTexture(String path) throws IOException {
+    public static void generateWhiteTexture(String path) throws IOException {
         BufferedImage image = new BufferedImage(3, 3, BufferedImage.TYPE_INT_ARGB);
 
         // Fill with white pixels

@@ -5,37 +5,39 @@ import io.github.pokemeetup.system.gameplay.inventory.Item;
 public class CraftingRecipe {
     private final String result;
     private final String[][] pattern;
-    private final int count;
+    private final int outputCount;
 
-    public CraftingRecipe(String result, String[][] pattern, int count) {
+    public CraftingRecipe(String result, String[][] pattern, int outputCount) {
         this.result = result;
         this.pattern = pattern;
-        this.count = count;
-    }
-
-    public boolean matches(Item[][] grid, int size) {
-        // Check if pattern matches grid
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
-                if (i < pattern.length && j < pattern[i].length) {
-                    if (pattern[i][j] != null) {
-                        if (grid[i][j] == null || !grid[i][j].getName().equals(pattern[i][j])) {
-                            return false;
-                        }
-                    }
-                } else if (grid[i][j] != null) {
-                    return false;
-                }
-            }
-        }
-        return true;
+        this.outputCount = outputCount;
     }
 
     public String getResult() {
         return result;
     }
 
-    public int getCount() {
-        return count;
+    public int getOutputCount() {
+        return outputCount;
+    }
+
+    public boolean matches(Item[][] grid) {
+        if (grid.length != pattern.length) return false;
+
+        for (int i = 0; i < pattern.length; i++) {
+            if (grid[i].length != pattern[i].length) return false;
+
+            for (int j = 0; j < pattern[i].length; j++) {
+                if (pattern[i][j] == null) {
+                    if (grid[i][j] != null) return false;
+                } else {
+                    if (grid[i][j] == null || !grid[i][j].getName().equals(pattern[i][j])) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
     }
 }

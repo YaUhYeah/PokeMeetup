@@ -19,28 +19,31 @@ public class ItemManager {
 
         System.out.println("Initializing ItemManager with items...");
 
-        // Debug texture loading
-        TextureRegion pokeballTexture = atlas.findRegion("pokeball_item");
-        TextureRegion potionTexture = atlas.findRegion("potion_item");
-        TextureRegion stickTexture = atlas.findRegion("stick_item");
-        TextureRegion elixirTexture = atlas.findRegion("elixir_item");
-
-        // Log texture loading results
-        System.out.println("Loaded textures - " +
-            "pokeball: " + (pokeballTexture != null) + ", " +
-            "potion: " + (potionTexture != null) + ", " +
-            "stick: " + (stickTexture != null) + ", " +
-            "elixir: " + (elixirTexture != null));
-
-        // Define items with proper case matching saved data
-        items.put("Pokeball", new Item("Pokeball", "pokeball_item", pokeballTexture));
-        items.put("Potion", new Item("Potion", "potion_item", potionTexture));
-        items.put("Stick", new Item("Stick", "stick_item", stickTexture));
-        items.put("Elixir", new Item("Elixir", "elixir_item", elixirTexture));
+        addItem("Pokeball", "pokeball_item", atlas);
+        addItem("Potion", "potion_item", atlas);
+        addItem("Stick", "stick_item", atlas);
+        addItem("Elixir", "elixir_item", atlas);
+        addItem("CraftingTable", "craftingtable_item", atlas);
 
         initialized = true;
-        System.out.println("Initialized ItemManager with items: " + items.keySet());
+
+        // Debug each item to ensure all textures loaded
+        items.forEach((name, item) -> {
+            System.out.println("Item loaded: " + name + ", Texture exists: " + (item.getIcon() != null));
+        });
     }
+
+
+    private static void addItem(String name, String regionName, TextureAtlas atlas) {
+        TextureRegion texture = atlas.findRegion(regionName);
+        if (texture == null) {
+            System.err.println("Warning: Texture for item '" + name + "' is missing. Using placeholder.");
+            texture = atlas.findRegion("missing_texture"); // Add "missing_texture" to your atlas
+        }
+        items.put(name, new Item(name, regionName, texture));
+    }
+
+
     public static Item getItem(String itemName) {
         if (!initialized) {
             System.err.println("ItemManager not initialized when requesting item: " + itemName);

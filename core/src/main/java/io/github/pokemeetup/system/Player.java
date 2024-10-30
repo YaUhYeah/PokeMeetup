@@ -330,26 +330,7 @@ public class Player {
         }
     }
 
-    private void updateSpeedTransition(float deltaTime) {
-        float targetSpeedMultiplier = wantsToRun ? RUN_SPEED_MULTIPLIER : 1.0f;
 
-        if (currentSpeedMultiplier != targetSpeedMultiplier) {
-            speedTransitionTimer += deltaTime;
-            float progress = Math.min(speedTransitionTimer / SPEED_TRANSITION_TIME, 1.0f);
-            progress = smoothStep(progress); // Smooth the transition itself
-
-            currentSpeedMultiplier = lerp(
-                currentSpeedMultiplier,
-                targetSpeedMultiplier,
-                progress
-            );
-
-            if (progress >= 1.0f) {
-                speedTransitionTimer = 0f;
-                currentSpeedMultiplier = targetSpeedMultiplier;
-            }
-        }
-    }
 
     private float lerp(float start, float end, float t) {
         return start + (end - start) * t;
@@ -577,14 +558,6 @@ public class Player {
 
     public void setY(float y) {
         this.y = y;
-    }
-
-    public int getTileX() {
-        return tileX;
-    }
-
-    public int getTileY() {
-        return tileY;
     }
 
     public boolean isMoving() {

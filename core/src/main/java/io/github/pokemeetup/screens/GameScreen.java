@@ -10,11 +10,13 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.ImageButton;
 import com.badlogic.gdx.scenes.scene2d.ui.Label;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
+import com.badlogic.gdx.scenes.scene2d.utils.Drawable;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import io.github.pokemeetup.CreatureCaptureGame;
@@ -76,7 +78,8 @@ public class GameScreen implements Screen, PickupActionHandler {
     private Table hotbarTable;
     private Table fixedHotbarTable;
     private PlayerData playerData;
-    private PlayerDataManager playerDataManager;private ShapeRenderer shapeRenderer;
+    private PlayerDataManager playerDataManager;
+    private ShapeRenderer shapeRenderer;
     private Skin skin;
     private Stage stage;
 
@@ -86,14 +89,11 @@ public class GameScreen implements Screen, PickupActionHandler {
         this.isMultiplayer = !gameClient.isSinglePlayer();
 
         this.storageSystem = new ServerStorageSystem();
-        DatabaseManager dbManager = game.getDatabaseManager();
         this.gameClient = gameClient;
         gameClient.loadTextures(); // Load textures on main thread
         uiStage = new Stage(new ScreenViewport());
-        if (gameClient != null) {
-            gameClient.setLocalUsername(username);
-            System.out.println("Set username in GameClient: " + username);
-        }
+        gameClient.setLocalUsername(username);
+        System.out.println("Set username in GameClient: " + username);
         this.skin = new Skin(Gdx.files.internal("Skins/uiskin.json"));
         this.uiSkin = this.skin; // Use the same skin for UI elements
         int pixelX = initialX * World.TILE_SIZE;
@@ -118,8 +118,6 @@ public class GameScreen implements Screen, PickupActionHandler {
                 Gdx.app.error("GameScreen", "Failed to initialize GameClient for multiplayer.");
             }
         }
-        // Initialize player with pixel coordinates
-        this.uiStage = uiStage;
         batch = new SpriteBatch();
         gameAtlas = new TextureAtlas(Gdx.files.internal("atlas/game-atlas"));
 
@@ -432,7 +430,9 @@ public class GameScreen implements Screen, PickupActionHandler {
         cell.add(contentStack).grow();
 
         return cell;
-    }private void createHotbarUI() {
+    }
+
+    private void createHotbarUI() {
         if (hotbarTable != null) {
             hotbarTable.remove();
         }
@@ -448,18 +448,15 @@ public class GameScreen implements Screen, PickupActionHandler {
         );
         slotsTable.pad(4f);
 
-        List<Item> items = player.getInventory().getItems();
-        // Only show HOTBAR_SIZE slots instead of full inventory
+        // Use first 9 slots (0-8) for hotbar
         for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
-            Table slotCell = createSlotCell(i, items.get(i));
+            Table slotCell = createSlotCell(i, player.getInventory().getItem(i));
             slotsTable.add(slotCell).size(64).pad(2);
         }
 
         hotbarTable.add(slotsTable);
         uiStage.addActor(hotbarTable);
     }
-
-
 
     public PlayerData getCurrentPlayerState() {
         PlayerData currentState = new PlayerData(player.getUsername());
@@ -708,9 +705,27 @@ public class GameScreen implements Screen, PickupActionHandler {
         batch.end(); // Finish drawing the world
 
         // UI rendering
+        for (Actor actor : uiStage.getActors()) {
+            if (actor instanceof Table) {
+                Table table = (Table) actor;
+                Drawable background = table.getBackground();
+                if (background instanceof TextureRegionDrawable) {
+                    TextureRegion region = ((TextureRegionDrawable) background).getRegion();
+                    if (region == null) {
+                        System.err.println("Null TextureRegion in table background for: " + actor.getName());
+                    }
+                }
+            }
+        }
+
         uiStage.getViewport().apply();
         uiStage.act(delta);
-        uiStage.draw();
+        if (uiStage.getActors().isEmpty()) {
+            System.out.println("uiStage has no actors. Skipping draw.");
+        } else {
+            uiStage.draw();
+        }
+
 
         // Always render the game menu if active
         if (gameMenu != null) {
@@ -737,6 +752,7 @@ public class GameScreen implements Screen, PickupActionHandler {
         }
 
     }
+
     private void handleInput() {  // Add input buffering
         if (Gdx.input.isKeyPressed(Input.Keys.ANY_KEY)) {
             String direction = null;
@@ -757,29 +773,67 @@ public class GameScreen implements Screen, PickupActionHandler {
 
         if (inventoryOpen) {
             if (inventoryScreen == null) {
-                inventoryScreen = new InventoryScreen(player, skin);
+                inventoryScreen = new InventoryScreen(player, uiSkin);
+                // Ensure hotbar state is synchronized immediately
+                for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
+                    Item item = player.getInventory().getItem(i);
+                    if (item != null) {
+                        // Ensure inventory screen has same items
+                        inventoryScreen.getInventory().setItem(i, item.copy());
+                    }
+                }
             }
 
             inputMultiplexer = new InputMultiplexer(
-                inventoryScreen.getStage(), // Set Inventory input first
-                inputHandler                // Game input second
+                inventoryScreen.getStage(),
+                inputHandler
             );
             Gdx.input.setInputProcessor(inputMultiplexer);
         } else {
-            // Properly reset and nullify inventory screen when closed
             if (inventoryScreen != null) {
+                // Sync back to hotbar before closing
+                for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
+                    Item item = inventoryScreen.getInventory().getItem(i);
+                    if (item != null) {
+                        player.getInventory().setItem(i, item.copy());
+                    } else {
+                        player.getInventory().setItem(i, null);
+                    }
+                }
+
                 inventoryScreen.dispose();
                 inventoryScreen = null;
+
+                // Update hotbar UI
+                createHotbarUI();
             }
 
             inputMultiplexer = new InputMultiplexer(
-                uiStage,     // UI input
-                inputHandler // Game input
+                uiStage,
+                inputHandler
             );
             Gdx.input.setInputProcessor(inputMultiplexer);
             setupInputProcessors();
         }
-        updateHotbarUI();
+    }
+    private void saveHotbarState() {
+        // Store current hotbar state before opening inventory
+        List<Item> hotbarItems = new ArrayList<>();
+        int startIndex = Inventory.INVENTORY_SIZE - Inventory.HOTBAR_SIZE;
+        for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
+            Item item = player.getInventory().getItem(startIndex + i);
+            if (item != null) {
+                hotbarItems.add(item.copy());
+            } else {
+                hotbarItems.add(null);
+            }
+        }
+        player.getInventory().setHotbarCache(hotbarItems);
+    }
+
+    private void syncHotbarWithInventory() {
+        // Update the visible hotbar UI
+        createHotbarUI();
     }
 
 
@@ -794,9 +848,6 @@ public class GameScreen implements Screen, PickupActionHandler {
 
         uiStage.getViewport().update(width, height, true);
         createHotbarUI();
-        if (gameMenu != null) {
-            gameMenu.resize(width, height);
-        }
         if (gameMenu != null) {
             gameMenu.resize(width, height);
         }
@@ -854,7 +905,8 @@ public class GameScreen implements Screen, PickupActionHandler {
 
     @Override
     public void dispose() {
-        batch.dispose();if (shapeRenderer != null) {
+        batch.dispose();
+        if (shapeRenderer != null) {
             shapeRenderer.dispose();
         }
 
