@@ -1,38 +1,22 @@
 {
-name: fr
-lastPlayed: 1730172669085
-config: {
-	seed: 0
-	treeSpawnRate: 0.15
-	pokemonSpawnRate: 0.05
-}
-players: {
-	fr: {
-		username: fr
-		hashedPassword: null
-		x: 0
-		y: 0
-		direction: 0
-		isMoving: false
-		wantsToRun: false
-		inventoryItemNames: []
+"name": "fr",
+"lastPlayed": 1730358784150,
+"config": {
+	"seed": 0,
+	"treeSpawnRate": 0.15,
+	"pokemonSpawnRate": 0.05
+},
+"players": {
+	"Player": {
+		"username": "Player",
+		"x": 5184,
+		"y": 3232,
+		"direction": "down",
+		"isMoving": false,
+		"wantsToRun": false,
+		"inventoryItems": null
 	}
-	Player: {
-		username: Player
-		hashedPassword: null
-		x: 5280
-		y: 3232
-		direction: down
-		isMoving: false
-		wantsToRun: false
-		inventoryItemNames: [
-			Elixir:10
-			Pokeball:14
-			Potion:4
-			Stick:4
-		]
-	}
-}
-entities: {}
-pluginConfigs: null
+},
+"entities": {},
+"pluginConfigs": null
 }

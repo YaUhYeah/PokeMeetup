@@ -9,6 +9,7 @@ import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
+import io.github.pokemeetup.utils.GameLogger;
 
 public class OtherPlayer {
     private static final float LERP_ALPHA = 0.2f;
@@ -74,7 +75,7 @@ public class OtherPlayer {
             this.isMoving = netUpdate.isMoving;
             this.wantsToRun = netUpdate.wantsToRun;
 
-            System.out.println("Updated OtherPlayer " + netUpdate.username + " to position (" + netUpdate.x + ", " + netUpdate.y + ")");
+            GameLogger.info("Updated OtherPlayer " + netUpdate.username + " to position (" + netUpdate.x + ", " + netUpdate.y + ")");
         }
     }
 
@@ -93,7 +94,7 @@ public class OtherPlayer {
                 font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
                 font.getData().setScale(0.8f);
             } catch (Exception e) {
-                System.err.println("Error loading font: " + e.getMessage());
+                GameLogger.info("Error loading font: " + e.getMessage());
                 font = new BitmapFont(); // Fallback to default font
             }
         }
@@ -101,7 +102,7 @@ public class OtherPlayer {
 
     public void render(SpriteBatch batch) {
         updateCurrentFrame();
-//        System.out.println(STR."Rendering OtherPlayer \{username} at position (\{x}, \{y})");
+//        GameLogger.info(STR."Rendering OtherPlayer \{username} at position (\{x}, \{y})");
         batch.draw(currentFrame, x, y, Player.FRAME_WIDTH, Player.FRAME_HEIGHT);
 
         if (username != null) {
@@ -215,32 +216,43 @@ public class OtherPlayer {
 
         if (isMoving) {
             boolean running = wantsToRun;
-            currentAnimation = switch (direction.toLowerCase()) {
-                case "up" -> running ? runUpAnimation : walkUpAnimation;
-                case "down" -> running ? runDownAnimation : walkDownAnimation;
-                case "left" -> running ? runLeftAnimation : walkLeftAnimation;
-                case "right" -> running ? runRightAnimation : walkRightAnimation;
-                default -> walkDownAnimation;
-            };
+            if ("up".equalsIgnoreCase(direction)) {
+                currentAnimation = running ? runUpAnimation : walkUpAnimation;
+            } else if ("down".equalsIgnoreCase(direction)) {
+                currentAnimation = running ? runDownAnimation : walkDownAnimation;
+            } else if ("left".equalsIgnoreCase(direction)) {
+                currentAnimation = running ? runLeftAnimation : walkLeftAnimation;
+            } else if ("right".equalsIgnoreCase(direction)) {
+                currentAnimation = running ? runRightAnimation : walkRightAnimation;
+            } else {
+                currentAnimation = walkDownAnimation;
+            }
+
 
             stateTime += Gdx.graphics.getDeltaTime();
             currentFrame = currentAnimation.getKeyFrame(stateTime, true);
         } else {
             // Standing frames with null safety
-            currentFrame = switch (direction.toLowerCase()) {
-                case "up" -> walkUpAnimation.getKeyFrames()[0];
-                case "down" -> walkDownAnimation.getKeyFrames()[0];
-                case "left" -> walkLeftAnimation.getKeyFrames()[0];
-                case "right" -> walkRightAnimation.getKeyFrames()[0];
-                default -> walkDownAnimation.getKeyFrames()[0];
-            };
+            if ("up".equalsIgnoreCase(direction)) {
+                currentFrame = walkUpAnimation.getKeyFrames()[0];
+            } else if ("down".equalsIgnoreCase(direction)) {
+                currentFrame = walkDownAnimation.getKeyFrames()[0];
+            } else if ("left".equalsIgnoreCase(direction)) {
+                currentFrame = walkLeftAnimation.getKeyFrames()[0];
+            } else if ("right".equalsIgnoreCase(direction)) {
+                currentFrame = walkRightAnimation.getKeyFrames()[0];
+            } else {
+                currentFrame = walkDownAnimation.getKeyFrames()[0];
+            }
+
             stateTime = 0;
         }
     }
 
     // Update the updateFromNetwork method to include null safety
     public void updateFromNetwork(Object update) {
-        if (update instanceof NetworkProtocol.PlayerUpdate netUpdate) {
+        if (update instanceof NetworkProtocol.PlayerUpdate) {
+            NetworkProtocol.PlayerUpdate netUpdate = (NetworkProtocol.PlayerUpdate) update;
             this.x = netUpdate.x; // Update position
             this.y = netUpdate.y;
             this.targetPosition = new Vector2(netUpdate.x, netUpdate.y); // Update the target position
@@ -250,13 +262,13 @@ public class OtherPlayer {
             this.wantsToRun = netUpdate.wantsToRun;
             if (netUpdate.inventoryItemNames != null) {
                 this.inventory.loadFromStrings(netUpdate.inventoryItemNames);  // Load inventory items
-                System.out.println("Updated inventory for " + username + ": " + netUpdate.inventoryItemNames);
+                GameLogger.info("Updated inventory for " + username + ": " + netUpdate.inventoryItemNames);
             }
             handlePlayerUpdate((NetworkProtocol.PlayerUpdate) update);
         } else if (update instanceof OtherPlayer) {
             handleOtherPlayerUpdate((OtherPlayer) update);
         } else {
-            System.err.println("Unknown update type: " + update.getClass().getName());
+            GameLogger.info("Unknown update type: " + update.getClass().getName());
         }
     }
 

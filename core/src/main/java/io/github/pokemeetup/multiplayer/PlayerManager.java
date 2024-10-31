@@ -6,6 +6,7 @@ import io.github.pokemeetup.multiplayer.server.events.EventManager;
 import io.github.pokemeetup.multiplayer.server.storage.StorageSystem;
 import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
+import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.PasswordUtils;
 
 import java.util.ArrayList;
@@ -23,7 +24,7 @@ public class PlayerManager {
         this.databaseManager = databaseManager;
         this.storage = storage;
         this.eventManager = eventManager;
-        System.out.println("PlayerManager initialized with DatabaseManager");
+        GameLogger.info("PlayerManager initialized with DatabaseManager");
     }
 
     public ServerPlayer loginPlayer(String username, String password, String sessionId) {
@@ -39,14 +40,14 @@ public class PlayerManager {
 
                 // Add to online players
                 onlinePlayers.put(username, player);
-                System.out.println("Player logged in successfully: " + username);
+                GameLogger.info("Player logged in successfully: " + username);
                 return player;
             } else {
-                System.out.println("Login failed for username: " + username);
+                GameLogger.info("Login failed for username: " + username);
                 return null;
             }
         } catch (Exception e) {
-            System.err.println("Error during login: " + e.getMessage());
+            GameLogger.info("Error during login: " + e.getMessage());
             e.printStackTrace();
             return null;
         }
@@ -57,13 +58,13 @@ public class PlayerManager {
             // Use DatabaseManager for registration
             boolean registered = databaseManager.registerPlayer(username, password);
             if (registered) {
-                System.out.println("Player registered successfully: " + username);
+                GameLogger.info("Player registered successfully: " + username);
             } else {
-                System.out.println("Registration failed for username: " + username);
+                GameLogger.info("Registration failed for username: " + username);
             }
             return registered;
         } catch (Exception e) {
-            System.err.println("Error registering player: " + e.getMessage());
+            GameLogger.info("Error registering player: " + e.getMessage());
             e.printStackTrace();
             return false;
         }
@@ -78,7 +79,7 @@ public class PlayerManager {
                 (int) player.getPosition().x,
                 (int) player.getPosition().y
             );
-//            System.out.println(STR."Player logged out and position saved: \{username}");
+//            GameLogger.info(STR."Player logged out and position saved: \{username}");
         }
     }
 
@@ -113,6 +114,6 @@ public class PlayerManager {
 
         // Close database connection
         databaseManager.closeConnection();
-        System.out.println("PlayerManager disposed");
+        GameLogger.info("PlayerManager disposed");
     }
 }

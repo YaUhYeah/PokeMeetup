@@ -2,6 +2,7 @@ package io.github.pokemeetup.managers;
 
 
 import at.favre.lib.crypto.bcrypt.BCrypt;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.sql.*;
 
@@ -20,7 +21,7 @@ public class DatabaseManager {
         try {
             // Try to connect first before starting server
             if (tryConnect()) {
-                System.out.println("Connected to existing H2 database server");
+                GameLogger.info("Connected to existing H2 database server");
             } else {
                 // If connection fails, try to start server
                 startServerIfNeeded();
@@ -28,7 +29,7 @@ public class DatabaseManager {
             }
             initializeTables();
         } catch (SQLException e) {
-            System.err.println("Database initialization error: " + e.getMessage());
+            GameLogger.info("Database initialization error: " + e.getMessage());
             e.printStackTrace();
         }
     } private boolean tryConnect() {
@@ -52,12 +53,12 @@ public class DatabaseManager {
                             "-tcpAllowOthers",
                             "-ifNotExists"
                         ).start();
-                        System.out.println("H2 TCP Server started on port " + port);
+                        GameLogger.info("H2 TCP Server started on port " + port);
                         serverStarted = true;
                         break;
                     } catch (SQLException e) {
                         if (port == BASE_PORT + 9) {
-                            System.err.println("Failed to start H2 server on any port");
+                            GameLogger.info("Failed to start H2 server on any port");
                             e.printStackTrace();
                         }
                     }
@@ -68,9 +69,9 @@ public class DatabaseManager {
     public static void shutdownServer() {
         try {
             org.h2.tools.Server.shutdownTcpServer("tcp://localhost:" + BASE_PORT, "", true, true);
-            System.out.println("H2 server shutdown complete");
+            GameLogger.info("H2 server shutdown complete");
         } catch (SQLException e) {
-            System.err.println("Error shutting down H2 server: " + e.getMessage());
+            GameLogger.info("Error shutting down H2 server: " + e.getMessage());
         }
     }
     private void connectToDatabase() throws SQLException {
@@ -80,7 +81,7 @@ public class DatabaseManager {
             try {
                 String url = "jdbc:h2:tcp://localhost:" + port + "/" + DB_PATH + ";IFEXISTS=FALSE";
                 connection = DriverManager.getConnection(url, DB_USER, DB_PASS);
-                System.out.println("Connected to database successfully on port " + port);
+                GameLogger.info("Connected to database successfully on port " + port);
                 return;
             } catch (SQLException e) {
                 lastException = e;
@@ -99,7 +100,7 @@ public class DatabaseManager {
             + ");";
         try (Statement stmt = connection.createStatement()) {
             stmt.execute(createTableSQL);
-            System.out.println("Players table initialized successfully.");
+            GameLogger.info("Players table initialized successfully.");
         }
     }
 
@@ -107,10 +108,10 @@ public class DatabaseManager {
         try {
             if (connection != null && !connection.isClosed()) {
                 connection.close();
-                System.out.println("Database connection closed");
+                GameLogger.info("Database connection closed");
             }
         } catch (SQLException e) {
-            System.err.println("Error closing database connection: " + e.getMessage());
+            GameLogger.info("Error closing database connection: " + e.getMessage());
         }
     }
 
@@ -122,11 +123,11 @@ public class DatabaseManager {
     private void ensureConnection() {
         try {
             if (connection == null || connection.isClosed()) {
-                System.out.println("Reconnecting to database...");
+                GameLogger.info("Reconnecting to database...");
                 connectToDatabase();
             }
         } catch (SQLException e) {
-            System.err.println("Error checking connection: " + e.getMessage());
+            GameLogger.info("Error checking connection: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -135,7 +136,7 @@ public class DatabaseManager {
     public boolean registerPlayer(String username, String password) throws Exception {
         ensureConnection();
         if (doesUsernameExist(username)) {
-            System.out.println("Registration failed: Username '" + username + "' already exists.");
+            GameLogger.info("Registration failed: Username '" + username + "' already exists.");
             return false;
         }
 
@@ -147,10 +148,10 @@ public class DatabaseManager {
             stmt.setInt(3, 800); // Default spawn X
             stmt.setInt(4, 800); // Default spawn Y
             stmt.executeUpdate();
-            System.out.println("Successfully registered player: " + username);
+            GameLogger.info("Successfully registered player: " + username);
             return true;
         } catch (SQLException e) {
-            System.err.println("Registration failed for username: " + username);
+            GameLogger.info("Registration failed for username: " + username);
             e.printStackTrace();
             return false;
         }
@@ -164,9 +165,9 @@ public class DatabaseManager {
             pstmt.setInt(2, y);
             pstmt.setString(3, username);
             int rowsUpdated = pstmt.executeUpdate();
-            System.out.println("Stored coordinates for " + username + ": (" + x + ", " + y + ")");
+            GameLogger.info("Stored coordinates for " + username + ": (" + x + ", " + y + ")");
         } catch (SQLException e) {
-            System.err.println("Error updating coordinates for username: " + username);
+            GameLogger.info("Error updating coordinates for username: " + username);
             e.printStackTrace();
         }
     }    private boolean doesUsernameExist(String username) {
@@ -176,10 +177,10 @@ public class DatabaseManager {
             ResultSet rs = stmt.executeQuery();
             boolean exists = rs.next();
             rs.close();
-            System.out.println("Username '" + username + "' exists: " + exists);
+            GameLogger.info("Username '" + username + "' exists: " + exists);
             return exists;
         } catch (SQLException e) {
-            System.err.println("Error checking if username exists: " + username);
+            GameLogger.info("Error checking if username exists: " + username);
             e.printStackTrace();
             return false;
         }
@@ -189,10 +190,10 @@ public class DatabaseManager {
         try {
             if (connection != null && !connection.isClosed()) {
                 connection.close();
-                System.out.println("Database connection closed.");
+                GameLogger.info("Database connection closed.");
             }
         } catch (SQLException e) {
-            System.err.println("Error closing database connection: " + e.getMessage());
+            GameLogger.info("Error closing database connection: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -205,15 +206,15 @@ public class DatabaseManager {
                 String storedHash = rs.getString("password_hash");
                 rs.close();
                 boolean verified = BCrypt.verifyer().verify(password.toCharArray(), storedHash).verified;
-                System.out.println("Authentication for username '" + username + "': " + verified);
+                GameLogger.info("Authentication for username '" + username + "': " + verified);
                 return verified;
             } else {
-                System.out.println("Authentication failed: Username '" + username + "' does not exist.");
+                GameLogger.info("Authentication failed: Username '" + username + "' does not exist.");
                 rs.close();
                 return false;
             }
         } catch (SQLException e) {
-            System.err.println("Authentication failed due to SQL error for username: " + username);
+            GameLogger.info("Authentication failed due to SQL error for username: " + username);
             e.printStackTrace();
             return false;
         }
@@ -226,14 +227,14 @@ public class DatabaseManager {
                 int x = rs.getInt("x");
                 int y = rs.getInt("y");
                 rs.close();
-//                System.out.println(STR."Retrieved coordinates for \{username}: (\{x}, \{y})");
+//                GameLogger.info(STR."Retrieved coordinates for \{username}: (\{x}, \{y})");
                 return new int[]{x, y};
             } else {
-//                System.out.println(STR."No coordinates found for \{username}, using default");
+//                GameLogger.info(STR."No coordinates found for \{username}, using default");
                 return new int[]{800, 800}; // Default spawn position
             }
         } catch (SQLException e) {
-            System.err.println("Error retrieving coordinates for username: " + username);
+            GameLogger.info("Error retrieving coordinates for username: " + username);
             e.printStackTrace();
             return new int[]{800, 800}; // Default spawn position
         }

@@ -10,6 +10,7 @@ import io.github.pokemeetup.multiplayer.server.entity.Entity;
 import io.github.pokemeetup.multiplayer.server.entity.EntityType;
 import io.github.pokemeetup.multiplayer.server.entity.PokeballEntity;
 import io.github.pokemeetup.system.PlayerData;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.*;
 
@@ -44,33 +45,38 @@ public class WorldData {
         this.players = new ObjectMap<>();
         this.config = config;
     }
-
     public static void setupJson(Json json) {
-        json.setSerializer(HashMap.class, new Json.Serializer<>() {
+        // Register PlayerData serializer
+        json.setSerializer(PlayerData.class, new Json.Serializer<PlayerData>() {
             @Override
-            public void write(Json json, HashMap map, Class knownType) {
-                // Write map entries directly
+            public void write(Json json, PlayerData playerData, Class knownType) {
                 json.writeObjectStart();
-                for (Object entry : map.entrySet()) {
-                    Map.Entry mapEntry = (Map.Entry) entry;
-                    json.writeValue(mapEntry.getKey().toString(), mapEntry.getValue());
-                }
+                json.writeValue("username", playerData.getUsername());
+                json.writeValue("x", playerData.getX());
+                json.writeValue("y", playerData.getY());
+                json.writeValue("direction", playerData.getDirection());
+                json.writeValue("isMoving", playerData.isMoving());
+                json.writeValue("wantsToRun", playerData.isWantsToRun());
+                json.writeValue("inventoryItems", playerData.getInventoryItems());
                 json.writeObjectEnd();
             }
 
             @Override
-            @SuppressWarnings("unchecked")
-            public HashMap read(Json json, JsonValue jsonData, Class type) {
-                HashMap result = new HashMap();
-                for (JsonValue child = jsonData.child; child != null; child = child.next) {
-                    result.put(child.name, json.readValue(PlayerData.class, child));
-                }
-                return result;
+            public PlayerData read(Json json, JsonValue jsonData, Class type) {
+                String username = jsonData.getString("username");
+                PlayerData playerData = new PlayerData(username);
+                playerData.setX(jsonData.getFloat("x"));
+                playerData.setY(jsonData.getFloat("y"));
+                playerData.setDirection(jsonData.getString("direction"));
+                playerData.setMoving(jsonData.getBoolean("isMoving"));
+                playerData.setWantsToRun(jsonData.getBoolean("wantsToRun"));
+                playerData.setInventoryItems(json.readValue(ArrayList.class, jsonData.get("inventoryItems")));
+                return playerData;
             }
         });
 
-        // Register Entity serialization
-        json.setSerializer(Entity.class, new Json.Serializer<>() {
+        // Register Entity serializer
+        json.setSerializer(Entity.class, new Json.Serializer<Entity>() {
             @Override
             public void write(Json json, Entity entity, Class knownType) {
                 json.writeObjectStart();
@@ -96,8 +102,6 @@ public class WorldData {
                     entityType = EntityType.ITEM; // Default type if unknown
                 }
                 boolean isDead = jsonData.getBoolean("isDead");
-                float width = jsonData.getFloat("width");
-                float height = jsonData.getFloat("height");
 
                 // Instantiate concrete Entity subclasses based on EntityType
                 Entity entity;
@@ -108,11 +112,13 @@ public class WorldData {
                     default:
                         entity = new CreatureEntity(position.x, position.y);
                 }
+                // Set other properties as needed
                 return entity;
             }
         });
-    }
 
+        // Register other serializers as needed
+    }
     // In WorldData class
     public void savePlayerData(String username, PlayerData data) {
         if (players == null) {
@@ -130,7 +136,7 @@ public class WorldData {
         // Verify save
         PlayerData saved = players.get(username);
         if (saved != null) {
-            System.out.println("Saved state verified for: " + username +
+            GameLogger.info("Saved state verified for: " + username +
                 " at " + saved.getX() + "," + saved.getY());
         }
     }
@@ -138,7 +144,7 @@ public class WorldData {
     // Improve player data retrieval
     public PlayerData getPlayerData(String username) {
         if (username == null || players == null) {
-            System.out.println("either username or players is null");
+            GameLogger.info("either username or players is null");
             return null;
         }
 
@@ -162,7 +168,7 @@ public class WorldData {
             entities = new ObjectMap<>();
         }
         entities.put(entity.getId(), entity);
-        System.out.println("Added entity: ID=" + entity.getId() + ", Type=" + entity.getType());
+        GameLogger.info("Added entity: ID=" + entity.getId() + ", Type=" + entity.getType());
     }
 
     /**
@@ -173,7 +179,7 @@ public class WorldData {
     public void removeEntity(UUID entityId) {
         if (entities != null && entities.containsKey(entityId)) {
             entities.remove(entityId);
-            System.out.println("Removed entity: ID=" + entityId);
+            GameLogger.info("Removed entity: ID=" + entityId);
         }
     }
 

@@ -16,6 +16,7 @@ import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
+import io.github.pokemeetup.utils.GameLogger;
 
 public class GameMenu {
     private static final float BUTTON_WIDTH = 200f;
@@ -266,7 +267,7 @@ public class GameMenu {
     }
 
     private void saveGame() {
-        System.out.println("Attempting to save game");
+        GameLogger.info("Attempting to save game");
         try {
             if (gameClient != null && player.getWorld() != null) {
                 // Get current world
@@ -288,12 +289,12 @@ public class GameMenu {
                     WorldData worldData = currentWorld.getWorldData();
                     worldData.savePlayerData(player.getUsername(), playerData);
                     game.getWorldManager().saveWorld(worldData);
-//                    System.out.println(STR."Saved single player data for: \{player.getUsername()}");
+//                    GameLogger.info(STR."Saved single player data for: \{player.getUsername()}");
                 } else {
                     // Multiplayer save
                     gameClient.updateLastKnownState(playerData);
                     gameClient.savePlayerState(playerData);
-//                    System.out.println(printlnSTR."Saved multiplayer data for: \{player.getUsername()}");
+//                    GameLogger.info(printlnSTR."Saved multiplayer data for: \{player.getUsername()}");
                 }
 
                 // Show success dialog
@@ -308,11 +309,11 @@ public class GameMenu {
                 dialog.show(stage);
 
             } else {
-//                System.out.println(STR."client: \{gameClient == null} world: \{game.getCurrentWorld() == null}");
+//                GameLogger.info(STR."client: \{gameClient == null} world: \{game.getCurrentWorld() == null}");
                 throw new Exception("Game state is invalid");
             }
         } catch (Exception e) {
-            System.err.println("Save error: " + e.getMessage());
+            GameLogger.info("Save error: " + e.getMessage());
             com.badlogic.gdx.scenes.scene2d.ui.Dialog dialog =
                 new com.badlogic.gdx.scenes.scene2d.ui.Dialog("Error", skin) {
                     public void result(Object obj) {

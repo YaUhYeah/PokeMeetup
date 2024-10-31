@@ -14,12 +14,13 @@ import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
 import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.PlayerData;
+import io.github.pokemeetup.system.gameplay.inventory.secureinventories.InventoryManager;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
 import io.github.pokemeetup.system.gameplay.inventory.Item;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.io.IOException;
 import java.util.*;
@@ -32,7 +33,6 @@ public class GameClient {
     private static final int CONNECTION_TIMEOUT = 5000;
     private static final int MAX_RETRIES = 3;
     private static final int RETRY_DELAY_MS = 1000;
-    private static final Logger logger = LoggerFactory.getLogger(GameClient.class);
     private static final float SEND_INTERVAL = 1 / 20f; // 20 Hz
     private final boolean isSinglePlayer;
     private final Map<String, OtherPlayer> otherPlayers = new ConcurrentHashMap<>();
@@ -64,10 +64,22 @@ public class GameClient {
     private String currentWorldName; // Track the current world
     private boolean isConnected = false;
 
+    private InventoryManager inventoryManager;
+
+    public void setWorldManager(WorldManager data) {
+        this.inventoryManager = new InventoryManager(data,this );
+    }
+
+    public InventoryManager getInventoryManager() {
+        return inventoryManager;
+    }
+
     public GameClient(ServerConnectionConfig config, boolean isSinglePlayer, String serverIP, int tcpPort, int udpPort) {
         this.isSinglePlayer = isSinglePlayer;
         this.serverIP = serverIP;
         this.tcpPort = tcpPort;
+        this.inventoryManager = new InventoryManager(null, this); // Will set world manager later
+
         this.udpPort = udpPort;// In GameScreen constructor
         this.serverConfig = config;      // Initialize networking only if multiplayer
         // Load server configuration from file
@@ -76,7 +88,7 @@ public class GameClient {
                 setServerConfig(serverConfig);  // Set the loaded config
                 initializeNetworking();  // Initialize networking only if the config is loaded
             } else {
-                System.err.println("Failed to load server config, multiplayer disabled.");
+                GameLogger.info("Failed to load server config, multiplayer disabled.");
             }
 
         }
@@ -97,11 +109,17 @@ public class GameClient {
             return gameAtlas;
         }
     }
-
-    // Add setter for player reference
     public void setActivePlayer(Player player) {
         this.activePlayer = player;
+        if (player != null) {
+            PlayerData playerData = player.getPlayerData();
+            if (playerData != null) {
+                // Apply saved data to the player, including inventory
+                playerData.applyToPlayer(player);
+            }
+        }
     }
+
 
     // Method to load textures on the main thread
     public void loadTextures() {
@@ -110,9 +128,9 @@ public class GameClient {
                 if (gameAtlas == null) {
                     try {
                         gameAtlas = new TextureAtlas(Gdx.files.internal("atlas/game-atlas"));
-                        System.out.println("Loaded game atlas successfully");
+                        GameLogger.info("Loaded game atlas successfully");
                     } catch (Exception e) {
-                        System.err.println("Error loading game atlas: " + e.getMessage());
+                        GameLogger.info("Error loading game atlas: " + e.getMessage());
                         e.printStackTrace();
                     }
                 }
@@ -126,7 +144,7 @@ public class GameClient {
 
     public void setServerConfig(ServerConnectionConfig config) {
         if (config == null) {
-            logger.error("Cannot set null server config");
+//            logger.error("Cannot set null server config");
             return;
         }
 
@@ -134,23 +152,23 @@ public class GameClient {
             config.validate();
             synchronized (connectionLock) {
                 this.serverConfig = config;
-                logger.info("Server config updated: {}:{}", config.getServerIP(), config.getTcpPort());
+//                logger.info("Server config updated: {}:{}", config.getServerIP(), config.getTcpPort());
             }
         } catch (IllegalArgumentException e) {
-            logger.error("Invalid server configuration: {}", e.getMessage());
+//            logger.error("Invalid server configuration: {}", e.getMessage());
         }
     }
 
     public void sendWorldObjectUpdate(NetworkProtocol.WorldObjectUpdate update) {
         if (!isConnected() || client == null) {
-            System.err.println("Cannot send world object update - not connected to server");
+            GameLogger.info("Cannot send world object update - not connected to server");
             return;
         }
 
         try {
             client.sendTCP(update);
         } catch (Exception e) {
-            System.err.println("Failed to send world object update: " + e.getMessage());
+            GameLogger.info("Failed to send world object update: " + e.getMessage());
         }
     }
 
@@ -158,7 +176,6 @@ public class GameClient {
     public void connectToServer(ServerConnectionConfig config) {
         synchronized (connectionLock) {
             if (config == null) {
-                logger.error("Cannot connect with null config");
                 return;
             }
 
@@ -176,7 +193,6 @@ public class GameClient {
                 reconnectionTimer = null;
             }
             cleanupExistingConnection();
-            logger.info("Disconnected from server");
         }
     }
 
@@ -188,16 +204,14 @@ public class GameClient {
                 client = null;
             }
         } catch (Exception e) {
-            System.err.println("Error cleaning up client: " + e.getMessage());
+            GameLogger.info("Error cleaning up client: " + e.getMessage());
         }
     }
 
     private void initializeNetworking() {
         synchronized (connectionLock) {
             if (isInitializing || serverConfig == null) {
-                logger.debug("Skipping initialization: {} {}",
-                    isInitializing ? "already initializing" : "",
-                    serverConfig == null ? "config is null" : "");
+                GameLogger.info("Skipping initialization: {} {}");
                 return;
             }
 
@@ -206,7 +220,7 @@ public class GameClient {
                 cleanupExistingConnection();
                 setupNewConnection();
             } catch (Exception e) {
-                logger.error("Network initialization failed: {}", e.getMessage());
+                GameLogger.error("Network initialization failed: {}");
             } finally {
                 isInitializing = false;
             }
@@ -226,32 +240,25 @@ public class GameClient {
 
             while (attempts < MAX_RETRIES && !connected && shouldReconnect) {
                 try {
-                    logger.info("Attempting connection to {}:{} (Attempt {}/{})",
-                        serverConfig.getServerIP(), serverConfig.getTcpPort(),
-                        attempts + 1, MAX_RETRIES);
 
                     client.connect(5000, serverConfig.getServerIP(),
                         serverConfig.getTcpPort(), serverConfig.getUdpPort());
                     connected = true;
                     isConnected = true;
-                    logger.info("Successfully connected to server");
                 } catch (IOException e) {
                     attempts++;
                     if (attempts < MAX_RETRIES && shouldReconnect) {
-                        logger.warn("Connection attempt {} failed, retrying in {}ms",
-                            attempts, RETRY_DELAY_MS);
-                        Thread.sleep(RETRY_DELAY_MS);
                     }
                 }
             }
 
             if (!connected) {
-                logger.error("Failed to connect after {} attempts", MAX_RETRIES);
+//                logger.error("Failed to connect after {} attempts", MAX_RETRIES);
                 throw new IOException("Failed to connect to server after " + MAX_RETRIES + " attempts");
             }
 
         } catch (Exception e) {
-            logger.error("Failed to setup network connection: {}", e.getMessage());
+//            logger.error("Failed to setup network connection: {}", e.getMessage());
             cleanupExistingConnection();
             throw new RuntimeException("Network setup failed", e);
         }
@@ -267,13 +274,13 @@ public class GameClient {
                 client = null;
                 isConnected = false;
             } catch (Exception e) {
-                logger.error("Error cleaning up existing connection: {}", e.getMessage());
+//                logger.error("Error cleaning up existing connection: {}", e.getMessage());
             }
         }
     }
 
     private void handleDisconnect(Connection connection) {
-        System.out.println("Disconnected from server - Connection ID: " + connection.getID() + ", Username: " + localUsername);
+        GameLogger.info("Disconnected from server - Connection ID: " + connection.getID() + ", Username: " + localUsername);
 
         // Save state before cleanup
         if (localUsername != null && !isDisposing) {
@@ -291,7 +298,7 @@ public class GameClient {
                 try {
                     Thread.sleep(3000); // Wait 3 seconds before reconnecting
                     if (!isConnected && !isDisposing) {
-                        System.out.println("Attempting to reconnect...");
+                        GameLogger.info("Attempting to reconnect...");
                         initializeNetworking();
                         if (localUsername != null) {
                             sendLoginRequest(localUsername, ""); // Password handling needs to be implemented
@@ -306,16 +313,16 @@ public class GameClient {
 
     public void sendMessage(NetworkProtocol.ChatMessage message) {
         if (!isConnected() || client == null) {
-            System.err.println("Cannot send chat message - not connected to server");
+            GameLogger.info("Cannot send chat message - not connected to server");
             return;
         }
 
         try {
             // Send via TCP to ensure delivery
             client.sendTCP(message);
-//            System.out.println(STR."Sent chat message: \{message.content}");
+//            GameLogger.info(STR."Sent chat message: \{message.content}");
         } catch (Exception e) {
-//            System.err.println(STR."Failed to send chat message: \{e.getMessage()}");
+//            GameLogger.info(STR."Failed to send chat message: \{e.getMessage()}");
         }
     }
 
@@ -333,7 +340,7 @@ public class GameClient {
                 chatMessageHandler.accept(leaveNotification);
             }
 
-            System.out.println("Player left: " + leftMsg.username);
+            GameLogger.info("Player left: " + leftMsg.username);
             leftPlayer.dispose();
         }
     }
@@ -342,58 +349,55 @@ public class GameClient {
         this.chatMessageHandler = handler;
     }
 
-
     private void handleReceivedObject(Object object) {
-//        System.out.println(STR."Received object: \{object.getClass().getName()}");
+//        GameLogger.info("Received object: " + object.getClass().getName());
 
         try {
-            switch (object) {
-                case NetworkProtocol.ChatMessage chatMessage ->
-                    // Ensure messages are handled on the main thread
-                    Gdx.app.postRunnable(() -> {
-                        handleChatMessage((NetworkProtocol.ChatMessage) object);
-                    });
-                case NetworkProtocol.PlayerUpdate netUpdate -> {
-                    // System.out.println(STR."Cli//ent received player update for: \{netUpdate.username} Position: (\{netUpdate.x}, \{netUpdate.y})");
-
-                    handlePlayerUpdate(netUpdate);
-                }
-                case NetworkProtocol.PlayerJoined playerJoined -> handlePlayerJoined(playerJoined);
-                case NetworkProtocol.PlayerLeft playerLeft -> handlePlayerLeft(playerLeft);
-                case NetworkProtocol.PlayerPosition playerPosition -> handlePlayerPositions(playerPosition);
-                case NetworkProtocol.InventoryUpdate inventoryUpdate -> handleInventoryUpdate(inventoryUpdate);
-                case NetworkProtocol.LoginResponse loginResponse -> handleLoginResponse(loginResponse);
-                case NetworkProtocol.WorldObjectUpdate ignored -> {
-
-                    if (currentWorld != null) {
-                        currentWorld.getObjectManager().handleNetworkUpdate(
-                            (NetworkProtocol.WorldObjectUpdate) object
-                        );
-                    }
-                }
-                default -> {
+            if (object instanceof NetworkProtocol.ChatMessage) {
+                // Ensure messages are handled on the main thread
+                Gdx.app.postRunnable(() -> {
+                    handleChatMessage((NetworkProtocol.ChatMessage) object);
+                });
+            } else if (object instanceof NetworkProtocol.PlayerUpdate) {
+                NetworkProtocol.PlayerUpdate netUpdate = (NetworkProtocol.PlayerUpdate) object;
+                // GameLogger.info("Client received player update for: " + netUpdate.username + " Position: (" + netUpdate.x + ", " + netUpdate.y + ")");
+                handlePlayerUpdate(netUpdate);
+            } else if (object instanceof NetworkProtocol.PlayerJoined) {
+                handlePlayerJoined((NetworkProtocol.PlayerJoined) object);
+            } else if (object instanceof NetworkProtocol.PlayerLeft) {
+                handlePlayerLeft((NetworkProtocol.PlayerLeft) object);
+            } else if (object instanceof NetworkProtocol.PlayerPosition) {
+                handlePlayerPositions((NetworkProtocol.PlayerPosition) object);
+            } else if (object instanceof NetworkProtocol.InventoryUpdate) {
+                handleInventoryUpdate((NetworkProtocol.InventoryUpdate) object);
+            } else if (object instanceof NetworkProtocol.LoginResponse) {
+                handleLoginResponse((NetworkProtocol.LoginResponse) object);
+            } else if (object instanceof NetworkProtocol.WorldObjectUpdate) {
+                if (currentWorld != null) {
+                    currentWorld.getObjectManager().handleNetworkUpdate((NetworkProtocol.WorldObjectUpdate) object);
                 }
             }
         } catch (Exception e) {
-//            System.err.println(STR."Error handling network message: \{e.getMessage()}");
+//        GameLogger.info("Error handling network message: " + e.getMessage());
             e.printStackTrace();
         }
     }
 
+
     private void handleChatMessage(NetworkProtocol.ChatMessage message) {
         // Add debug logging
-//        System.out.println("Received chat message from: \{message.sender content: \{message.content}");
+//        GameLogger.info("Received chat message from: \{message.sender content: \{message.content}");
 
         if (chatMessageHandler != null) {
             chatMessageHandler.accept(message);
         } else {
-            System.err.println("Chat message handler is null!");
+            GameLogger.info("Chat message handler is null!");
         }
     }
 
     private void cleanup() {
         if (!isDisposing && lastKnownState != null) {
-//            System.out.println(STR."Cleanup - Saving final state for: \{localUsername}");
+//            GameLogger.info(STR."Cleanup - Saving final state for: \{localUsername}");
             saveLocalPlayerState(lastKnownState);
         }
         otherPlayers.clear();
@@ -433,11 +437,11 @@ public class GameClient {
             return;
         }
         if (playerData == null) {
-            System.err.println("Cannot save null PlayerData");
+            GameLogger.info("Cannot save null PlayerData");
             return;
         }
 
-//        System.out.println(STR."Attempting to save player state for: \{playerData.getUsername()}");
+//        GameLogger.info(STR."Attempting to save player state for: \{playerData.getUsername()}");
 
         try {
             if (isSinglePlayer()) {
@@ -448,14 +452,14 @@ public class GameClient {
                     sendPlayerUpdateToServer(playerData);
                     // Also keep local backup
                     updateLastKnownState(playerData);
-//                    System.out.println(STR."Sent player state to server for: \{playerData.getUsername()}");
+//                    GameLogger.info(STR."Sent player state to server for: \{playerData.getUsername()}");
                 } else {
-                    System.out.println("Not connected to server, saving local backup");
+                    GameLogger.info("Not connected to server, saving local backup");
                     saveLocalPlayerState(playerData);
                 }
             }
         } catch (Exception e) {
-            System.err.println("Error during save: " + e.getMessage());
+            GameLogger.info("Error during save: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -492,11 +496,6 @@ public class GameClient {
             // Save world data with updated player info
             worldFile.writeString(json.prettyPrint(worldData), false);
 
-            System.out.printf("Saved player state in world.json - World: %s, Player: %s, Position: (%.2f,%.2f)%n",
-                currentWorld.getName(),
-                currentState.getUsername(),
-                currentState.getX(),
-                currentState.getY());
 
             // Update last known state
             this.lastKnownState = currentState;
@@ -505,7 +504,7 @@ public class GameClient {
             worldData.updateLastPlayed();
 
         } catch (Exception e) {
-//            System.err.println(STR."Failed to save player state: \{e.getMessage()}");
+//            GameLogger.info(STR."Failed to save player state: \{e.getMessage()}");
             e.printStackTrace();
         }
     }
@@ -513,7 +512,7 @@ public class GameClient {
     public void sendInventoryUpdate(String username, List<String> itemNames) {
         if (isSinglePlayer) return;
         if (!isConnected || client == null) {
-            System.err.println("Cannot send inventory update - not connected to server");
+            GameLogger.info("Cannot send inventory update - not connected to server");
             return;
         }
 
@@ -521,7 +520,7 @@ public class GameClient {
             // Update last known state with inventory
             if (lastKnownState != null && itemNames != null) {
                 lastKnownState.updateFromPlayer(activePlayer);
-                System.out.println("Updated last known state inventory during send: " + itemNames);
+                GameLogger.info("Updated last known state inventory during send: " + itemNames);
             }
 
             NetworkProtocol.InventoryUpdate update = new NetworkProtocol.InventoryUpdate();
@@ -529,9 +528,9 @@ public class GameClient {
             update.itemNames = new ArrayList<>(itemNames);
             client.sendTCP(update);  // Or UDP as needed
 
-            System.out.println("Sent inventory update for: " + username + " - Items: " + itemNames);
+            GameLogger.info("Sent inventory update for: " + username + " - Items: " + itemNames);
         } catch (Exception e) {
-            System.err.println("Failed to send inventory update: " + e.getMessage());
+            GameLogger.info("Failed to send inventory update: " + e.getMessage());
         }
     }
 
@@ -548,7 +547,7 @@ public class GameClient {
 
 
         // Add logging to see what state is being set
-//        System.out.println(STR."Updated last known state: Position (\{lastKnownState.getX()}, \{lastKnownState.getY()}), Inventory: \{lastKnownState.getInventory()}");
+//        GameLogger.info(STR."Updated last known state: Position (\{lastKnownState.getX()}, \{lastKnownState.getY()}), Inventory: \{lastKnownState.getInventory()}");
     }
 
     public synchronized void sendPlayerUpdateToServer(PlayerData playerData) {
@@ -556,7 +555,7 @@ public class GameClient {
             return;
         }
         if (playerData == null) {
-            System.err.println("Cannot save null PlayerData");
+            GameLogger.info("Cannot save null PlayerData");
             return;
         }
 
@@ -583,16 +582,16 @@ public class GameClient {
                     int size = output.position(); // Get the size of serialized data
                     output.close();
 
-                    System.out.println("Serialized PlayerUpdate size: " + size + " bytes");
+                    GameLogger.info("Serialized PlayerUpdate size: " + size + " bytes");
 
                     if (size > 16384) {
-                        System.err.println("PlayerUpdate size exceeds buffer limit: " + size + " bytes");
+                        GameLogger.info("PlayerUpdate size exceeds buffer limit: " + size + " bytes");
                         return;
                     }
 
                     // Send the update
                     client.sendTCP(update);
-                    System.out.println("PlayerUpdate sent successfully for: " + playerData.getUsername());
+                    GameLogger.info("PlayerUpdate sent successfully for: " + playerData.getUsername());
 
                     // Also send InventoryUpdate if needed
                     sendInventoryUpdate(playerData.getUsername(), playerData.getInventoryItems());
@@ -600,7 +599,7 @@ public class GameClient {
                     // Keep local backup
                     updateLastKnownState(playerData);
                 } else {
-                    System.out.println("Not connected to server, saving local backup");
+                    GameLogger.info("Not connected to server, saving local backup");
                     saveLocalPlayerState(playerData);
                 }
             }
@@ -610,7 +609,6 @@ public class GameClient {
     }
 
 
-
     private void setupNetworkListeners() {
         if (client == null) return;
 
@@ -618,14 +616,14 @@ public class GameClient {
             @Override
             public void connected(Connection connection) {
                 isConnected = true;
-                logger.info("Connected to server successfully as: {}", localUsername);
+//                logger.info("Connected to server successfully as: {}", localUsername);
             }
 
             @Override
             public void disconnected(Connection connection) {
                 synchronized (connectionLock) {
                     isConnected = false;
-                    logger.info("Disconnected from server");
+//                    logger.info("Disconnected from server");
 
                     if (shouldReconnect) {
                         scheduleReconnection();
@@ -638,7 +636,7 @@ public class GameClient {
                 try {
                     handleReceivedObject(object);
                 } catch (Exception e) {
-//                    System.err.println(STR."Error processing received object: \{e.getMessage()}");
+//                    GameLogger.info(STR."Error processing received object: \{e.getMessage()}");
                     e.printStackTrace();
                 }
             }
@@ -657,7 +655,7 @@ public class GameClient {
             public void run() {
                 synchronized (connectionLock) {
                     if (!isConnected && shouldReconnect && !isInitializing) {
-                        logger.info("Attempting to reconnect...");
+//                        logger.info("Attempting to reconnect...");
                         initializeNetworking();
                     }
                 }
@@ -678,7 +676,7 @@ public class GameClient {
         }
 
         if (savedState != null) {
-            System.out.println("Restoring player state from GameClient");
+            GameLogger.info("Restoring player state from GameClient");
             savedState.updateFromPlayer(player);
             player.updateFromState();
         }
@@ -686,7 +684,7 @@ public class GameClient {
 
     public void sendLoginRequest(String username, String password) {
         if (!isConnected()) {
-            System.out.println("Not connected to server. Cannot send login request.");
+            GameLogger.info("Not connected to server. Cannot send login request.");
             return;
         }
 
@@ -702,7 +700,7 @@ public class GameClient {
     public void sendRegisterRequest(String username, String password) {
         if (isSinglePlayer) return;
         if (!isConnected || client == null) {
-            System.err.println("Cannot send register request - not connected to server");
+            GameLogger.info("Cannot send register request - not connected to server");
             return;
         }
 
@@ -713,12 +711,12 @@ public class GameClient {
         request.username = username;
         request.password = password;
 
-        System.out.println("Sending registration request for: " + username);
+        GameLogger.info("Sending registration request for: " + username);
         client.sendTCP(request);
     }
 
     private void handleRegisterResponse(NetworkProtocol.RegisterResponse response) {
-        System.out.println("Received registration response: " + response.success +
+        GameLogger.info("Received registration response: " + response.success +
             " - " + response.message);
         if (registrationResponseListener != null) {
             registrationResponseListener.onResponse(response);
@@ -730,11 +728,11 @@ public class GameClient {
             return;
         }
         if (localUsername == null || localUsername.isEmpty()) {
-            System.err.println("Cannot send update: Username is null or empty");
+            GameLogger.info("Cannot send update: Username is null or empty");
             return;
         }
         if (activePlayer == null) {
-            System.err.println("Cannot send update: Active player is null");
+            GameLogger.info("Cannot send update: Active player is null");
             return;
         }
 
@@ -754,13 +752,13 @@ public class GameClient {
             kryo.writeObject(output, update);
             output.flush();
             int size = output.position(); // Get the size of serialized data
-            System.out.println("Serialized PlayerUpdate size: " + size + " bytes");
+            GameLogger.info("Serialized PlayerUpdate size: " + size + " bytes");
             if (size > 16384) {
-                System.err.println("PlayerUpdate size exceeds buffer limit: " + size + " bytes");
+                GameLogger.info("PlayerUpdate size exceeds buffer limit: " + size + " bytes");
                 return;
             }
         } catch (Exception e) {
-            System.err.println("Serialization failed for PlayerUpdate: " + e.getMessage());
+            GameLogger.info("Serialization failed for PlayerUpdate: " + e.getMessage());
             e.printStackTrace();
             return;
         } finally {
@@ -769,13 +767,12 @@ public class GameClient {
 
         try {
             client.sendTCP(update);
-            System.out.println("PlayerUpdate sent successfully for: " + localUsername);
+            GameLogger.info("PlayerUpdate sent successfully for: " + localUsername);
         } catch (Exception e) {
-            System.err.println("Failed to send PlayerUpdate: " + e.getMessage());
+            GameLogger.info("Failed to send PlayerUpdate: " + e.getMessage());
             e.printStackTrace();
         }
     }
-
 
 
     public boolean isSinglePlayer() {
@@ -797,7 +794,7 @@ public class GameClient {
                         lastKnownState = savedState;
                     }
                 } catch (Exception e) {
-                    System.err.println("Failed to load saved state: " + e.getMessage());
+                    GameLogger.info("Failed to load saved state: " + e.getMessage());
                 }
             }
         }
@@ -834,7 +831,7 @@ public class GameClient {
             otherPlayers.keySet().retainAll(playerPosition.players.keySet());
 
         } catch (Exception e) {
-            System.err.println("Error handling player positions: " + e.getMessage());
+            GameLogger.info("Error handling player positions: " + e.getMessage());
         }
     }
 
@@ -873,7 +870,7 @@ public class GameClient {
             chatMessageHandler.accept(joinNotification);
         }
 
-        System.out.println("New player joined: " + joinMsg.username +
+        GameLogger.info("New player joined: " + joinMsg.username +
             " at (" + joinMsg.x + "," + joinMsg.y + ")");
     }
 
@@ -894,12 +891,12 @@ public class GameClient {
             // Create a new OtherPlayer if one doesn't exist for this username
             otherPlayer = new OtherPlayer(netUpdate.username, netUpdate.x, netUpdate.y, gameAtlas);
             otherPlayers.put(netUpdate.username, otherPlayer);
-            System.out.println("Created OtherPlayer for " + netUpdate.username);
+            GameLogger.info("Created OtherPlayer for " + netUpdate.username);
         }
 
         // Update the OtherPlayer with the data from the server
         otherPlayer.updateFromNetwork(netUpdate);
-        System.out.println("Updated OtherPlayer " + netUpdate.username + " with position: (" + netUpdate.x + ", " + netUpdate.y + ")");
+        GameLogger.info("Updated OtherPlayer " + netUpdate.username + " with position: (" + netUpdate.x + ", " + netUpdate.y + ")");
     }
 
 
@@ -913,12 +910,12 @@ public class GameClient {
             // Create a new OtherPlayer instance if not already present
             otherPlayer = new OtherPlayer(inventoryUpdate.username, 0, 0, gameAtlas); // Default position; will be updated
             otherPlayers.put(inventoryUpdate.username, otherPlayer);
-//            System.out.println(STR."Added new OtherPlayer for inventory: \{inventoryUpdate.username}");
+//            GameLogger.info(STR."Added new OtherPlayer for inventory: \{inventoryUpdate.username}");
         }
 
         // Update the inventory of the OtherPlayer
         otherPlayer.getInventory().loadFromStrings(inventoryUpdate.itemNames);
-//        System.out.println(STR."Updated inventory for OtherPlayer: \{inventoryUpdate.username}");
+//        GameLogger.info(STR."Updated inventory for OtherPlayer: \{inventoryUpdate.username}");
     }
 
     /**
@@ -929,7 +926,7 @@ public class GameClient {
 // In the GameClient class
     public Map<String, OtherPlayer> getOtherPlayers() {
         // Debug log to ensure this is working
-        System.out.println("Returning " + otherPlayers.size() + " players from GameClient");
+        GameLogger.info("Returning " + otherPlayers.size() + " players from GameClient");
         return otherPlayers; // Ensure this map is populated correctly
     }
 
@@ -949,7 +946,7 @@ public class GameClient {
 
     public void setLocalUsername(String username) {
         this.localUsername = username;
-        System.out.println("Local username set to: " + username);
+        GameLogger.info("Local username set to: " + username);
     }
 
     public boolean isConnected() {
@@ -967,7 +964,7 @@ public class GameClient {
                 savePlayerState(finalState);
             }
         } catch (Exception e) {
-            System.err.println("Error during final save: " + e.getMessage());
+            GameLogger.info("Error during final save: " + e.getMessage());
         }
 
         synchronized (connectionLock) {
@@ -1017,7 +1014,6 @@ public class GameClient {
             }
         }
     }
-
 
 
     public interface LoginResponseListener {

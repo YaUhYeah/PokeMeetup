@@ -3,6 +3,7 @@ package io.github.pokemeetup.multiplayer.server.storage;
 import com.badlogic.gdx.utils.Json;
 import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.io.*;
 import java.nio.file.*;
@@ -36,7 +37,7 @@ public class FileStorage implements StorageSystem {
         // Load existing data into cache
         loadExistingData();
 
-        System.out.println("File storage initialized at: " + baseDir);
+        GameLogger.info("File storage initialized at: " + baseDir);
     }
 
     private void loadExistingData() throws IOException {
@@ -69,7 +70,7 @@ public class FileStorage implements StorageSystem {
         String jsonData = json.prettyPrint(data);
         Files.writeString(file, jsonData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         playerCache.put(username, data);
-        System.out.println("Saved player data for: " + username);
+        GameLogger.info("Saved player data for: " + username);
     }
 
     @Override
@@ -89,7 +90,7 @@ public class FileStorage implements StorageSystem {
                 return data;
             }
         } catch (IOException e) {
-            System.err.println("Error loading player data for " + username + ": " + e.getMessage());
+            GameLogger.info("Error loading player data for " + username + ": " + e.getMessage());
         }
         return null;
     }
@@ -100,7 +101,7 @@ public class FileStorage implements StorageSystem {
         String jsonData = json.prettyPrint(data);
         Files.writeString(file, jsonData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         worldCache.put(worldName, data);
-        System.out.println("Saved world data for: " + worldName);
+        GameLogger.info("Saved world data for: " + worldName);
     }
 
     @Override
@@ -120,7 +121,7 @@ public class FileStorage implements StorageSystem {
                 return data;
             }
         } catch (IOException e) {
-            System.err.println("Error loading world data for " + worldName + ": " + e.getMessage());
+            GameLogger.info("Error loading world data for " + worldName + ": " + e.getMessage());
         }
         return null;
     }
@@ -138,7 +139,7 @@ public class FileStorage implements StorageSystem {
             try {
                 savePlayerData(username, data);
             } catch (IOException e) {
-                System.err.println("Error saving player data during shutdown: " + e.getMessage());
+                GameLogger.info("Error saving player data during shutdown: " + e.getMessage());
             }
         });
 
@@ -146,7 +147,7 @@ public class FileStorage implements StorageSystem {
             try {
                 saveWorldData(worldName, data);
             } catch (IOException e) {
-                System.err.println("Error saving world data during shutdown: " + e.getMessage());
+                GameLogger.info("Error saving world data during shutdown: " + e.getMessage());
             }
         });
 

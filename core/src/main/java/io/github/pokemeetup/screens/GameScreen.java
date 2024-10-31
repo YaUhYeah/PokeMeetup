@@ -37,6 +37,7 @@ import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
 import io.github.pokemeetup.system.gameplay.inventory.Item;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.io.IOException;
 import java.util.*;
@@ -93,7 +94,7 @@ public class GameScreen implements Screen, PickupActionHandler {
         gameClient.loadTextures(); // Load textures on main thread
         uiStage = new Stage(new ScreenViewport());
         gameClient.setLocalUsername(username);
-        System.out.println("Set username in GameClient: " + username);
+        GameLogger.info("Set username in GameClient: " + username);
         this.skin = new Skin(Gdx.files.internal("Skins/uiskin.json"));
         this.uiSkin = this.skin; // Use the same skin for UI elements
         int pixelX = initialX * World.TILE_SIZE;
@@ -137,7 +138,7 @@ public class GameScreen implements Screen, PickupActionHandler {
 
         // Debug print atlas regions
         for (TextureAtlas.AtlasRegion region : gameAtlas.getRegions()) {
-            System.out.println("Found region: " + region.name + " (index: " + region.index + ")");
+            GameLogger.info("Found region: " + region.name + " (index: " + region.index + ")");
         }
         font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
 
@@ -192,11 +193,11 @@ public class GameScreen implements Screen, PickupActionHandler {
         PlayerData savedPlayerData = null;
 
         if (worldData != null) {
-//            System.out.println(STR."Attempting to load player data for: \{username}");
+//            GameLogger.info(STR."Attempting to load player data for: \{username}");
             savedPlayerData = worldData.getPlayerData(username);
-            //          System.out.println(STR."Loaded player data: \{savedPlayerData != null ? "found" : "not found"}");
+            //          GameLogger.info(STR."Loaded player data: \{savedPlayerData != null ? "found" : "not found"}");
             if (savedPlayerData != null) {
-                //            System.out.println(STR."Saved position: \{savedPlayerData.getX()},\{savedPlayerData.getY()}");
+                //            GameLogger.info(STR."Saved position: \{savedPlayerData.getX()},\{savedPlayerData.getY()}");
             }
         }
 
@@ -211,38 +212,29 @@ public class GameScreen implements Screen, PickupActionHandler {
         gameClient.setCurrentWorld(world);
 
 // Initialize player data with saved state or default if null
-        PlayerData playerData = new PlayerData(username);
-
-// If saved data exists, restore it
+        PlayerData playerData;
         if (savedPlayerData != null) {
-            playerData.updateFromPlayer(player);
-            worldData.savePlayerData(player.getUsername(), playerData);
+            playerData = savedPlayerData;
 
             // Apply saved state to player
-            player.setX((int) savedPlayerData.getX());
-            player.setY((int) savedPlayerData.getY());
-            player.setDirection(savedPlayerData.getDirection());
-            player.setRunning(savedPlayerData.isWantsToRun());
-
-            // Load inventory into player
-            if (savedPlayerData.getInventoryItems() != null) {
-                loadInventoryFromStrings(player.getInventory(), savedPlayerData.getInventoryItems());
-            }
+            playerData.applyToPlayer(player);
         } else {
             // If no saved data, initialize player with default or passed starting values
+            playerData = new PlayerData(username);
             playerData.updateFromPlayer(player);
             if (worldData != null) {
                 worldData.savePlayerData(player.getUsername(), playerData);
             }
 
-            System.out.println("No saved player data found. Initializing with default values.");
+            GameLogger.info("No saved player data found. Initializing with default values.");
         }
 
 // Set player data in world
         world.setPlayerData(playerData);
-        System.out.println("Set PlayerData in world for user: " + username);
+        GameLogger.info("Set PlayerData in world for user: " + username);
 
-        System.out.println("Retrieved saved player data: " + (savedPlayerData != null ?
+
+        GameLogger.info("Retrieved saved player data: " + (savedPlayerData != null ?
             "pos(" + savedPlayerData.getX() + "," + savedPlayerData.getY() + ")" : "null"));
 
         // Set direction if available
@@ -254,12 +246,12 @@ public class GameScreen implements Screen, PickupActionHandler {
 
         if (world != null) {
             world.setPlayerData(playerData);
-            System.out.println("Set PlayerData in world for user: " + username);
+            GameLogger.info("Set PlayerData in world for user: " + username);
         }
-        System.out.println("GameScreen initialization complete. PlayerData null? " +
+        GameLogger.info("GameScreen initialization complete. PlayerData null? " +
             (world.getPlayerData() == null));
 
-        System.out.println("Final player position: " + player.getX() + "," + player.getY());
+        GameLogger.info("Final player position: " + player.getX() + "," + player.getY());
         // Initialize player data management
         this.playerDataManager = new PlayerDataManager(player, world, isMultiplayer, storageSystem);
         playerDataManager.loadPlayerState();
@@ -277,9 +269,9 @@ public class GameScreen implements Screen, PickupActionHandler {
         //        }
         //        world.setPlayerData(playerData);
 
-//        System.out.println(STR."GameScreen initialization complete. PlayerData null? \{world.getPlayerData() == null}");
+//        GameLogger.info(STR."GameScreen initialization complete. PlayerData null? \{world.getPlayerData() == null}");
 
-        //     System.out.println(STR."PlayerData set in World for user: \{player.getPlayerData().getUsername()}");
+        //     GameLogger.info(STR."PlayerData set in World for user: \{player.getPlayerData().getUsername()}");
 // In GameScreen
         gameMenu = new GameMenu(this, game, uiSkin, this.player, gameClient);
         // Initialize input handler
@@ -315,20 +307,20 @@ public class GameScreen implements Screen, PickupActionHandler {
     private void setupGameClientListeners() {
         gameClient.setLoginResponseListener(response -> {
             if (response.success) {
-                System.out.println("Logged in as " + response.username);
+                GameLogger.info("Logged in as " + response.username);
                 // Handle successful login, initialize game state
             } else {
-                System.out.println("Login failed: " + response.message);
+                GameLogger.info("Login failed: " + response.message);
                 // Handle login failure
             }
         });
 
         gameClient.setRegistrationResponseListener(response -> {
             if (response.success) {
-                System.out.println("Registration successful for " + response.username);
+                GameLogger.info("Registration successful for " + response.username);
                 // Handle successful registration, possibly auto-login
             } else {
-                System.out.println("Registration failed: " + response.message);
+                GameLogger.info("Registration failed: " + response.message);
                 // Handle registration failure
             }
         });
@@ -341,7 +333,7 @@ public class GameScreen implements Screen, PickupActionHandler {
     }
 
     private void loadInventoryFromStrings(Inventory inventory, List<String> itemStrings) {
-        System.out.println("Loading inventory items: " + itemStrings);
+        GameLogger.info("Loading inventory items: " + itemStrings);
         for (String itemString : itemStrings) {
             try {
                 String[] parts = itemString.trim().split(":");
@@ -360,23 +352,23 @@ public class GameScreen implements Screen, PickupActionHandler {
                         newItem.setCount(count);
 
                         boolean added = inventory.addItem(newItem);
-                        System.out.println("Loaded item: " + itemName + " x" + count + " (added: " + added + ")");
+                        GameLogger.info("Loaded item: " + itemName + " x" + count + " (added: " + added + ")");
                     } else {
-                        System.err.println("Unknown item: " + itemName);
+                        GameLogger.info("Unknown item: " + itemName);
                     }
                 } else {
-                    System.err.println("Invalid item format: " + itemString);
+                    GameLogger.info("Invalid item format: " + itemString);
                 }
             } catch (Exception e) {
-                System.err.println("Error loading item: " + itemString + " - " + e.getMessage());
+                GameLogger.info("Error loading item: " + itemString + " - " + e.getMessage());
             }
         }
 
         // Debug output final inventory state
-        System.out.println("Final inventory contents:");
+        GameLogger.info("Final inventory contents:");
         for (Item item : inventory.getItems()) {
             if (item != null) {
-                System.out.println("- " + item.getName() + " x" + item.getCount());
+                GameLogger.info("- " + item.getName() + " x" + item.getCount());
             }
         }
     }
@@ -448,14 +440,19 @@ public class GameScreen implements Screen, PickupActionHandler {
         );
         slotsTable.pad(4f);
 
-        // Use first 9 slots (0-8) for hotbar
+        // Get hotbar items from the inventory
+        List<Item> hotbarItems = player.getInventory().getHotbarItems();
+
         for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
-            Table slotCell = createSlotCell(i, player.getInventory().getItem(i));
+            Item item = hotbarItems.get(i);
+            Table slotCell = createSlotCell(i, item);
             slotsTable.add(slotCell).size(64).pad(2);
         }
 
         hotbarTable.add(slotsTable);
         uiStage.addActor(hotbarTable);
+
+
     }
 
     public PlayerData getCurrentPlayerState() {
@@ -534,6 +531,18 @@ public class GameScreen implements Screen, PickupActionHandler {
                 return false;
             }
         });
+        inputMultiplexer.addProcessor(new InputAdapter() {
+            @Override
+            public boolean keyDown(int keycode) {
+                if (keycode >= Input.Keys.NUM_1 && keycode <= Input.Keys.NUM_9) {
+                    int index = keycode - Input.Keys.NUM_1;
+                    player.getInventory().selectHotbarSlot(index);
+                    updateHotbarUI();
+                    return true;
+                }
+                return false;
+            }
+        });
 
         // 3. UI Stage processors
         inputMultiplexer.addProcessor(uiStage);
@@ -587,7 +596,7 @@ public class GameScreen implements Screen, PickupActionHandler {
         Map<String, OtherPlayer> networkPlayers = gameClient.getOtherPlayers();
 
         // Debug: print how many network players are being fetched
-        System.out.println("Number of other players in network: " + networkPlayers.size());
+        GameLogger.info("Number of other players in network: " + networkPlayers.size());
 
         for (Map.Entry<String, OtherPlayer> entry : networkPlayers.entrySet()) {
             String username = entry.getKey();
@@ -600,11 +609,11 @@ public class GameScreen implements Screen, PickupActionHandler {
                     // If the other player doesn't exist yet, create it
                     op = new OtherPlayer(username, netUpdate.getX(), netUpdate.getY(), gameAtlas);
                     otherPlayers.put(username, op);
-                    System.out.println("Creating new OtherPlayer for username: " + username);
+                    GameLogger.info("Creating new OtherPlayer for username: " + username);
                 } else {
                     // Update the existing player's state with the network data
                     op.updateFromNetwork(netUpdate);
-                    System.out.println("Updating OtherPlayer for username: " + username);
+                    GameLogger.info("Updating OtherPlayer for username: " + username);
                 }
             }
         }
@@ -644,7 +653,7 @@ public class GameScreen implements Screen, PickupActionHandler {
         List<Item> collectedItems = world.getCollectedItems();
         for (Item item : collectedItems) {
             inventory.addItem(item);
-            System.out.println("Added item to inventory: " + item.getName());
+            GameLogger.info("Added item to inventory: " + item.getName());
         }
         collectedItems.clear(); // Clear the collected items list
 
@@ -661,8 +670,8 @@ public class GameScreen implements Screen, PickupActionHandler {
         );
 
         // Multiplayer logic: update and send player state to the server
-//        System.out.println(STR."multiplayer mode: \{isMultiplayer}");
-//        System.out.println(STR."Is game client null: \{gameClient == null}");
+//        GameLogger.info(STR."multiplayer mode: \{isMultiplayer}");
+//        GameLogger.info(STR."Is game client null: \{gameClient == null}");
         if (isMultiplayer && gameClient != null) {
             // Send player update immediately every frame
             sendPlayerUpdate(deltaTime);
@@ -712,7 +721,7 @@ public class GameScreen implements Screen, PickupActionHandler {
                 if (background instanceof TextureRegionDrawable) {
                     TextureRegion region = ((TextureRegionDrawable) background).getRegion();
                     if (region == null) {
-                        System.err.println("Null TextureRegion in table background for: " + actor.getName());
+                        GameLogger.info("Null TextureRegion in table background for: " + actor.getName());
                     }
                 }
             }
@@ -721,7 +730,7 @@ public class GameScreen implements Screen, PickupActionHandler {
         uiStage.getViewport().apply();
         uiStage.act(delta);
         if (uiStage.getActors().isEmpty()) {
-            System.out.println("uiStage has no actors. Skipping draw.");
+            GameLogger.info("uiStage has no actors. Skipping draw.");
         } else {
             uiStage.draw();
         }
@@ -773,15 +782,9 @@ public class GameScreen implements Screen, PickupActionHandler {
 
         if (inventoryOpen) {
             if (inventoryScreen == null) {
-                inventoryScreen = new InventoryScreen(player, uiSkin);
-                // Ensure hotbar state is synchronized immediately
-                for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
-                    Item item = player.getInventory().getItem(i);
-                    if (item != null) {
-                        // Ensure inventory screen has same items
-                        inventoryScreen.getInventory().setItem(i, item.copy());
-                    }
-                }
+                inventoryScreen = new InventoryScreen(player, uiSkin, gameClient);
+                // The following synchronization may not be necessary
+                // as both share the same Inventory instance
             }
 
             inputMultiplexer = new InputMultiplexer(
@@ -791,20 +794,9 @@ public class GameScreen implements Screen, PickupActionHandler {
             Gdx.input.setInputProcessor(inputMultiplexer);
         } else {
             if (inventoryScreen != null) {
-                // Sync back to hotbar before closing
-                for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
-                    Item item = inventoryScreen.getInventory().getItem(i);
-                    if (item != null) {
-                        player.getInventory().setItem(i, item.copy());
-                    } else {
-                        player.getInventory().setItem(i, null);
-                    }
-                }
-
+                // Again, synchronization might not be necessary
                 inventoryScreen.dispose();
                 inventoryScreen = null;
-
-                // Update hotbar UI
                 createHotbarUI();
             }
 
@@ -812,10 +804,14 @@ public class GameScreen implements Screen, PickupActionHandler {
                 uiStage,
                 inputHandler
             );
+            inputMultiplexer.addProcessor(uiStage); // Make sure uiStage is first
+            inputMultiplexer.addProcessor(inputHandler); // Then game input
+
             Gdx.input.setInputProcessor(inputMultiplexer);
             setupInputProcessors();
         }
     }
+
     private void saveHotbarState() {
         // Store current hotbar state before opening inventory
         List<Item> hotbarItems = new ArrayList<>();
@@ -873,13 +869,18 @@ public class GameScreen implements Screen, PickupActionHandler {
             Item randomItem = generateRandomItem();
             randomItem.setCount(1); // Ensure count is 1
 
-            // Add to inventory
-            player.getInventory().addItem(randomItem);
-            updateHotbarUI();
+            // Add to inventory (tries hotbar first)
+            boolean added = player.getInventory().addItem(randomItem);
+            if (added) {
+                updateHotbarUI();
+            } else {
+                GameLogger.info("Inventory and hotbar are full. Cannot add item: " + randomItem.getName());
+                // Optionally, display a message to the player
+            }
 
             AudioManager.getInstance().playSound(AudioManager.SoundEffect.ITEM_PICKUP);
             player.updatePlayerData();
-            System.out.println("Picked up: " + randomItem.getName() + " (Count: " + randomItem.getCount() + ")");
+            GameLogger.info("Picked up: " + randomItem.getName() + " (Count: " + randomItem.getCount() + ")");
         }
     }
 
@@ -914,9 +915,9 @@ public class GameScreen implements Screen, PickupActionHandler {
             if (player != null) {
                 // Get final state
                 PlayerData finalState = getCurrentPlayerState();
-                System.out.println("Final player state before save:");
-                System.out.println("Position: " + finalState.getX() + "," + finalState.getY());
-                System.out.println("Inventory: " + finalState.getInventoryItems());
+                GameLogger.info("Final player state before save:");
+                GameLogger.info("Position: " + finalState.getX() + "," + finalState.getY());
+                GameLogger.info("Inventory: " + finalState.getInventoryItems());
 
                 // Update world data
                 WorldData worldData = world.getWorldData();
@@ -925,11 +926,11 @@ public class GameScreen implements Screen, PickupActionHandler {
                 // Save to storage
                 game.getWorldManager().saveWorld(worldData);
 
-                System.out.println("Player state saved successfully");
+                GameLogger.info("Player state saved successfully");
             }
 
         } catch (Exception e) {
-            System.err.println("Error saving final state: " + e.getMessage());
+            GameLogger.info("Error saving final state: " + e.getMessage());
         }
 
         // Cleanup resources
@@ -958,7 +959,7 @@ public class GameScreen implements Screen, PickupActionHandler {
         // Update player coordinates in the database when the game screen is disposed
         DatabaseManager dbManager = game.getDatabaseManager();
         dbManager.updatePlayerCoordinates(player.getUsername(), (int) player.getX(), (int) player.getY());
-        System.out.println("Player coordinates updated in database.");
+        GameLogger.info("Player coordinates updated in database.");
     }
 
 }

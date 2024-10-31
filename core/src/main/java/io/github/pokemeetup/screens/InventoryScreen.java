@@ -1,286 +1,294 @@
+
 package io.github.pokemeetup.screens;
 
 import com.badlogic.gdx.*;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
-import com.badlogic.gdx.graphics.Pixmap;
-import com.badlogic.gdx.graphics.Texture;
-import com.badlogic.gdx.graphics.g2d.BitmapFont;
-import com.badlogic.gdx.graphics.g2d.Sprite;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
-import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.scenes.scene2d.Actor;
-import com.badlogic.gdx.scenes.scene2d.InputEvent;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.DragAndDrop;
 import com.badlogic.gdx.scenes.scene2d.utils.Drawable;
-import com.badlogic.gdx.scenes.scene2d.utils.SpriteDrawable;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
-import com.badlogic.gdx.utils.Timer;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
+import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.system.Player;
-import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.inventory.*;
-import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingSlot;
+import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingResult;
+import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingResultListener;
 import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingSystem;
+import io.github.pokemeetup.system.gameplay.inventory.secureinventories.InventorySlotData;
+import io.github.pokemeetup.system.gameplay.inventory.secureinventories.InventorySlotUI;
 import io.github.pokemeetup.utils.TextureManager;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class InventoryScreen implements Screen {
+public class InventoryScreen implements Screen, CraftingResultListener {
+    private InventorySlotData heldItemSlotData = null;
     private static final float BACKGROUND_OPACITY = 0.5f;
     private static final int SLOT_SIZE = 40;
-    private static final int PADDING = 10;
+    private static final int PADDING = 10;    private ResultSlot resultSlot;
 
     private final Stage stage;
     private final SpriteBatch batch;
     private final ShapeRenderer shapeRenderer;
     private final Skin skin;
-    private final Inventory inventory;
-    private final CraftingSystem craftingSystem;
     private final Player player;
+    private final Inventory inventory;
+    private final DragAndDrop dragAndDrop;
+    private final GameClient gameClient;
+    private final CraftingSystem craftingSystem;
+    private List<InventorySlotData> hotbarSlots;
+    private List<InventorySlotData> inventorySlots;
 
     // UI Components
-    private final Table mainTable;
-    private final Table craftingTable;
-    private final Table inventoryTable;
-    private final Table hotbarTable;
-    private final DragAndDrop dragAndDrop;
 
-    // Track drag and drop state
-    private Item heldItem;
-    private int heldItemCount;
-    private boolean isDragging;
+    public Stage getStage() {
+        return stage;
+    }
 
-    public InventoryScreen(Player player, Skin skin) {
+    private Table mainTable;
+    private Table craftingTable;
+    private Table inventoryTable;
+    private Table hotbarTable;// Add these fields
+    private List<InventorySlotData> craftingSlots;
+    private InventorySlotData craftingResultSlot;
+
+
+    public InventoryScreen(Player player, Skin skin, GameClient gameClient) {
         this.player = player;
         this.skin = skin;
-        this.inventory = player.getInventory();
+        this.gameClient = gameClient;
+        this.stage = new Stage(new ScreenViewport());
         this.batch = new SpriteBatch();
         this.shapeRenderer = new ShapeRenderer();
-        this.stage = new Stage(new ScreenViewport(), batch);
-
-        // Initialize UI components
-        this.mainTable = new Table();
-        this.craftingTable = new Table();
-        this.inventoryTable = new Table();
-        this.hotbarTable = new Table();
         this.dragAndDrop = new DragAndDrop();
 
-        // Initialize crafting system
-        this.craftingSystem = new CraftingSystem(inventory);
-        if (player.getInventory().getHotbarCache() != null) {
-            player.getInventory().restoreHotbarFromCache();
+        // Get the player's inventory
+        this.inventory = player.getInventory();
+
+        // Initialize crafting slots
+        craftingSlots = new ArrayList<>();
+        for (int i = 0; i < 4; i++) { // 2x2 grid
+            craftingSlots.add(new InventorySlotData());
         }
+        craftingResultSlot = new InventorySlotData();
+
+        // Initialize crafting system
+        craftingSystem = new CraftingSystem();
+        craftingSystem.setCraftingResultListener(this);
+
         setupUI();
         setupInput();
-        loadInventoryContents();
-    }
-
-    private void setupPeriodicSync() {
-        Timer.schedule(new Timer.Task() {
-            @Override
-            public void run() {
-                if (Gdx.app.getGraphics() != null) {
-                    Gdx.app.postRunnable(() -> {
-                        synchronizeInventoryWithHotbar();
-                        inventory.updateHotbarDisplay();
-                    });
-                }
-            }
-        }, 0, 0.1f); // Update every 100ms
-    }
-
-    private void synchronizeInventoryWithHotbar() {
-        // Update both inventory and hotbar slots
-        for (Actor actor : stage.getActors()) {
-            if (actor instanceof InventorySlot) {
-                InventorySlot slot = (InventorySlot) actor;
-                slot.refreshFromInventory();
-            }
-        }
-    }
-
-    public Inventory getInventory() {
-        return inventory;
-    }
-
-    private Texture createColoredTexture(float r, float g, float b, float a) {
-        Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
-        pixmap.setColor(r, g, b, a);
-        pixmap.fill();
-        Texture texture = new Texture(pixmap);
-        pixmap.dispose();
-        return texture;
     }
 
     private void setupUI() {
-        // Main container setup
-        Table container = new Table();
-        container.setFillParent(true);
+        // Main container
+        mainTable = new Table();
+        mainTable.setFillParent(true);
 
-        // Don't set container background - let the ShapeRenderer handle it
+        // Create sections
+        setupCraftingArea();
+        setupInventoryArea();
+        setupHotbarArea();
 
-        // Crafting area (top)
-        setupCraftingArea(container);
+        // Add to stage
+        stage.addActor(mainTable);
 
-        // Main inventory (middle)
-        setupMainInventory(container);
-
-        // Hotbar (bottom)
-        setupHotbar(container);
-
-        stage.addActor(container);
+        // Update all visuals
+        updateAllSlots();
     }
 
-    private void setupCraftingArea(Table container) {
-        Table craftingArea = new Table();
-        craftingArea.setBackground(new TextureRegionDrawable(createColoredTexture(0.2f, 0.2f, 0.2f, 0.9f)));
-        craftingArea.pad(PADDING);
+    private void setupCraftingArea() {
+        craftingTable = new Table();
+        craftingTable.setBackground(createBackground());
+        craftingTable.pad(PADDING);
+
+        // Initialize crafting slots
+        craftingSlots = new ArrayList<>();
+        for (int i = 0; i < 4; i++) { // 2x2 grid
+            craftingSlots.add(new InventorySlotData());
+        }
+        craftingResultSlot = new InventorySlotData();
 
         // 2x2 crafting grid
         Table grid = new Table();
+        int index = 0;
         for (int i = 0; i < 2; i++) {
             for (int j = 0; j < 2; j++) {
-                CraftingSlot slot = new CraftingSlot(craftingSystem, i, j, skin, dragAndDrop);
-                // Set slot background from atlas
-                slot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_normal")));
-                grid.add(slot).size(SLOT_SIZE).space(2);
+                if (index < craftingSlots.size()) {
+                    InventorySlotData slotData = craftingSlots.get(index);
+                    InventorySlotUI slotUI = new InventorySlotUI(
+                        slotData,
+                        skin,
+                        dragAndDrop,
+                        this::onSlotChanged,
+                        this
+                    );
+                    grid.add(slotUI).size(SLOT_SIZE).space(2);
+                    index++;
+                }
             }
             grid.row();
         }
 
         // Arrow and result slot
-        Image arrow = new Image(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("arrow")));
-        ResultSlot resultSlot = new ResultSlot(craftingSystem, skin);
-        resultSlot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_normal")));
+        Image arrow = new Image(TextureManager.getGameAtlas().findRegion("arrow"));
 
-        craftingArea.add(grid);
-        craftingArea.add(arrow).size(32, 32).pad(10);
-        craftingArea.add(resultSlot).size(SLOT_SIZE);
+        InventorySlotUI resultSlotUI = new InventorySlotUI(
+            craftingResultSlot,
+            skin,
+            dragAndDrop,
+            this::onCraftingResultTaken,
+            this
+        );
 
-        container.add(craftingArea).pad(20).row();
+        craftingTable.add(grid);
+        craftingTable.add(arrow).size(32, 32).pad(10);
+        craftingTable.add(resultSlotUI).size(SLOT_SIZE);
+
+        mainTable.add(craftingTable).pad(20).row();
     }
 
-    public void updateSlotBackgrounds() {
-        for (Actor actor : stage.getActors()) {
-            if (actor instanceof InventorySlot) {
-                InventorySlot slot = (InventorySlot) actor;
-                int index = slot.getIndex();
-                if (index >= Inventory.INVENTORY_SIZE - Inventory.HOTBAR_SIZE) {
-                    // This is a hotbar slot
-                    if (inventory.getSelectedIndex() == index) {
-                        slot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_selected")));
-                    } else {
-                        slot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_normal")));
-                    }
+    private void setupInventoryArea() {
+        inventoryTable = new Table();
+        inventoryTable.setBackground(createBackground());
+        inventoryTable.pad(PADDING);
+
+        // Initialize inventory slots
+        List<Item> items = inventory.getItems(); // Get items from the player's inventory
+        inventorySlots = new ArrayList<>();
+
+        int cols = 9;
+        int rows = 3;
+        int totalSlots = cols * rows;
+
+        for (int i = 0; i < totalSlots; i++) {
+            InventorySlotData slotData = new InventorySlotData(i); // Using slot index
+            if (i < items.size()) {
+                Item item = items.get(i);
+                if (item != null) {
+                    slotData.setItem(item.getName(), item.getCount());
                 }
             }
+            inventorySlots.add(slotData);
         }
-    }
 
-    private void setupMainInventory(Table container) {
-        Table mainInventoryArea = new Table();
-        mainInventoryArea.setBackground(new TextureRegionDrawable(createColoredTexture(0.2f, 0.2f, 0.2f, 0.9f)));
-        mainInventoryArea.pad(PADDING);
-
-        // Show all inventory slots including hotbar
-        for (int row = 0; row < 3; row++) {
-            for (int col = 0; col < 9; col++) {
-                int index = row * 9 + col;
-                InventorySlot slot = new InventorySlot(
-                    inventory,
-                    index,
-                    stage,
-                    skin,
-                    dragAndDrop,
-                    craftingSystem
-                );
-                slot.setBackground(new TextureRegionDrawable(TextureManager.getGameAtlas().findRegion("slot_normal")));
-                mainInventoryArea.add(slot).size(SLOT_SIZE).space(2);
+        // Create UI slots
+        int index = 0;
+        for (int row = 0; row < rows; row++) {
+            for (int col = 0; col < cols; col++) {
+                if (index < inventorySlots.size()) {
+                    InventorySlotData slotData = inventorySlots.get(index);
+                    InventorySlotUI slotUI = new InventorySlotUI(
+                        slotData,
+                        skin,
+                        dragAndDrop,
+                        this::onSlotChanged,
+                        this
+                    );
+                    inventoryTable.add(slotUI).size(SLOT_SIZE).space(2);
+                    index++;
+                }
             }
-            mainInventoryArea.row();
+            inventoryTable.row();
         }
 
-        container.add(mainInventoryArea).pad(20).row();
+        mainTable.add(inventoryTable).pad(20).row();
     }
 
-    private void setupHotbar(Table container) {
-        Table hotbarArea = new Table();
-        hotbarArea.pad(PADDING);
 
-        // Create slots for first 9 slots (0-8)
-        for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
-            InventorySlot slot = new InventorySlot(
-                inventory,
-                i,  // Use index 0-8
-                stage,
+    public InventorySlotData getHeldItem() {
+        return heldItemSlotData;
+    }
+
+    public void setHeldItem(InventorySlotData item) {
+        heldItemSlotData = item;
+    }
+
+    private void setupHotbarArea() {
+        hotbarTable = new Table();
+        hotbarTable.setBackground(createBackground());
+        hotbarTable.pad(PADDING);
+
+        List<Item> hotbarItems = inventory.getHotbarItems(); // Assuming this method exists
+        hotbarSlots = new ArrayList<>();
+
+        for (int i = 0; i < hotbarItems.size(); i++) {
+            InventorySlotData slotData = new InventorySlotData(i); // Using slot index
+            Item item = hotbarItems.get(i);
+            if (item != null) {
+                slotData.setItem(item.getName(), item.getCount());
+            }
+            hotbarSlots.add(slotData);
+
+            InventorySlotUI slot = new InventorySlotUI(
+                slotData,
                 skin,
                 dragAndDrop,
-                craftingSystem
+                this::onHotbarSlotChanged,
+                this
             );
-
-            // Copy the item from the inventory
-            Item item = inventory.getItem(i);
-            if (item != null) {
-                slot.setItem(item.copy());
-            }
-
-            hotbarArea.add(slot).size(SLOT_SIZE).space(2);
+            hotbarTable.add(slot).size(SLOT_SIZE).space(2);
         }
 
-        container.add(hotbarArea).pad(20);
+        mainTable.add(hotbarTable).pad(20);
     }
 
-    private void loadInventoryContents() {
-        // Load main inventory slots
-        for (int i = 0; i < Inventory.INVENTORY_SIZE - Inventory.HOTBAR_SIZE; i++) {
-            Item item = inventory.getItem(i);
+    private void onSlotChanged(InventorySlotData slotData) {
+        int slotIndex = slotData.getSlotIndex();
+        if (slotData.isEmpty()) {
+            inventory.setItemAtSlot(slotIndex, null);
+        } else {
+            String itemId = slotData.getItemId();
+            int count = slotData.getCount();
+            Item item = ItemManager.getItem(itemId);
             if (item != null) {
-                InventorySlot slot = findSlotByIndex(i);
-                if (slot != null) {
-                    slot.setItem(item.copy());
-                }
+                Item newItem = item.copy();
+                newItem.setCount(count);
+                inventory.setItemAtSlot(slotIndex, newItem);
             }
         }
-
-        // Load hotbar slots
-        for (int i = Inventory.INVENTORY_SIZE - Inventory.HOTBAR_SIZE; i < Inventory.INVENTORY_SIZE; i++) {
-            Item item = inventory.getItem(i);
-            if (item != null) {
-                InventorySlot slot = findHotbarSlotByIndex(i);
-                if (slot != null) {
-                    slot.setItem(item.copy());
-                }
-            }
+        // Mark inventory as dirty for saving
+        if (gameClient != null) {
+            gameClient.getInventoryManager().markDirty(player.getUsername());
         }
+        // Update visuals if needed
+        updateAllSlots();
     }
 
-    private InventorySlot findSlotByIndex(int index) {
-        for (Actor actor : inventoryTable.getChildren()) {
-            if (actor instanceof InventorySlot) {
-                InventorySlot slot = (InventorySlot) actor;
-                if (slot.getIndex() == index) {
-                    return slot;
-                }
+    private void onHotbarSlotChanged(InventorySlotData slotData) {
+        int slotIndex = slotData.getSlotIndex();
+        if (slotData.isEmpty()) {
+            inventory.setHotbarItemAtSlot(slotIndex, null);
+        } else {
+            String itemId = slotData.getItemId();
+            int count = slotData.getCount();
+            Item item = ItemManager.getItem(itemId);
+            if (item != null) {
+                Item newItem = item.copy();
+                newItem.setCount(count);
+                inventory.setHotbarItemAtSlot(slotIndex, newItem);
             }
         }
-        return null;
+        // Mark inventory as dirty for saving
+        if (gameClient != null) {
+            gameClient.getInventoryManager().markDirty(player.getUsername());
+        }
+        // Update visuals if needed
+        updateAllSlots();
     }
 
-    private InventorySlot findHotbarSlotByIndex(int index) {
-        for (Actor actor : hotbarTable.getChildren()) {
-            if (actor instanceof InventorySlot) {
-                InventorySlot slot = (InventorySlot) actor;
-                if (slot.getIndex() == index) {
-                    return slot;
-                }
-            }
-        }
-        return null;
+
+
+
+    private Drawable createBackground() {
+        return new TextureRegionDrawable(TextureManager.getGameAtlas()
+            .findRegion("hotbar_bg"))
+            .tint(new Color(0.2f, 0.2f, 0.2f, 0.9f));
     }
 
     private void setupInput() {
@@ -298,18 +306,61 @@ public class InventoryScreen implements Screen {
         Gdx.input.setInputProcessor(multiplexer);
     }
 
-    public void updateAllSlots() {
-        // Update main inventory slots
-        for (Actor actor : inventoryTable.getChildren()) {
-            if (actor instanceof InventorySlot) {
-                ((InventorySlot) actor).updateVisuals();
+
+    private void onCraftingResultTaken(InventorySlotData resultSlotData) {
+        if (!resultSlotData.isEmpty()) {
+            // Add the crafted item to the player's inventory
+            Item craftedItem = ItemManager.getItem(resultSlotData.getItemId());
+            if (craftedItem != null) {
+                craftedItem.setCount(resultSlotData.getCount());
+                inventory.addItem(craftedItem);
+            }
+
+            // Clear crafting grid
+            for (InventorySlotData slot : craftingSlots) {
+                slot.clear();
+            }
+            craftingResultSlot.clear();
+
+            // Update crafting
+            updateCrafting();
+
+            // Update all visuals
+            updateAllSlots();
+        }
+    }
+
+
+
+    private void updateCrafting() {
+        String[][] grid = new String[2][2];
+
+        int index = 0;
+        for (int i = 0; i < 2; i++) {
+            for (int j = 0; j < 2; j++) {
+                if (index < craftingSlots.size()) {
+                    InventorySlotData slot = craftingSlots.get(index);
+                    grid[i][j] = slot.isEmpty() ? null : slot.getItemId();
+                }
+                index++;
             }
         }
 
-        // Update hotbar slots
-        for (Actor actor : hotbarTable.getChildren()) {
-            if (actor instanceof InventorySlot) {
-                ((InventorySlot) actor).updateVisuals();
+        CraftingResult result = craftingSystem.checkRecipe(grid);
+        if (result != null) {
+            craftingResultSlot.setItem(result.getItemId(), result.getCount());
+        } else {
+            craftingResultSlot.clear();
+        }
+
+        updateAllSlots();
+    }
+
+    private void updateAllSlots() {
+        // Update all UI slots
+        for (Actor actor : stage.getActors()) {
+            if (actor instanceof InventorySlotUI) {
+                ((InventorySlotUI) actor).updateVisuals();
             }
         }
     }
@@ -317,17 +368,14 @@ public class InventoryScreen implements Screen {
     @Override
     public void show() {
         Gdx.input.setInputProcessor(stage);
-        loadInventoryContents();
     }
-
 
     @Override
     public void render(float delta) {
-        // Enable blending for transparency
+        // Clear screen with semi-transparent background
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
 
-        // Draw semi-transparent background
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
         shapeRenderer.setColor(0, 0, 0, BACKGROUND_OPACITY);
         shapeRenderer.rect(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
@@ -336,18 +384,27 @@ public class InventoryScreen implements Screen {
         // Update and draw stage
         stage.act(delta);
         stage.draw();
-
-        // Ensure proper state sync on every frame
-        synchronizeInventoryWithHotbar();
     }
 
     @Override
-    public void resize(int width, int height) {
-        stage.getViewport().update(width, height, true);
+    public void hide() {
+        // Save inventory state when closing
+        if (gameClient != null) {
+            gameClient.getInventoryManager().savePlayerInventory(player.getUsername());
+        }
     }
 
-    public Stage getStage() {
-        return stage;
+    @Override
+    public void dispose() {
+        stage.dispose();
+        batch.dispose();
+        shapeRenderer.dispose();
+    }
+
+    // Other required Screen methods...
+    @Override
+    public void resize(int width, int height) {
+        stage.getViewport().update(width, height, true);
     }
 
     @Override
@@ -359,15 +416,9 @@ public class InventoryScreen implements Screen {
     }
 
     @Override
-    public void hide() {
-        craftingSystem.returnItemsToInventory();
-        inventory.updateHotbarDisplay();
-    }
-
-    @Override
-    public void dispose() {
-        stage.dispose();
-        batch.dispose();
-        shapeRenderer.dispose();
+    public void onCraftingResultChanged(CraftingResult result) {
+        if (resultSlot != null) {
+            resultSlot.setCraftingResult(result);
+        }
     }
 }

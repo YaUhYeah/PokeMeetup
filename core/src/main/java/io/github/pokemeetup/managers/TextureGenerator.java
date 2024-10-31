@@ -7,6 +7,7 @@ import com.badlogic.gdx.graphics.PixmapIO;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.nio.ByteBuffer;
 
@@ -26,11 +27,11 @@ public class TextureGenerator {
             file.parent().mkdirs(); // Ensure directory exists
             PixmapIO.writePNG(file, pixmap);
 
-            System.out.println("White pixel texture generated successfully at: " + WHITE_PIXEL_PATH);
+            GameLogger.info("White pixel texture generated successfully at: " + WHITE_PIXEL_PATH);
 
             pixmap.dispose();
         } catch (Exception e) {
-            System.err.println("Failed to generate white pixel texture: " + e.getMessage());
+            GameLogger.info("Failed to generate white pixel texture: " + e.getMessage());
             e.printStackTrace();
         }
     }

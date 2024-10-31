@@ -26,6 +26,7 @@ import io.github.pokemeetup.system.gameplay.overworld.biomes.TransitionBiome;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
 import io.github.pokemeetup.system.gameplay.inventory.Item;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
+import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.PerlinNoise;
 
 import java.util.*;
@@ -95,16 +96,16 @@ public class World {
         TextureRegion treeTexture = atlas.findRegion("tree");
         TextureRegion pokeballTexture = atlas.findRegion("pokeball");  // Debug texture loading
         if (treeTexture == null) {
-            System.err.println("Failed to load tree texture from atlas");
+            GameLogger.info("Failed to load tree texture from atlas");
         }
         if (pokeballTexture == null) {
-            System.err.println("Failed to load pokeball texture from atlas");
+            GameLogger.info("Failed to load pokeball texture from atlas");
         }
         objectManager = new WorldObject.WorldObjectManager(atlas, worldSeed, gameClient);
         // Verify textures are loaded
-        System.out.println("Tile textures loaded: " + tileTextures.size());
+        GameLogger.info("Tile textures loaded: " + tileTextures.size());
         for (Map.Entry<Integer, TextureRegion> entry : tileTextures.entrySet()) {
-            System.out.println("Tile type " + entry.getKey() + ": " +
+            GameLogger.info("Tile type " + entry.getKey() + ": " +
                 (entry.getValue() != null ? "loaded" : "null"));
         }// Load or create world data
         FileHandle worldFile = Gdx.files.local("assets/worlds/" + name + "/world.json");
@@ -113,18 +114,18 @@ public class World {
                 Json json = new Json();
                 WorldData.setupJson(json);
                 String content = worldFile.readString();
-                System.out.println("Loading world file content: " + content);
+                GameLogger.info("Loading world file content: " + content);
                 this.worldData = json.fromJson(WorldData.class, content);
                 if (this.worldData == null) {
                     throw new RuntimeException("Failed to deserialize world data");
                 }
-                System.out.println("World loaded successfully");
+                GameLogger.info("World loaded successfully");
             } catch (Exception e) {
-                System.err.println("Failed to load world, creating new: " + e.getMessage());
+                GameLogger.info("Failed to load world, creating new: " + e.getMessage());
                 this.worldData = new WorldData(name, seed);
             }
         } else {
-            System.out.println("No existing world file found, creating new");
+            GameLogger.info("No existing world file found, creating new");
             this.worldData = new WorldData(name, seed);
         }
     }    // Add setter for PlayerData
@@ -216,10 +217,9 @@ public class World {
             }
         }
 
-        System.out.println("\nBiome Distribution Analysis:");
+        GameLogger.info("\nBiome Distribution Analysis:");
         counts.forEach((type, count) -> {
             double percentage = (count * 100.0) / samples;
-            System.out.printf("%s: %.1f%%\n", type, percentage);
         });
     }
 
@@ -253,10 +253,9 @@ public class World {
             }
         }
 
-        System.out.println("Biome Distribution Analysis:");
+        GameLogger.info("Biome Distribution Analysis:");
         distribution.forEach((type, count) -> {
             double percentage = (count * 100.0) / (sampleSize * sampleSize);
-            System.out.printf("%s: %.2f%%\n", type, percentage);
         });
     }
 
@@ -319,11 +318,11 @@ public class World {
             json.setOutputType(JsonWriter.OutputType.json);
             chunkFile.writeString(json.prettyPrint(chunkData), false);
 
-            System.out.println("Saved chunk data: " + filename +
+            GameLogger.info("Saved chunk data: " + filename +
                 (isMultiplayer ? " (multiplayer)" : " (single-player)"));
 
         } catch (Exception e) {
-            System.err.println("Error saving chunk data: " + e.getMessage());
+            GameLogger.info("Error saving chunk data: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -361,13 +360,13 @@ public class World {
                 objectManager.addObjectToChunk(chunkPos, obj);
             }
 
-            System.out.println("Loaded chunk data: " + filename +
+            GameLogger.info("Loaded chunk data: " + filename +
                 (isMultiplayer ? " (multiplayer)" : " (single-player)"));
 
             return chunk;
 
         } catch (Exception e) {
-            System.err.println("Error loading chunk data: " + e.getMessage());
+            GameLogger.info("Error loading chunk data: " + e.getMessage());
             e.printStackTrace();
             return null;
         }
@@ -399,9 +398,9 @@ public class World {
     public void save() {
         if (player != null) {
             updatePlayerData();
-            System.out.println("Saving latest player state:");
-            System.out.println("Position: " + currentPlayerData.getX() + "," + currentPlayerData.getY());
-            System.out.println("Inventory: " + currentPlayerData.getInventoryItems());
+            GameLogger.info("Saving latest player state:");
+            GameLogger.info("Position: " + currentPlayerData.getX() + "," + currentPlayerData.getY());
+            GameLogger.info("Inventory: " + currentPlayerData.getInventoryItems());
         }
     }
     public String getName() {
@@ -474,7 +473,7 @@ public class World {
             // Save the newly generated chunk
             saveChunkData(chunkPos, chunk, isMultiplayer);
 
-            System.out.println("Generated new chunk at " + chunkPos.x + "," + chunkPos.y +
+            GameLogger.info("Generated new chunk at " + chunkPos.x + "," + chunkPos.y +
                 " with biome " + biome.getName() +
                 (isMultiplayer ? " (multiplayer)" : " (single-player)"));
         }
@@ -529,11 +528,11 @@ public class World {
                     }
                 }
 
-                System.out.println("Loaded chunk from save at " + chunkPos.x + "," + chunkPos.y);
+                GameLogger.info("Loaded chunk from save at " + chunkPos.x + "," + chunkPos.y);
                 return chunk;
             }
         } catch (Exception e) {
-            System.err.println("Error loading chunk: " + e.getMessage());
+            GameLogger.info("Error loading chunk: " + e.getMessage());
         }
 
         return null;
@@ -579,7 +578,7 @@ public class World {
                     // Generate objects specific to the biome
                     objectManager.generateObjectsForChunk(chunkPos, newChunk, biome);
 
-                    System.out.println("Created new chunk at " + x + "," + y + " with biome " + biome.getName());
+                    GameLogger.info("Created new chunk at " + x + "," + y + " with biome " + biome.getName());
                 }
             }
         }
@@ -827,7 +826,7 @@ public class World {
         int worldX = (int) playerX / TILE_SIZE;
         int worldY = (int) playerY / TILE_SIZE;
         Biome currentBiome = getBiomeAt(worldX, worldY);
-        System.out.println("Current position: (" + worldX + ", " + worldY + ") Biome: " + currentBiome.getName());
+        GameLogger.info("Current position: (" + worldX + ", " + worldY + ") Biome: " + currentBiome.getName());
     }
 
     private Biome getTransitionBiome(BiomeType type1, BiomeType type2, double noise, double threshold) {

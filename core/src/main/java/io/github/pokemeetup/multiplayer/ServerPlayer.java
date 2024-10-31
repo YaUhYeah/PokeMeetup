@@ -2,6 +2,7 @@ package io.github.pokemeetup.multiplayer;
 
 import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.system.PlayerData;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,7 +26,7 @@ public class ServerPlayer {
         this.isRunning = false;
         this.lastSaveTime = System.currentTimeMillis();
         this.inventory = new ArrayList<>();
-        System.out.println("Created new ServerPlayer: " + username + " at (" + x + ", " + y + ")");
+        GameLogger.info("Created new ServerPlayer: " + username + " at (" + x + ", " + y + ")");
     }
 
     public void updatePosition(float x, float y, String direction, boolean isMoving) {
@@ -37,13 +38,13 @@ public class ServerPlayer {
         this.direction = direction;
         this.isMoving = isMoving;
 
-        System.out.println("Player " + username + " moved from (" + oldX + "," + oldY +
+        GameLogger.info("Player " + username + " moved from (" + oldX + "," + oldY +
             ") to (" + x + "," + y + ") facing " + direction);
     }
 
     public void updateInventory(List<String> items) {
         this.inventory = new ArrayList<>(items);
-        System.out.println("Updated inventory for " + username + ": " + items);
+        GameLogger.info("Updated inventory for " + username + ": " + items);
     }
 
     public PlayerData getData() {
@@ -54,7 +55,7 @@ public class ServerPlayer {
 
     public void loadFromData(PlayerData data) {
         if (data == null) {
-//            System.out.println(STR."Warning: Null PlayerData for \{username}");
+//            GameLogger.info(STR."Warning: Null PlayerData for \{username}");
             return;
         }
 
@@ -67,7 +68,7 @@ public class ServerPlayer {
             inventory = new ArrayList<>(data.getInventoryItems());
         }
 
-//        System.out.println(STR."Loaded data for \{username} at position (\{position.x},\{position.y})");
+//        GameLogger.info(STR."Loaded data for \{username} at position (\{position.x},\{position.y})");
     }
 
     // Getters remain the same
@@ -80,7 +81,7 @@ public class ServerPlayer {
     public long getLastSaveTime() { return lastSaveTime; }
     public void updateLastSaveTime(long time) {
         this.lastSaveTime = time;
-        System.out.println("Updated save time for " + username);
+        GameLogger.info("Updated save time for " + username);
     }
     public List<String> getInventory() { return new ArrayList<>(inventory); }
 }

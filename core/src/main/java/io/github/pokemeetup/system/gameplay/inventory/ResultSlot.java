@@ -8,6 +8,7 @@ import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
 import com.badlogic.gdx.scenes.scene2d.utils.ClickListener;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
+import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingResult;
 import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingSystem;
 import io.github.pokemeetup.utils.TextureManager;
 
@@ -16,6 +17,7 @@ public class ResultSlot extends Table {
     private final Image itemImage;
     private final Label countLabel;
     private Item craftedItem;
+    private Item item;
 
     public ResultSlot(CraftingSystem craftingSystem, Skin skin) {
         this.craftingSystem = craftingSystem;
@@ -48,25 +50,35 @@ public class ResultSlot extends Table {
             @Override
             public void clicked(InputEvent event, float x, float y) {
                 if (craftedItem != null) {
-                    craftingSystem.craftItem();
                     updateVisuals();
                 }
             }
         });
 
         updateVisuals();
+    }public void setCraftingResult(CraftingResult result) {
+        if (result != null) {
+            // Get the crafted item from ItemManager
+            item = ItemManager.getItem(result.getItemId());
+            if (item != null) {
+                item.setCount(result.getCount());
+                updateVisuals();
+            }
+        } else {
+            item = null;
+            updateVisuals();
+        }
     }
 
     public void setCraftedItem(Item item) {
         this.craftedItem = item;
         updateVisuals();
     }
-
     private void updateVisuals() {
-        if (craftedItem != null) {
-            itemImage.setDrawable(new TextureRegionDrawable(craftedItem.getIcon()));
-            if (craftedItem.getCount() > 1) {
-                countLabel.setText(String.valueOf(craftedItem.getCount()));
+        if (item != null && item.getCount() > 0) {
+            itemImage.setDrawable(new TextureRegionDrawable(item.getIcon()));
+            if (item.getCount() > 1) {
+                countLabel.setText(String.valueOf(item.getCount()));
                 countLabel.setVisible(true);
             } else {
                 countLabel.setVisible(false);

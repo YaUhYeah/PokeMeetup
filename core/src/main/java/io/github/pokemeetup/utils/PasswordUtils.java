@@ -32,7 +32,7 @@ public class PasswordUtils {
         try {
             return BCrypt.withDefaults().hashToString(12, password.toCharArray());
         } catch (Exception e) {
-            System.err.println("Error hashing password: " + e.getMessage());
+            GameLogger.info("Error hashing password: " + e.getMessage());
             return null;
         }
     }
@@ -40,12 +40,12 @@ public class PasswordUtils {
     public static boolean verifyPassword(String plainPassword, String storedHash) {
         try {
             if (storedHash == null) {
-                System.out.println("Stored hash is null for password verification");
+                GameLogger.info("Stored hash is null for password verification");
                 return false;
             }
             return BCrypt.verifyer().verify(plainPassword.toCharArray(), storedHash).verified;
         } catch (Exception e) {
-            System.err.println("Error verifying password: " + e.getMessage());
+            GameLogger.info("Error verifying password: " + e.getMessage());
             return false;
         }
     }

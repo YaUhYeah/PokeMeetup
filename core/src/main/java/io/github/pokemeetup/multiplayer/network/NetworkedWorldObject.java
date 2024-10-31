@@ -40,17 +40,21 @@ public class NetworkedWorldObject {
     }
 
     public static NetworkedWorldObject createFromUpdate(NetworkProtocol.WorldObjectUpdate update) {
-        NetworkedWorldObject obj = switch (update.objectType) {
-            case TREE -> new NetworkedTree(update.x, update.y, update.textureName);
-            case POKEBALL -> new NetworkedPokeball(update.x, update.y, update.textureName);
-            default -> null;
-            // Add other object types as needed
-        };
+        NetworkedWorldObject obj = null;
+
+        if (update.objectType == ObjectType.TREE) {
+            obj = new NetworkedTree(update.x, update.y, update.textureName);
+        } else if (update.objectType == ObjectType.POKEBALL) {
+            obj = new NetworkedPokeball(update.x, update.y, update.textureName);
+        }
+        // Add other object types as needed
+
         if (obj != null) {
             obj.updateFromNetwork(update);
         }
         return obj;
     }
+
 
     public String getId() {
         return id;

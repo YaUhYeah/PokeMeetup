@@ -16,12 +16,12 @@
 
 package io.github.pokemeetup.lwjgl3;
 
+import io.github.pokemeetup.utils.GameLogger;
 import org.lwjgl.system.macosx.LibC;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
-import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 
 /**
@@ -93,7 +93,7 @@ public class StartupHelper {
         // check whether the JVM was previously restarted
         // avoids looping, but most certainly leads to a crash
         if ("true".equals(System.getProperty(JVM_RESTARTED_ARG))) {
-            System.err.println(
+            GameLogger.info(
                     "There was a problem evaluating whether the JVM was started with the -XstartOnFirstThread argument.");
             return false;
         }
@@ -107,7 +107,7 @@ public class StartupHelper {
         //String javaExecPath = ProcessHandle.current().info().command().orElseThrow();
 
         if (!(new File(javaExecPath)).exists()) {
-            System.err.println(
+            GameLogger.info(
                     "A Java installation could not be found. If you are distributing this app with a bundled JRE, be sure to set the -XstartOnFirstThread argument manually!");
             return false;
         }
@@ -115,7 +115,6 @@ public class StartupHelper {
         jvmArgs.add(javaExecPath);
         jvmArgs.add("-XstartOnFirstThread");
         jvmArgs.add("-D" + JVM_RESTARTED_ARG + "=true");
-        jvmArgs.addAll(ManagementFactory.getRuntimeMXBean().getInputArguments());
         jvmArgs.add("-cp");
         jvmArgs.add(System.getProperty("java.class.path"));
         String mainClass = System.getenv("JAVA_MAIN_CLASS_" + pid);
@@ -124,7 +123,7 @@ public class StartupHelper {
             if (trace.length > 0) {
                 mainClass = trace[trace.length - 1].getClassName();
             } else {
-                System.err.println("The main class could not be determined.");
+                GameLogger.info("The main class could not be determined.");
                 return false;
             }
         }
@@ -142,13 +141,13 @@ public class StartupHelper {
                 String line;
 
                 while ((line = processOutput.readLine()) != null) {
-                    System.out.println(line);
+                    GameLogger.info(line);
                 }
 
                 process.waitFor();
             }
         } catch (Exception e) {
-            System.err.println("There was a problem restarting the JVM");
+            GameLogger.info("There was a problem restarting the JVM");
             e.printStackTrace();
         }
 

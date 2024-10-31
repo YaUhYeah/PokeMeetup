@@ -4,6 +4,7 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.utils.Json;
 import io.github.pokemeetup.multiplayer.server.config.ClientConfig;
+import io.github.pokemeetup.utils.GameLogger;
 
 public class ClientConfigLoader {
     /**
@@ -18,7 +19,7 @@ public class ClientConfigLoader {
             FileHandle fileHandle = Gdx.files.internal(configFilePath);
 
             if (!fileHandle.exists()) {
-                System.err.println("Client configuration file not found at: " + configFilePath);
+                GameLogger.info("Client configuration file not found at: " + configFilePath);
                 return null;
             }
 
@@ -32,14 +33,14 @@ public class ClientConfigLoader {
             if (validateClientConfig(config)) {
                 // Set the singleton instance
                 ClientConfig.setInstance(config);
-                System.out.println("Client configuration loaded successfully.");
+                GameLogger.info("Client configuration loaded successfully.");
                 return config;
             } else {
-                System.err.println("Invalid client configuration.");
+                GameLogger.info("Invalid client configuration.");
                 return null;
             }
         } catch (Exception e) {
-            System.err.println("Failed to load client configuration: " + e.getMessage());
+            GameLogger.info("Failed to load client configuration: " + e.getMessage());
             e.printStackTrace();
             return null;
         }
@@ -53,19 +54,19 @@ public class ClientConfigLoader {
      */
     private static boolean validateClientConfig(ClientConfig config) {
         if (config == null) {
-            System.err.println("ClientConfig is null.");
+            GameLogger.info("ClientConfig is null.");
             return false;
         }
         if (config.getServerIP() == null || config.getServerIP().trim().isEmpty()) {
-            System.err.println("serverIP is missing or empty in ClientConfig.");
+            GameLogger.info("serverIP is missing or empty in ClientConfig.");
             return false;
         }
         if (config.getTcpPort() <= 0 || config.getTcpPort() > 65535) {
-            System.err.println("tcpPort is invalid in ClientConfig: " + config.getTcpPort());
+            GameLogger.info("tcpPort is invalid in ClientConfig: " + config.getTcpPort());
             return false;
         }
         if (config.getUdpPort() <= 0 || config.getUdpPort() > 65535) {
-            System.err.println("udpPort is invalid in ClientConfig: " + config.getUdpPort());
+            GameLogger.info("udpPort is invalid in ClientConfig: " + config.getUdpPort());
             return false;
         }
         return true;

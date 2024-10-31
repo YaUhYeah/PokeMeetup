@@ -12,7 +12,6 @@ import java.io.IOException;
 public class GameClientSingleton {
     private static GameClient instance;
     private static final Object lock = new Object();
-    private static final Logger logger = LoggerFactory.getLogger(GameClientSingleton.class);
 
     private GameClientSingleton() {}
 

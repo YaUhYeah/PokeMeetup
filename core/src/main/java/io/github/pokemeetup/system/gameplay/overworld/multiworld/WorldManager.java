@@ -6,106 +6,143 @@ import com.badlogic.gdx.utils.Json;
 import com.badlogic.gdx.utils.JsonWriter;
 import io.github.pokemeetup.multiplayer.server.ServerStorageSystem;
 import io.github.pokemeetup.multiplayer.server.entity.Entity;
+import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
+import io.github.pokemeetup.utils.GameLogger;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
 import java.util.*;
-import java.util.stream.Stream;
 
 public class WorldManager {
-    private static final String WORLDS_DIR = "assets/worlds/";
+    private static final String WORLDS_DIR = "worlds/"; // Simplified path for Android
     private final Json json;
     private final Map<String, WorldData> worlds;
-    private WorldData currentWorld; // Active world
+    private WorldData currentWorld;
+    private final ServerStorageSystem storage;
 
     public WorldManager(ServerStorageSystem storage) {
         this.storage = storage;
-
         this.worlds = new HashMap<>();
         this.json = new Json();
-        // Configure Json serializer
         json.setOutputType(JsonWriter.OutputType.json);
         WorldData.setupJson(json);
     }
-    private final ServerStorageSystem storage;
 
-    /**
-     * Ensures that the directory for the specified world exists.
-     *
-     * @param worldName The name of the world.
-     * @throws IOException If directory creation fails.
-     */
-    public void ensureWorldDirectory(String worldName) throws IOException {
-        Path worldDirPath = Paths.get(WORLDS_DIR, worldName);
-        if (!Files.exists(worldDirPath)) {
-            Files.createDirectories(worldDirPath);
-            System.out.println("Created world directory: " + worldDirPath.toAbsolutePath());
+    private void ensureWorldDirectory(String worldName) {
+        FileHandle worldDir = Gdx.files.local(WORLDS_DIR + worldName);
+        if (!worldDir.exists()) {
+            worldDir.mkdirs();
+            GameLogger.info("Created world directory: " + worldDir.path());
         }
     }
 
-    /**
-     * Creates a new world with the specified parameters.
-     *
-     * @param name             The name of the new world.
-     * @param seed             The seed for world generation.
-     * @param treeSpawnRate    The spawn rate for trees.
-     * @param pokemonSpawnRate The spawn rate for Pokémon.
-     * @return The created WorldData object.
-     * @throws IOException If world creation fails.
-     */
-    public WorldData createWorld(String name, long seed, float treeSpawnRate, float pokemonSpawnRate) throws IOException {
-        // Create new world data
-        WorldData.WorldConfig config = new WorldData.WorldConfig(seed);
-        config.setTreeSpawnRate(treeSpawnRate);
-        config.setPokemonSpawnRate(pokemonSpawnRate);
+    public WorldData createWorld(String name, long seed, float treeSpawnRate, float pokemonSpawnRate) {
+        try {
+            WorldData.WorldConfig config = new WorldData.WorldConfig(seed);
+            config.setTreeSpawnRate(treeSpawnRate);
+            config.setPokemonSpawnRate(pokemonSpawnRate);
 
-        WorldData world = new WorldData(name, System.currentTimeMillis(), config);
+            WorldData world = new WorldData(name, System.currentTimeMillis(), config);
+            ensureWorldDirectory(name);
 
-        // Ensure world directory exists
-        ensureWorldDirectory(name);
+            worlds.put(name, world);
+            saveWorld(world);
+            GameLogger.info("Created new world: " + name);
 
-        // Save world and update cache
-        worlds.put(name, world);
-        saveWorld(world);
-        System.out.println("Created new world: " + name);
+            if (currentWorld == null) {
+                currentWorld = world;
+                GameLogger.info("Set current world to: " + name);
+            }
 
-        // Set as current world if none is set
-        if (currentWorld == null) {
-            currentWorld = world;
-            System.out.println("Set current world to: " + name);
+            return world;
+        } catch (Exception e) {
+            GameLogger.error("Failed to create world: " + name + " - " + e.getMessage());
+            throw new RuntimeException("World creation failed", e);
         }
-
-        return world;
     }
 
-    /**
-     * Saves the specified world data to its corresponding JSON file.
-     *
-     * @param world The WorldData object to save.
-     */
     public synchronized void saveWorld(WorldData world) {
         if (world == null) return;
 
         try {
-            Json json = new Json();
             json.setUsePrototypes(false);
-
             String jsonString = json.prettyPrint(world);
-            Path worldPath = Paths.get("assets/worlds", world.getName(), "world.json");
 
-            // Create directories if they don't exist
-            Files.createDirectories(worldPath.getParent());
+            FileHandle worldFile = Gdx.files.local(WORLDS_DIR + world.getName() + "/world.json");
+            FileHandle tempFile = Gdx.files.local(WORLDS_DIR + world.getName() + "/world.tmp");
 
-            // Write atomically using temp file
-            Path tempFile = worldPath.resolveSibling(world.getName() + ".tmp");
-            Files.writeString(tempFile, jsonString);
-            Files.move(tempFile, worldPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            // Write to temp file first
+            tempFile.writeString(jsonString, false);
 
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to save world: " + e.getMessage(), e);
+            // Then move to final location
+            if (worldFile.exists()) {
+                worldFile.delete();
+            }
+            tempFile.moveTo(worldFile);
+
+            GameLogger.info("Saved world: " + world.getName());
+        } catch (Exception e) {
+            GameLogger.error("Failed to save world: " + world.getName() + " - " + e.getMessage());
         }
     }
+
+    public void init() {
+        try {
+            FileHandle worldsDir = Gdx.files.local(WORLDS_DIR);
+            if (!worldsDir.exists()) {
+                worldsDir.mkdirs();
+                GameLogger.info("Created worlds directory");
+            }
+
+            loadWorlds();
+
+            if (currentWorld == null && !worlds.isEmpty()) {
+                currentWorld = worlds.values().iterator().next();
+                GameLogger.info("Set current world to: " + currentWorld.getName());
+            }
+        } catch (Exception e) {
+            GameLogger.error("Failed to initialize WorldManager: " + e.getMessage());
+        }
+    }
+
+    private void loadWorlds() {
+        worlds.clear();
+        FileHandle worldsDir = Gdx.files.local(WORLDS_DIR);
+
+        if (worldsDir.exists() && worldsDir.isDirectory()) {
+            for (FileHandle dir : worldsDir.list()) {
+                if (dir.isDirectory()) {
+                    FileHandle worldFile = dir.child("world.json");
+                    if (worldFile.exists()) {
+                        try {
+                            String jsonContent = worldFile.readString();
+                            WorldData world = json.fromJson(WorldData.class, jsonContent);
+                            worlds.put(world.getName(), world);
+                            GameLogger.info("Loaded world: " + world.getName());
+                        } catch (Exception e) {
+                            GameLogger.error("Failed to load world from: " + worldFile.path());
+                        }
+                    }
+                }
+            }
+        }
+        GameLogger.info("Loaded " + worlds.size() + " worlds");
+    }
+
+    private void deleteDirectoryRecursively(FileHandle directory) {
+        if (directory.exists()) {
+            directory.deleteDirectory();
+        }
+    }
+
+    public void deleteWorld(String name) {
+        WorldData world = worlds.remove(name);
+        if (world != null) {
+            FileHandle worldDir = Gdx.files.local(WORLDS_DIR + name);
+            deleteDirectoryRecursively(worldDir);
+            GameLogger.info("Deleted world: " + name);
+        }
+    }
+
+    // Storage-related methods
     public void saveWorldToStorage(WorldData world) {
         storage.saveWorld(world);
     }
@@ -118,169 +155,56 @@ public class WorldManager {
         return storage.getAllWorlds();
     }
 
-    /**
-     * Initializes the WorldManager by loading existing worlds.
-     */
-    public void init() {
-        Path worldsDirPath = Paths.get(WORLDS_DIR);
-        try {
-            if (!Files.exists(worldsDirPath)) {
-                Files.createDirectories(worldsDirPath);
-                System.out.println("Created worlds directory: " + worldsDirPath.toAbsolutePath());
-            }
-            loadWorlds();
-
-            // Set currentWorld to a default world if not set
-            if (currentWorld == null && !worlds.isEmpty()) {
-                currentWorld = worlds.values().iterator().next();
-                System.out.println("Set current world to: " + currentWorld.getName());
-            }
-        } catch (IOException e) {
-            System.err.println("Failed to initialize WorldManager: " + e.getMessage());
-            e.printStackTrace();
-        }
+    // Getters and setters
+    public Map<String, WorldData> getWorlds() {
+        return new HashMap<>(worlds);
     }
-
-    /**
-     * Loads all worlds from the worlds directory.
-     */
-    private void loadWorlds() {
-        worlds.clear();
-        Path worldsDirPath = Paths.get(WORLDS_DIR);
-
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(worldsDirPath)) {
-            for (Path dir : stream) {
-                if (Files.isDirectory(dir)) {
-                    Path worldFilePath = dir.resolve("world.json");
-                    if (Files.exists(worldFilePath)) {
-                        try {
-                            String jsonContent = Files.readString(worldFilePath, StandardCharsets.UTF_8);
-                            WorldData world = json.fromJson(WorldData.class, jsonContent);
-                            worlds.put(world.getName(), world);
-                            System.out.println("Loaded world: " + world.getName());
-                        } catch (Exception e) {
-                            System.err.println("Failed to load world from: " + worldFilePath.toAbsolutePath());
-                            e.printStackTrace();
-                        }
-                    }
-                }
-            }
-            System.out.println("Loaded " + worlds.size() + " worlds.");
-        } catch (IOException e) {
-            System.err.println("Error loading worlds: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
 
     public WorldData getWorld(String name) {
         return worlds.get(name);
     }
 
-
-    /**
-     * Recursively deletes a directory and its contents.
-     *
-     * @param path The path to the directory.
-     * @throws IOException If deletion fails.
-     */
-    private void deleteDirectoryRecursively(Path path) throws IOException {
-        if (Files.notExists(path)) return;
-
-        try (Stream<Path> walk = Files.walk(path)) {
-            walk.sorted(Comparator.reverseOrder())
-                .forEach(p -> {
-                    try {
-                        Files.delete(p);
-                    } catch (IOException e) {
-                        System.err.println("Failed to delete " + p.toAbsolutePath() + ": " + e.getMessage());
-                    }
-                });
-        }
-    }
-
-    /**
-     * Deletes the specified world.
-     *
-     * @param name The name of the world to delete.
-     */
-    public void deleteWorld(String name) {
-        WorldData world = worlds.remove(name);
-        if (world != null) {
-            Path worldDirPath = Paths.get(WORLDS_DIR, name);
-            try {
-                deleteDirectoryRecursively(worldDirPath);
-                System.out.println("Deleted world: " + name);
-            } catch (IOException e) {
-                System.err.println("Failed to delete world directory: " + worldDirPath.toAbsolutePath());
-                e.printStackTrace();
-            }
-        }
-    }
-
-    public Map<String, WorldData> getWorlds() {
-        return new HashMap<>(worlds);
-    }
-
-    public void refreshWorlds() {
-        loadWorlds();
-    }
-
-    // Getter for currentWorld
     public WorldData getCurrentWorld() {
         return currentWorld;
     }
 
-    // Setter for currentWorld
     public void setCurrentWorld(String worldName) {
         WorldData world = worlds.get(worldName);
         if (world != null) {
             currentWorld = world;
-            System.out.println("Switched current world to: " + worldName);
+            GameLogger.info("Switched current world to: " + worldName);
         } else {
-            System.err.println("World not found: " + worldName);
+            GameLogger.error("World not found: " + worldName);
         }
     }
 
-    // Methods to manage entities in the current world
-
-    /**
-     * Adds an entity to the current world.
-     *
-     * @param entity The entity to add.
-     */
+    // Entity management
     public void addEntityToCurrentWorld(Entity entity) {
         if (currentWorld != null) {
             currentWorld.addEntity(entity);
-            saveWorld(currentWorld); // Save after adding
+            saveWorld(currentWorld);
         } else {
-            System.err.println("No current world set. Cannot add entity.");
+            GameLogger.error("No current world set. Cannot add entity.");
         }
     }
 
-    /**
-     * Removes an entity from the current world by its UUID.
-     *
-     * @param entityId The UUID of the entity to remove.
-     */
     public void removeEntityFromCurrentWorld(UUID entityId) {
         if (currentWorld != null) {
             currentWorld.removeEntity(entityId);
-            saveWorld(currentWorld); // Save after removing
+            saveWorld(currentWorld);
         } else {
-            System.err.println("No current world set. Cannot remove entity.");
+            GameLogger.error("No current world set. Cannot remove entity.");
         }
     }
 
-    /**
-     * Retrieves all entities from the current world.
-     *
-     * @return A collection of entities.
-     */
     public Collection<Entity> getEntitiesFromCurrentWorld() {
         if (currentWorld != null) {
             return currentWorld.getEntities();
         }
         return new ArrayList<>();
+    }
+
+    public void refreshWorlds() {
+        loadWorlds();
     }
 }

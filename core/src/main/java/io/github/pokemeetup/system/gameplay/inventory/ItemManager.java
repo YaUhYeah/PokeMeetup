@@ -2,6 +2,7 @@ package io.github.pokemeetup.system.gameplay.inventory;
 
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.Collection;
 import java.util.HashMap;
@@ -13,11 +14,12 @@ public class ItemManager {
 
     public static void initialize(TextureAtlas atlas) {
         if (initialized) {
-            System.out.println("ItemManager already initialized");
+
+            GameLogger.info("ItemManager already initialized");
             return;
         }
 
-        System.out.println("Initializing ItemManager with items...");
+        GameLogger.info("Initializing ItemManager with items...");
 
         addItem("Pokeball", "pokeball_item", atlas);
         addItem("Potion", "potion_item", atlas);
@@ -29,7 +31,7 @@ public class ItemManager {
 
         // Debug each item to ensure all textures loaded
         items.forEach((name, item) -> {
-            System.out.println("Item loaded: " + name + ", Texture exists: " + (item.getIcon() != null));
+            GameLogger.info("Item loaded: " + name + ", Texture exists: " + (item.getIcon() != null));
         });
     }
 
@@ -37,7 +39,7 @@ public class ItemManager {
     private static void addItem(String name, String regionName, TextureAtlas atlas) {
         TextureRegion texture = atlas.findRegion(regionName);
         if (texture == null) {
-            System.err.println("Warning: Texture for item '" + name + "' is missing. Using placeholder.");
+            GameLogger.info("Warning: Texture for item '" + name + "' is missing. Using placeholder.");
             texture = atlas.findRegion("missing_texture"); // Add "missing_texture" to your atlas
         }
         items.put(name, new Item(name, regionName, texture));
@@ -46,13 +48,13 @@ public class ItemManager {
 
     public static Item getItem(String itemName) {
         if (!initialized) {
-            System.err.println("ItemManager not initialized when requesting item: " + itemName);
+            GameLogger.info("ItemManager not initialized when requesting item: " + itemName);
             return null;
         }
 
         Item item = items.get(itemName);
         if (item == null) {
-            System.err.println("Item not found: " + itemName + ". Available items: " + items.keySet());
+            GameLogger.info("Item not found: " + itemName + ". Available items: " + items.keySet());
         }
         return item;
     }

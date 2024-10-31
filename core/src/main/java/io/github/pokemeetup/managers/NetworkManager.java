@@ -7,6 +7,7 @@ import io.github.pokemeetup.multiplayer.ServerPlayer;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.multiplayer.server.GameServer;
 import io.github.pokemeetup.multiplayer.server.entity.Entity;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -61,9 +62,9 @@ public class NetworkManager {
             // Start world state updates
             startWorldStateUpdates();
 
-            System.out.println("Network manager started on port " + port);
+            GameLogger.info("Network manager started on port " + port);
         } catch (Exception e) {
-            System.err.println("Failed to start network manager: " + e.getMessage());
+            GameLogger.info("Failed to start network manager: " + e.getMessage());
             throw new RuntimeException(e);
         }
     }
@@ -73,7 +74,7 @@ public class NetworkManager {
             try {
                 broadcastWorldState();
             } catch (Exception e) {
-                System.err.println("Error in world state update: " + e.getMessage());
+                GameLogger.info("Error in world state update: " + e.getMessage());
             }
         }, 0, UPDATE_RATE, TimeUnit.MILLISECONDS);
     }
@@ -112,7 +113,7 @@ public class NetworkManager {
     }
 
     private void handlePlayerConnect(Connection connection) {
-        System.out.println("Client connected: " + connection.getID());
+        GameLogger.info("Client connected: " + connection.getID());
         // Auth will be handled when login request is received
     }
 
@@ -120,7 +121,7 @@ public class NetworkManager {
         String username = connectionToPlayer.remove(connection.getID());
         if (username != null) {
             gameServer.getPlayerManager().logoutPlayer(username);
-//            System.out.println(STR."Player disconnected: \{username}");
+//            GameLogger.info(STR."Player disconnected: \{username}");
         }
     }
 
@@ -133,7 +134,7 @@ public class NetworkManager {
             }
             // Handle other message types
         } catch (Exception e) {
-            System.err.println("Error handling network message: " + e.getMessage());
+            GameLogger.info("Error handling network message: " + e.getMessage());
         }
     }
 

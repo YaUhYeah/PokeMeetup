@@ -4,3 +4,6 @@
 include 'lwjgl3', 'core'
 include 'android'
 include 'android', 'core'
+
+include 'android', 'core'
+rootProject.name = "PokeMeetup"

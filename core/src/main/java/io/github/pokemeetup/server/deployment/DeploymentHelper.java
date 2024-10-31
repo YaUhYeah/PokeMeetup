@@ -8,26 +8,28 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public class DeploymentHelper {
     public static void createServerDeployment(Path deploymentDir) throws IOException {
         // Create directory structure
-        Files.createDirectories(deploymentDir);
-        Files.createDirectories(deploymentDir.resolve("config"));
-        Files.createDirectories(deploymentDir.resolve("plugins"));
-        Files.createDirectories(deploymentDir.resolve("worlds"));
-        Files.createDirectories(deploymentDir.resolve("logs"));
+        createDirectory(deploymentDir);
+        createDirectory(Paths.get(deploymentDir.toString(), "config"));
+        createDirectory(Paths.get(deploymentDir.toString(), "plugins"));
+        createDirectory(Paths.get(deploymentDir.toString(), "worlds"));
+        createDirectory(Paths.get(deploymentDir.toString(), "logs"));
 
         // Copy server jar
         Path serverJar = Paths.get("build/libs/pokemon-meetup-server.jar");
-        Files.copy(serverJar, deploymentDir.resolve("server.jar"));
+        Files.copy(serverJar, Paths.get(deploymentDir.toString(), "server.jar"));
 
         // Create start scripts
         createStartScript(deploymentDir, "start.bat", "@echo off\njava -jar server.jar");
         createStartScript(deploymentDir, "start.sh", "#!/bin/bash\njava -jar server.jar");
 
         // Make shell script executable on Unix
-        deploymentDir.resolve("start.sh").toFile().setExecutable(true);
+        Paths.get(deploymentDir.toString(), "start.sh").toFile().setExecutable(true);
 
         // Create default config
         createDefaultConfig(deploymentDir);
@@ -36,9 +38,14 @@ public class DeploymentHelper {
         createReadme(deploymentDir);
     }
 
-    private static void createStartScript(Path deploymentDir, String filename, String baseCommand) throws IOException {
-        Path scriptPath = deploymentDir.resolve(filename);
+    private static void createDirectory(Path dir) throws IOException {
+        if (!Files.exists(dir)) {
+            Files.createDirectories(dir);
+        }
+    }
 
+    private static void createStartScript(Path deploymentDir, String filename, String baseCommand) throws IOException {
+        Path scriptPath = Paths.get(deploymentDir.toString(), filename);
         StringBuilder script = new StringBuilder();
         boolean isWindows = filename.endsWith(".bat");
 
@@ -72,7 +79,6 @@ public class DeploymentHelper {
                 .append("%JAVA% %JAVA_OPTS% -jar server.jar\n")
                 .append("pause\n");
         } else {
-            // Unix shell script (bash)
             script.append("#!/bin/bash\n\n")
                 .append("# Set Java path if needed\n")
                 .append("if [ -n \"$JAVA_HOME\" ]; then\n")
@@ -104,161 +110,23 @@ public class DeploymentHelper {
                 .append("    -XX:+PerfDisableSharedMem \\\n")
                 .append("    -XX:MaxTenuringThreshold=1 \\\n")
                 .append("    -Dfile.encoding=UTF-8\"\n\n")
-                .append("# Create logs directory if it doesn't exist\n")
-                .append("mkdir -p logs\n\n")
                 .append("# Start server\n")
                 .append("echo \"Starting Pokemon Meetup Server...\"\n")
                 .append("$JAVA $JAVA_OPTS -jar server.jar \"$@\" >> logs/latest.log 2>&1 &\n\n")
-                .append("# Store PID for potential script usage\n")
-                .append("echo $! > server.pid\n\n")
-                .append("# Optional: Tail the log file\n")
+                .append("echo $! > server.pid\n")
                 .append("tail -f logs/latest.log\n");
         }
 
         // Write script file
-        Files.writeString(scriptPath, script.toString(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        Files.write(scriptPath, Arrays.asList(script.toString().split("\n")), StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
         // Make shell script executable on Unix systems
         if (!isWindows) {
             scriptPath.toFile().setExecutable(true, false);
         }
-
-        System.out.println("Created start script: " + scriptPath.getFileName());
     }
 
-    public static void createConsoleScript(Path deploymentDir) throws IOException {
-        // Create an additional console script for server management
-        String consoleScript;
-
-        if (Files.exists(deploymentDir.resolve("start.bat"))) {
-            // Windows console script
-            consoleScript = """
-                @echo off
-                setlocal enabledelayedexpansion
-
-                :menu
-                cls
-                echo Pokemon Meetup Server Console
-                echo ============================
-                echo 1. Start Server
-                echo 2. Stop Server
-                echo 3. View Logs
-                echo 4. Backup World
-                echo 5. Reload Plugins
-                echo 6. Exit
-                echo.
-
-                set /p choice="Select an option: "
-
-                if "%choice%"=="1" call :startServer
-                if "%choice%"=="2" call :stopServer
-                if "%choice%"=="3" call :viewLogs
-                if "%choice%"=="4" call :backupWorld
-                if "%choice%"=="5" call :reloadPlugins
-                if "%choice%"=="6" exit
-
-                goto menu
-
-                :startServer
-                start /B start.bat
-                goto :eof
-
-                :stopServer
-                taskkill /F /IM java.exe
-                goto :eof
-
-                :viewLogs
-                type logs\\latest.log | more
-                pause
-                goto :eof
-
-                :backupWorld
-                set backup_dir=backups\\%date:~-4,4%%date:~-7,2%%date:~-10,2%
-                mkdir %backup_dir%
-                xcopy /E /I worlds %backup_dir%\\worlds
-                echo Backup created in %backup_dir%
-                pause
-                goto :eof
-
-                :reloadPlugins
-                echo Reloading plugins...
-                rem Add plugin reload command here
-                pause
-                goto :eof
-                """;
-        } else {
-            // Unix console script
-            consoleScript = """
-                #!/bin/bash
-
-                function show_menu {
-                    clear
-                    echo "Pokemon Meetup Server Console"
-                    echo "============================"
-                    echo "1. Start Server"
-                    echo "2. Stop Server"
-                    echo "3. View Logs"
-                    echo "4. Backup World"
-                    echo "5. Reload Plugins"
-                    echo "6. Exit"
-                    echo
-                }
-
-                function start_server {
-                    ./start.sh &
-                }
-
-                function stop_server {
-                    if [ -f server.pid ]; then
-                        kill $(cat server.pid)
-                        rm server.pid
-                    else
-                        pkill -f "java.*server.jar"
-                    fi
-                }
-
-                function view_logs {
-                    less logs/latest.log
-                }
-
-                function backup_world {
-                    backup_dir="backups/$(date +%Y%m%d)"
-                    mkdir -p "$backup_dir"
-                    cp -r worlds "$backup_dir/"
-                    echo "Backup created in $backup_dir"
-                    read -p "Press Enter to continue..."
-                }
-
-                function reload_plugins {
-                    echo "Reloading plugins..."
-                    # Add plugin reload command here
-                    read -p "Press Enter to continue..."
-                }
-
-                while true; do
-                    show_menu
-                    read -p "Select an option: " choice
-                    case $choice in
-                        1) start_server ;;
-                        2) stop_server ;;
-                        3) view_logs ;;
-                        4) backup_world ;;
-                        5) reload_plugins ;;
-                        6) exit 0 ;;
-                        *) echo "Invalid option" ;;
-                    esac
-                done
-                """;
-        }
-
-        Path consolePath = deploymentDir.resolve(Files.exists(deploymentDir.resolve("start.bat")) ? "console.bat" : "console.sh");
-        Files.writeString(consolePath, consoleScript, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-
-        // Make Unix script executable
-        if (!consolePath.toString().endsWith(".bat")) {
-            consolePath.toFile().setExecutable(true, false);
-        }
-    }
     private static void createDefaultConfig(Path deploymentDir) throws IOException {
         ServerConnectionConfig config = new ServerConnectionConfig(
             "0.0.0.0",
@@ -270,37 +138,32 @@ public class DeploymentHelper {
         );
 
         Json json = new Json();
-        Path configFile = deploymentDir.resolve("config/server.json");
-        Files.writeString(configFile, json.prettyPrint(config));
+        Path configFile = Paths.get(deploymentDir.toString(), "config/server.json");
+        Files.write(configFile, Arrays.asList(json.prettyPrint(config).split("\n")), StandardCharsets.UTF_8);
     }
 
     private static void createReadme(Path deploymentDir) throws IOException {
-        String readme = """
-            Pokemon Meetup Server
-            ====================
+        String readme =
+            "Pokemon Meetup Server\n" +
+                "====================\n\n" +
+                "Quick Start:\n" +
+                "1. Edit config/server.json to configure your server\n" +
+                "2. On Windows: Run start.bat\n" +
+                "   On Linux/Mac: Run ./start.sh\n" +
+                "3. Server will create necessary directories on first run\n\n" +
+                "Plugins:\n" +
+                "- Place plugin .jar files in the plugins directory\n" +
+                "- Server will load plugins automatically on startup\n\n" +
+                "Configuration:\n" +
+                "- Server settings: config/server.json\n" +
+                "- Plugin configs: config/<plugin-id>.json\n\n" +
+                "Logs:\n" +
+                "- Server logs are stored in the logs directory\n\n" +
+                "Support:\n" +
+                "- Issues: https://github.com/yourusername/pokemon-meetup/issues\n" +
+                "- Wiki: https://github.com/yourusername/pokemon-meetup/wiki\n";
 
-            Quick Start:
-            1. Edit config/server.json to configure your server
-            2. On Windows: Run start.bat
-               On Linux/Mac: Run ./start.sh
-            3. Server will create necessary directories on first run
-
-            Plugins:
-            - Place plugin .jar files in the plugins directory
-            - Server will load plugins automatically on startup
-
-            Configuration:
-            - Server settings: config/server.json
-            - Plugin configs: config/<plugin-id>.json
-
-            Logs:
-            - Server logs are stored in the logs directory
-
-            Support:
-            - Issues: https://github.com/yourusername/pokemon-meetup/issues
-            - Wiki: https://github.com/yourusername/pokemon-meetup/wiki
-            """;
-
-        Files.writeString(deploymentDir.resolve("README.md"), readme);
+        Path readmeFile = Paths.get(deploymentDir.toString(), "README.md");
+        Files.write(readmeFile, Arrays.asList(readme.split("\n")), StandardCharsets.UTF_8);
     }
 }

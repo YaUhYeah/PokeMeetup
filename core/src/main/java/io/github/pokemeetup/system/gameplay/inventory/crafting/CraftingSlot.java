@@ -100,7 +100,7 @@ public class CraftingSlot extends Table {
             item.setCount(newCount);
             updateVisuals();
         }
-        craftingSystem.setItemInGrid(row, col, item);
+//        craftingSystem.setItemInGrid(row, col, item);
     }
 
     public void setItem(Item newItem) {
@@ -111,7 +111,7 @@ public class CraftingSlot extends Table {
             this.count = 0;
         }
         updateVisuals();
-        craftingSystem.setItemInGrid(row, col, item);
+//        craftingSystem.setItemInGrid(row, col, item);
     }
 
     private void updateVisuals() {

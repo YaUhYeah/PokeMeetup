@@ -21,6 +21,7 @@ import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -82,7 +83,7 @@ public class GameServer {
 
 
         } catch (Exception e) {
-            System.err.println("Failed to initialize game world: " + e.getMessage());
+            GameLogger.info("Failed to initialize game world: " + e.getMessage());
             throw new RuntimeException("Failed to initialize server world" + e.getMessage());
         }
 
@@ -125,11 +126,11 @@ public class GameServer {
     }
 
     private void handlePlayerConnect(Connection connection) {
-        //        System.out.println(STR."New connection: \{connection.getID()}");
+        //        GameLogger.info(STR."New connection: \{connection.getID()}");
 
         if (playerManager.getOnlinePlayers().size() >= config.getMaxPlayers()) {
             connection.close();
-            System.out.println("Connection rejected: Max players reached");
+            GameLogger.info("Connection rejected: Max players reached");
         }
     }
 
@@ -159,16 +160,16 @@ public class GameServer {
                 broadcastNewPlayer(player);
                 sendExistingPlayers(connection);
 
-                //                System.out.println(STR."Player logged in successfully: \{player.getUsername()} at position (\{response.x}, \{response.y})");
+                //                GameLogger.info(STR."Player logged in successfully: \{player.getUsername()} at position (\{response.x}, \{response.y})");
             } else {
                 response.success = false;
                 response.message = "Login failed. Incorrect username or password.";
-                //   System.out.println(STR."Login failed for username: \{request.username}");
+                //   GameLogger.info(STR."Login failed for username: \{request.username}");
             }
 
             networkServer.sendToTCP(connection.getID(), response);
         } catch (Exception e) {
-            System.err.println("Error during login: " + e.getMessage());
+            GameLogger.info("Error during login: " + e.getMessage());
             e.printStackTrace();
 
             NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
@@ -189,7 +190,7 @@ public class GameServer {
             message.timestamp = System.currentTimeMillis();
         }
 
-        //        System.out.println(STR."Server received chat message from: \{message.sender} content: \{message.content}");
+        //        GameLogger.info(STR."Server received chat message from: \{message.sender} content: \{message.content}");
 
         // Broadcast to all connected clients except sender
         for (Connection conn : networkServer.getConnections()) {
@@ -197,7 +198,7 @@ public class GameServer {
                 try {
                     networkServer.sendToTCP(conn.getID(), message);
                 } catch (Exception e) {
-                    //                    System.err.println(STR."Failed to broadcast message to client \{conn.getID()}: \{e.getMessage()}");
+                    //                    GameLogger.info(STR."Failed to broadcast message to client \{conn.getID()}: \{e.getMessage()}");
                 }
             }
         }
@@ -233,7 +234,7 @@ public class GameServer {
             joinMessage
         );
 
-        System.out.println("Broadcasted new player join: " + newPlayer.getUsername() +
+        GameLogger.info("Broadcasted new player join: " + newPlayer.getUsername() +
             " at (" + joinMessage.x + "," + joinMessage.y + ")");
     }
 
@@ -256,7 +257,7 @@ public class GameServer {
 
                 networkServer.sendToTCP(connection.getID(), response);
 
-                System.out.println("Player registered: " + request.username);
+                GameLogger.info("Player registered: " + request.username);
             } else {
                 // Registration failed (e.g., username already taken)
                 NetworkProtocol.RegisterResponse response = new NetworkProtocol.RegisterResponse();
@@ -273,7 +274,7 @@ public class GameServer {
 
             networkServer.sendToTCP(connection.getID(), response);
 
-            System.err.println("Error during registration: " + e.getMessage());
+            GameLogger.info("Error during registration: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -302,7 +303,7 @@ public class GameServer {
      */
     public void start() {
         try {
-            System.out.println("Starting server...");
+            GameLogger.info("Starting server...");
 
             if (!isPortAvailable(config.getTcpPort())) {
                 throw new IOException("TCP port " + config.getTcpPort() + " is already in use.");
@@ -314,31 +315,31 @@ public class GameServer {
 
             // Initialize components
             storage.initialize();
-            System.out.println("Storage system initialized");
+            GameLogger.info("Storage system initialized");
 
             worldManager.init();
-            System.out.println("World manager initialized");
+            GameLogger.info("World manager initialized");
 
             // Load plugins
             pluginManager.loadPlugins();
             pluginManager.enablePlugins();
-            System.out.println("Plugins loaded");
+            GameLogger.info("Plugins loaded");
 
             // Register network classes
             NetworkProtocol.registerClasses(networkServer.getKryo());
-            System.out.println("Network classes registered");
+            GameLogger.info("Network classes registered");
 
             // Start network server
             networkServer.start();
             networkServer.bind(config.getTcpPort(), config.getUdpPort());
 
             running = true;
-            System.out.println("Server started successfully on TCP port " + config.getTcpPort() +
+            GameLogger.info("Server started successfully on TCP port " + config.getTcpPort() +
                 " and UDP port " + config.getUdpPort());
-            System.out.println("Maximum players: " + config.getMaxPlayers());
+            GameLogger.info("Maximum players: " + config.getMaxPlayers());
 
         } catch (Exception e) {
-            System.err.println("Failed to start server: " + e.getMessage());
+            GameLogger.info("Failed to start server: " + e.getMessage());
             e.printStackTrace();
             throw new RuntimeException("Server failed to start", e);
         }
@@ -367,15 +368,15 @@ public class GameServer {
         if (!running) return;
         running = false;
 
-        System.out.println("Shutting down server...");
+        GameLogger.info("Shutting down server...");
 
         // Save all world data
         worldManager.getWorlds().forEach((name, world) -> {
             try {
                 storage.saveWorldData(name, world);
-                System.out.println("World data saved: " + name);
+                GameLogger.info("World data saved: " + name);
             } catch (Exception e) {
-                System.err.println("Error saving world " + name + ": " + e.getMessage());
+                GameLogger.info("Error saving world " + name + ": " + e.getMessage());
                 e.printStackTrace();
             }
         });
@@ -386,10 +387,10 @@ public class GameServer {
                 Connection connection = networkServer.getConnections()[Integer.parseInt(player.getSessionId())];
                 if (connection != null) {
                     connection.close();
-                    System.out.println("Disconnected player: " + player.getUsername());
+                    GameLogger.info("Disconnected player: " + player.getUsername());
                 }
             } catch (Exception e) {
-                System.err.println("Error disconnecting player " + player.getUsername() + ": " + e.getMessage());
+                GameLogger.info("Error disconnecting player " + player.getUsername() + ": " + e.getMessage());
                 e.printStackTrace();
             }
         });
@@ -406,7 +407,7 @@ public class GameServer {
         // Existing shutdown code...
 
         // Dispose of textures
-        System.out.println("Server shutdown complete.");
+        GameLogger.info("Server shutdown complete.");
     }
 
 
@@ -421,9 +422,9 @@ public class GameServer {
             } else if (object instanceof NetworkProtocol.ChatMessage) {
                 handleChatMessage(connection, (NetworkProtocol.ChatMessage) object);
             }
-            if (object instanceof NetworkProtocol.PlayerUpdate update) {
-                //                System.out.println(STR."Received PlayerUpdate for \{update.username}");
-                handlePlayerUpdate(connection, update);  // Update player position locally
+            if (object instanceof NetworkProtocol.PlayerUpdate) {
+                //                GameLogger.info(STR."Received PlayerUpdate for \{update.username}");
+                handlePlayerUpdate(connection, (NetworkProtocol.PlayerUpdate) object);  // Update player position locally
             } else {
                 // Handle other message types as needed
                 //                System.out
@@ -447,7 +448,7 @@ public class GameServer {
 
             if (player != null) {
                 player.updateInventory(update.itemNames);
-                System.out.println("Updated inventory for player: " + username);
+                GameLogger.info("Updated inventory for player: " + username);
 
                 // Save to world data
                 WorldData worldData = worldManager.getWorld(CreatureCaptureGame.MULTIPLAYER_WORLD_NAME);
@@ -464,7 +465,7 @@ public class GameServer {
                 networkServer.sendToAllExceptTCP(connection.getID(), update);
             }
         } catch (Exception e) {
-            System.err.println("Error handling inventory update: " + e.getMessage());
+            GameLogger.info("Error handling inventory update: " + e.getMessage());
         }
     }
 
@@ -479,7 +480,7 @@ public class GameServer {
                 if (worldData != null) {
                     worldData.savePlayerData(username, finalState);
                     worldManager.saveWorld(worldData);
-                    System.out.println("Saved final state for disconnected player: " + username);
+                    GameLogger.info("Saved final state for disconnected player: " + username);
                 }
             }
 

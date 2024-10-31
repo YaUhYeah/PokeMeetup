@@ -21,6 +21,7 @@ import com.badlogic.gdx.utils.Timer;
 import io.github.pokemeetup.CreatureCaptureGame;
 import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.io.IOException;
 
@@ -114,9 +115,8 @@ public class ModeSelectionScreen implements Screen {
         // Add the main container to the stage
         stage.addActor(mainContainer);
 
-        // Create Labels
         Label titleLabel = new Label("PokeMeetup", skin);
-        titleLabel.setFontScale(2.0f);
+        titleLabel.setFontScale(3.0f);
 
         Label versionLabel = new Label("Version 1.0", skin);
         versionLabel.setColor(skin.getColor("white"));
@@ -125,13 +125,12 @@ public class ModeSelectionScreen implements Screen {
         TextButton singlePlayerButton = new TextButton("Single Player", skin);
         TextButton multiplayerButton = new TextButton("Multiplayer", skin);
         TextButton exitButton = new TextButton("Exit Game", skin);
-
         // Arrange UI elements using Table
         mainContainer.add(titleLabel).padBottom(10).row();
         mainContainer.add(versionLabel).padBottom(50).row();
-        mainContainer.add(singlePlayerButton).width(250).height(50).padBottom(20).row();
-        mainContainer.add(multiplayerButton).width(250).height(50).padBottom(20).row();
-        mainContainer.add(exitButton).width(250).height(50).padBottom(20).row();
+        mainContainer.add(singlePlayerButton).width(300).height(70).padBottom(30).row();
+        mainContainer.add(multiplayerButton).width(300).height(70).padBottom(30).row();
+        mainContainer.add(exitButton).width(300).height(70).padBottom(30).row();
 
         // Add button listeners
         singlePlayerButton.addListener(new ChangeListener() {
@@ -176,7 +175,7 @@ public class ModeSelectionScreen implements Screen {
         } catch (Exception e) {
             // Fallback in case Dialog creation fails
             Gdx.app.error("DialogError", "Failed to show error dialog: " + e.getMessage());
-            System.out.println("Error Dialog failed: " + e.getMessage());
+            GameLogger.info("Error Dialog failed: " + e.getMessage());
             e.printStackTrace();
         }
     }

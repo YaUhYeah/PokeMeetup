@@ -4,6 +4,7 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.MathUtils;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
+import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.PerlinNoise;
 
 import java.util.List;
@@ -141,7 +142,7 @@ public class Chunk {
                 tileCounts[tileData[x][y]]++;
             }
         }
-        System.out.println("Chunk tile distribution - Water: " + tileCounts[0] +
+        GameLogger.info("Chunk tile distribution - Water: " + tileCounts[0] +
             ", Grass: " + tileCounts[1] +
             ", Sand: " + tileCounts[2] +
             ", Rock: " + tileCounts[3]);
@@ -157,7 +158,7 @@ public class Chunk {
                 TextureRegion tileTexture = tileTextures.get(tileType);
 
                 if (tileTexture == null) {
-                    System.err.println("Missing texture for tile type: " + tileType);
+                    GameLogger.info("Missing texture for tile type: " + tileType);
                     continue;
                 }
 

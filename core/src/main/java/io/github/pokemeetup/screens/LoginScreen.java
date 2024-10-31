@@ -21,6 +21,7 @@ import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.multiplayer.server.config.ServerConfigManager;
 import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
 import io.github.pokemeetup.utils.AssetManagerSingleton;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -78,7 +79,7 @@ public class LoginScreen implements Screen {
         try {
             servers = ServerConfigManager.getInstance().getServers();
         } catch (Exception e) {
-            System.err.println("Error loading servers: "+e.getMessage());
+            GameLogger.info("Error loading servers: "+e.getMessage());
             servers = new Array<>();
 
         }
@@ -664,7 +665,7 @@ public class LoginScreen implements Screen {
                 return true;
             }
         } catch (Exception e) {
-//            System.out.println(STR."Connection error: {}\{e.getMessage()}");
+//            GameLogger.info(STR."Connection error: {}\{e.getMessage()}");
             Gdx.app.postRunnable(() -> {
                 feedbackLabel.setColor(Color.RED);
                 feedbackLabel.setText("Connection error: " + "e.getMessage()}");

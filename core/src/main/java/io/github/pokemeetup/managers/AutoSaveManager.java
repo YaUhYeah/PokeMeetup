@@ -10,6 +10,7 @@ import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
 import io.github.pokemeetup.system.gameplay.inventory.Item;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,7 +45,7 @@ public class AutoSaveManager {
                 updatePlayerData(playerData);
                 gameClient.savePlayerState(playerData);
             } else {
-                System.err.println("PlayerData is null. Skipping multiplayer save.");
+                GameLogger.info("PlayerData is null. Skipping multiplayer save.");
             }
         }
     }
@@ -76,7 +77,7 @@ public class AutoSaveManager {
             // Update current player data before saving
             PlayerData currentPlayer = world.getPlayerData();
             if (currentPlayer != null) {
-                System.out.println("Saving current player state");
+                GameLogger.info("Saving current player state");
                 updatePlayerData(currentPlayer);
                 worldData.savePlayerData(currentPlayer.getUsername(), currentPlayer);
             }
@@ -85,12 +86,12 @@ public class AutoSaveManager {
             FileHandle worldFile = worldDir.child("world.json");
 
             String jsonString = json.prettyPrint(worldData);
-            System.out.println("Saving world data: " + jsonString);
+            GameLogger.info("Saving world data: " + jsonString);
 
             worldFile.writeString(jsonString, false);
-            System.out.println("World save complete");
+            GameLogger.info("World save complete");
         } catch (Exception e) {
-            System.err.println("Failed to save world: " + e.getMessage());
+            GameLogger.info("Failed to save world: " + e.getMessage());
             e.printStackTrace();
         }
     }

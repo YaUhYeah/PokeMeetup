@@ -6,6 +6,7 @@ import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.Json;
 import com.badlogic.gdx.utils.JsonWriter;
+import io.github.pokemeetup.utils.GameLogger;
 
 
 public class ServerConfigManager {
@@ -40,7 +41,7 @@ public class ServerConfigManager {
         if (!servers.contains(config, false)) {
             servers.add(config);
             saveServers();
-            System.out.println("Added server: " + config.getServerName());
+            GameLogger.info("Added server: " + config.getServerName());
         }
     }
 
@@ -51,7 +52,7 @@ public class ServerConfigManager {
                 dir.mkdirs();
             }
         } catch (Exception e) {
-            System.err.println("Failed to create config directory: " + e.getMessage());
+            GameLogger.info("Failed to create config directory: " + e.getMessage());
         }
     }
     private void loadServers() {
@@ -60,8 +61,8 @@ public class ServerConfigManager {
             if (file.exists()) {
                 Json json = new Json();
                 String fileContent = file.readString();
-                System.out.println("Loading servers from: " + file.path());
-                System.out.println("File content: " + fileContent);
+                GameLogger.info("Loading servers from: " + file.path());
+                GameLogger.info("File content: " + fileContent);
 
                 @SuppressWarnings("unchecked")
                 Array<ServerConnectionConfig> loadedServers = json.fromJson(Array.class,
@@ -69,11 +70,11 @@ public class ServerConfigManager {
 
                 if (loadedServers != null && loadedServers.size > 0) {
                     servers = loadedServers;
-                    System.out.println("Loaded " + servers.size + " servers");
+                    GameLogger.info("Loaded " + servers.size + " servers");
                 }
             }
         } catch (Exception e) {
-            System.err.println("Error loading servers: " + e.getMessage());
+            GameLogger.info("Error loading servers: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -96,12 +97,12 @@ public class ServerConfigManager {
             json.setOutputType(JsonWriter.OutputType.json);
             configFile.writeString(json.prettyPrint(servers), false);
         } catch (Exception e) {
-//            System.out.println(STR."error saving server configuration: \{e.getMessage()}");
+//            GameLogger.info(STR."error saving server configuration: \{e.getMessage()}");
         }
     }    public void removeServer(ServerConnectionConfig server) {
         if (servers.removeValue(server, false)) {
             saveServers();
-            System.out.println("Removed server: " + server.getServerName());
+            GameLogger.info("Removed server: " + server.getServerName());
         }
     }
 
@@ -116,10 +117,10 @@ public class ServerConfigManager {
 
             String jsonStr = json.prettyPrint(servers);
             file.writeString(jsonStr, false);
-            System.out.println("Saved " + servers.size + " servers to: " + file.path());
-            System.out.println("Content: " + jsonStr);
+            GameLogger.info("Saved " + servers.size + " servers to: " + file.path());
+            GameLogger.info("Content: " + jsonStr);
         } catch (Exception e) {
-            System.err.println("Error saving servers: " + e.getMessage());
+            GameLogger.info("Error saving servers: " + e.getMessage());
             e.printStackTrace();
         }
     }

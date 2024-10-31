@@ -10,6 +10,7 @@ import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Json;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
+import io.github.pokemeetup.utils.GameLogger;
 
 public class Player {
     public static final int FRAME_WIDTH = 32;
@@ -86,7 +87,7 @@ public class Player {
         if (world != null && world.getWorldData() != null) {
             PlayerData savedData = world.getWorldData().getPlayerData(username);
             if (savedData != null) {
-                System.out.println("Loading saved player state for: " + username);
+                GameLogger.info("Loading saved player state for: " + username);
                 updateFromState(); // Use saved state if available
             } else {
                 // Initialize with default values if no saved state
@@ -130,7 +131,7 @@ public class Player {
             FileHandle file = Gdx.files.local(SAVE_FILE);
             file.writeString(json.toJson(data), false);
         } catch (Exception e) {
-            //            System.err.println(STR."Failed to save player data: \{e.getMessage()}");
+            //            GameLogger.info(STR."Failed to save player data: \{e.getMessage()}");
         }
     }
 

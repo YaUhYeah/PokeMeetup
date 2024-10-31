@@ -1,0 +1,80 @@
+// Move android block before project block
+
+
+
+// Project configuration
+project(":android") {
+  apply plugin: "com.android.application"
+
+  configurations {
+    configureEach {
+      exclude group: 'javax.activation', module: 'activation'
+      exclude group: 'org.mongodb', module: 'bson-record-codec'
+    }
+    natives
+  }
+}
+
+dependencies {
+  implementation project(":core")
+
+  implementation 'androidx.core:core-ktx:1.7.0'
+  // LibGDX dependencies
+  implementation "com.badlogicgames.gdx:gdx-backend-android:$gdxVersion"
+  implementation "com.badlogicgames.gdx:gdx:$gdxVersion"
+
+  // Native libraries
+  natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-armeabi-v7a"
+  natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-arm64-v8a"
+  natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-x86"
+  natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-x86_64"
+
+  // Android support
+  implementation 'androidx.multidex:multidex:2.0.1'
+  coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.2'
+}
+
+android {
+  namespace 'io.github.pokemeetup.android'
+  compileSdkVersion 33
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_1_8
+    targetCompatibility JavaVersion.VERSION_1_8
+    // Enable desugaring
+    coreLibraryDesugaringEnabled true
+  }
+
+  defaultConfig {
+    applicationId "io.github.pokemeetup.android"
+    minSdkVersion 24
+    targetSdkVersion 33
+    versionCode 1
+    versionName "1.0"
+    multiDexEnabled true
+  }
+
+  sourceSets {
+    main {
+      manifest.srcFile 'AndroidManifest.xml'
+      java.srcDirs = ['src']  // Changed from src/main/java
+      aidl.srcDirs = ['src']
+      renderscript.srcDirs = ['src']
+      res.srcDirs = ['res']
+      assets.srcDirs = ['../assets']  // Point to root assets folder
+      jniLibs.srcDirs = ['libs']
+    }
+  }
+
+  packagingOptions {
+    exclude 'META-INF/AL2.0'
+    exclude 'META-INF/LGPL2.1'
+    exclude 'META-INF/INDEX.LIST'
+    exclude 'META-INF/native-image/org.mongodb/bson/native-image.properties'
+    // Add these
+    exclude 'META-INF/DEPENDENCIES'
+    exclude 'META-INF/LICENSE'
+    exclude 'META-INF/LICENSE.txt'
+    exclude 'META-INF/NOTICE'
+  }
+}

@@ -4,13 +4,13 @@ import com.badlogic.gdx.utils.Json;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import io.github.pokemeetup.multiplayer.server.GameServer;
-import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
 import io.github.pokemeetup.system.servers.PluginContext;
 
 import java.io.*;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -133,7 +133,7 @@ public class PluginManager {
     private List<String> calculateEnableOrder() {
         // Simple topological sort for dependencies
         Map<String, Set<String>> graph = new HashMap<>();
-        for (var entry : pluginConfigs.entrySet()) {
+        for (Map.Entry<String, PluginConfig> entry : pluginConfigs.entrySet()) {
             graph.put(entry.getKey(), new HashSet<>(entry.getValue().getDependencies()));
         }
 
@@ -153,7 +153,8 @@ public class PluginManager {
                              Set<String> visited, Set<String> visiting, List<String> result) {
         visiting.add(plugin);
 
-        for (String dep : graph.getOrDefault(plugin, Set.of())) {
+        Set<String> dependencies = graph.get(plugin) != null ? graph.get(plugin) : new HashSet<>();
+        for (String dep : dependencies) {
             if (visiting.contains(dep)) {
                 throw new IllegalStateException("Circular dependency detected: " + plugin + " -> " + dep);
             }
@@ -197,7 +198,8 @@ public class PluginManager {
         Path configPath = pluginsDir.resolve(pluginId + ".json");
         try {
             Gson gson = new GsonBuilder().setPrettyPrinting().create();
-            Files.writeString(configPath, gson.toJson(config));
+            String json = gson.toJson(config);
+            Files.write(configPath, json.getBytes(StandardCharsets.UTF_8));
         } catch (IOException e) {
             logger.severe("Failed to save config for plugin " + pluginId + ": " + e.getMessage());
         }
@@ -207,12 +209,13 @@ public class PluginManager {
         Path configPath = pluginsDir.resolve(pluginId + ".json");
         if (!Files.exists(configPath)) {
             ServerPlugin plugin = loadedPlugins.get(pluginId);
-            return plugin != null ? new HashMap<>() : Map.of();
+            return plugin != null ? new HashMap<>() : new HashMap<>();
         }
 
         try {
             Gson gson = new GsonBuilder().create();
-            String json = Files.readString(configPath);
+            byte[] bytes = Files.readAllBytes(configPath);
+            String json = new String(bytes, StandardCharsets.UTF_8);
             @SuppressWarnings("unchecked")
             Map<String, Object> config = gson.fromJson(json, Map.class);
             return config != null ? config : new HashMap<>();

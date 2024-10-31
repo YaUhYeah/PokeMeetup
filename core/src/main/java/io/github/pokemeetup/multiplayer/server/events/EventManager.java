@@ -1,5 +1,7 @@
 package io.github.pokemeetup.multiplayer.server.events;
 
+import io.github.pokemeetup.utils.GameLogger;
+
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -18,7 +20,7 @@ import java.util.concurrent.*;
 
         public void fireEvent(ServerEvent event) {
             if (isShuttingDown) {
-                System.out.println("Dropping event during shutdown: " + event.getEventName());
+                GameLogger.info("Dropping event during shutdown: " + event.getEventName());
                 return;
             }
 
@@ -33,7 +35,7 @@ import java.util.concurrent.*;
                             EventListener<ServerEvent> typedListener = (EventListener<ServerEvent>) listener;
                             typedListener.onEvent(event);
                         } catch (Exception e) {
-                            System.err.println("Error handling event " + event.getEventName() + ": " + e.getMessage());
+                            GameLogger.info("Error handling event " + event.getEventName() + ": " + e.getMessage());
                             e.printStackTrace();
                         }
                     }
@@ -53,7 +55,7 @@ import java.util.concurrent.*;
             if (!eventExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                 // Force shutdown if events don't complete in time
                 List<Runnable> pendingEvents = eventExecutor.shutdownNow();
-                System.out.println("Force-terminated " + pendingEvents.size() + " pending events");
+                GameLogger.info("Force-terminated " + pendingEvents.size() + " pending events");
             }
         } catch (InterruptedException e) {
             eventExecutor.shutdownNow();

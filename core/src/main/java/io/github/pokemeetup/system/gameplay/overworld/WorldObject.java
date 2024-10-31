@@ -10,6 +10,7 @@ import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.*;
 
@@ -353,7 +354,7 @@ public class WorldObject {
                                 sendObjectSpawn(pokeball);
                             }
 
-                            System.out.println("Spawned pokeball at: " + worldTileX + "," + worldTileY);
+                            GameLogger.info("Spawned pokeball at: " + worldTileX + "," + worldTileY);
                         }
                     }
                 }
@@ -461,13 +462,20 @@ public class WorldObject {
             }
 
             // Adjust tree spawn rates based on biome
-            float baseSpawnChance = switch (biome.getType()) {
-                case SNOW -> 0.08f;      // Fewer trees in snow
-                case HAUNTED -> 0.12f;   // Medium density in haunted
-                case FOREST -> 0.15f;    // Most trees in forest
-                case PLAINS -> 0.05f;    // Fewest trees in plains
-                default -> 0.1f;
-            };
+            float baseSpawnChance;
+
+            if (biome.getType() == BiomeType.SNOW) {
+                baseSpawnChance = 0.08f;      // Fewer trees in snow
+            } else if (biome.getType() == BiomeType.HAUNTED) {
+                baseSpawnChance = 0.12f;      // Medium density in haunted
+            } else if (biome.getType() == BiomeType.FOREST) {
+                baseSpawnChance = 0.15f;      // Most trees in forest
+            } else if (biome.getType() == BiomeType.PLAINS) {
+                baseSpawnChance = 0.05f;      // Fewest trees in plains
+            } else {
+                baseSpawnChance = 0.1f;
+            }
+
 
             for (int x = 0; x < Chunk.CHUNK_SIZE; x++) {
                 for (int y = 0; y < Chunk.CHUNK_SIZE; y++) {

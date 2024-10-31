@@ -19,10 +19,12 @@ import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
+import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.TextureManager;
 
 import java.util.HashMap;
 import java.util.Map;
+
 
 public class CreatureCaptureGame extends Game {
     public static final String MULTIPLAYER_WORLD_NAME = "multiplayer_world";
@@ -55,64 +57,96 @@ public class CreatureCaptureGame extends Game {
     }
 
     public void create() {
-        gameAtlas = new TextureAtlas(Gdx.files.internal("atlas/game-atlas"));
-        TextureManager.initialize(gameAtlas);
-        setupShutdownHook();
-        ServerStorageSystem storageSystem = new ServerStorageSystem();
-        worldManager = new WorldManager(storageSystem);
-        worldManager.init();
-        AudioManager.getInstance();
-        // Only initialize database for multiplayer
-        if (isMultiplayerMode()) {
-            databaseManager = new DatabaseManager();
+        try {
+            // Use AssetManager for Android compatibility
+            Gdx.app.log("CreatureCaptureGame", "Starting game initialization");
+
+            // Load atlas safely
+            if (Gdx.files.internal("atlas/game-atlas").exists()) {
+                gameAtlas = new TextureAtlas(Gdx.files.internal("atlas/game-atlas"));
+            } else {
+                throw new RuntimeException("Required atlas file not found!");
+            }
+
+            // Initialize managers
+            TextureManager.initialize(gameAtlas);
+
+            // Initialize storage based on platform
+            ServerStorageSystem storageSystem;
+            // Use Android-specific storage path
+            storageSystem = new ServerStorageSystem();
+
+            worldManager = new WorldManager(storageSystem);
+            worldManager.init();
+
+            // Initialize audio with safe fallback
+            try {
+                AudioManager.getInstance();
+            } catch (Exception e) {
+                Gdx.app.error("CreatureCaptureGame", "Audio initialization failed", e);
+            }
+
+            // Initialize database only if needed
+            if (isMultiplayerMode()) {
+                try {
+                    databaseManager = new DatabaseManager();
+                } catch (Exception e) {
+                    Gdx.app.error("CreatureCaptureGame", "Database initialization failed", e);
+                }
+            }
+
+            setScreen(new ModeSelectionScreen(this));
+
+        } catch (Exception e) {
+            Gdx.app.error("CreatureCaptureGame", "Fatal error during game initialization", e);
+            throw new RuntimeException("Game initialization failed", e);
         }
-        setScreen(new ModeSelectionScreen(this));
     }
 
     public void initializeWorld(String worldName, boolean isMultiplayer) {
         try {
-            System.out.println("Initializing world: " + worldName + ", isMultiplayer: " + isMultiplayer);
 
+            Gdx.app.log("CreatureCaptureGame", "Initializing world: " + worldName);
             // For multiplayer, always use the fixed world
             if (isMultiplayer) {
                 worldName = MULTIPLAYER_WORLD_NAME;
-                System.out.println("Multiplayer mode enabled. Using world name: " + worldName);
+                GameLogger.info("Multiplayer mode enabled. Using world name: " + worldName);
             }
 
             // Initialize GameClient based on mode
             if (isMultiplayer) {
-                System.out.println("Setting up GameClient for multiplayer.");
+                GameLogger.info("Setting up GameClient for multiplayer.");
                 ServerConnectionConfig clientConfig = ServerConnectionConfig.getInstance();
                 if (clientConfig == null) {
                     throw new RuntimeException("Failed to load server configuration.");
                 }
                 gameClient = GameClientSingleton.getInstance(clientConfig);
-                System.out.println("GameClient initialized for multiplayer.");
+                GameLogger.info("GameClient initialized for multiplayer.");
             } else {
-                System.out.println("Setting up GameClient for singleplayer.");
+                GameLogger.info("Setting up GameClient for singleplayer.");
                 gameClient = GameClientSingleton.getSinglePlayerInstance();
-                System.out.println("GameClient initialized for singleplayer.");
+                GameLogger.info("GameClient initialized for singleplayer.");
             }
 
             // Load textures first
-            System.out.println("Loading TextureAtlas.");
+            GameLogger.info("Loading TextureAtlas.");
             if (gameAtlas == null) {
                 gameAtlas = new TextureAtlas(Gdx.files.internal("atlas/game-atlas"));
             }
             if (!ItemManager.isInitialized()) {
-                System.out.println("Initializing ItemManager");
+                GameLogger.info("Initializing ItemManager");
                 ItemManager.initialize(gameAtlas);
             }
-            System.out.println("TextureAtlas loaded successfully.");
+            GameLogger.info("TextureAtlas loaded successfully.");
             Map<Integer, TextureRegion> tileTextures = loadTileTextures(gameAtlas);
-            System.out.println("Tile textures loaded: " + tileTextures.size());
+            GameLogger.info("Tile textures loaded: " + tileTextures.size());
 
             // Load or create WorldData
             WorldData worldData;
             if (isMultiplayer) {
                 worldData = worldManager.getWorld(MULTIPLAYER_WORLD_NAME);
                 if (worldData == null) {
-                    System.out.println("Creating new multiplayer WorldData.");
+                    GameLogger.info("Creating new multiplayer WorldData.");
                     worldData = worldManager.createWorld(
                         MULTIPLAYER_WORLD_NAME,
                         MULTIPLAYER_WORLD_SEED,
@@ -120,12 +154,12 @@ public class CreatureCaptureGame extends Game {
                         0.05f
                     );
                 } else {
-                    System.out.println("Loaded existing multiplayer WorldData.");
+                    GameLogger.info("Loaded existing multiplayer WorldData.");
                 }
             } else {
                 worldData = worldManager.getWorld(worldName);
                 if (worldData == null) {
-                    System.out.println("Creating new singleplayer WorldData.");
+                    GameLogger.info("Creating new singleplayer WorldData.");
                     worldData = worldManager.createWorld(
                         worldName,
                         System.currentTimeMillis(),
@@ -133,7 +167,7 @@ public class CreatureCaptureGame extends Game {
                         0.05f
                     );
                 } else {
-                    System.out.println("Loaded existing singleplayer WorldData.");
+                    GameLogger.info("Loaded existing singleplayer WorldData.");
                 }
             }
 
@@ -150,21 +184,21 @@ public class CreatureCaptureGame extends Game {
 
             // Load player data
             String username = isMultiplayer ? gameClient.getLocalUsername() : "Player";
-            System.out.println("Loading player data for: " + username);
+            GameLogger.info("Loading player data for: " + username);
             PlayerData playerData = worldData.getPlayerData(username);
 
             if (playerData == null) {
-                System.out.println("No existing player data found, creating new player data");
+                GameLogger.info("No existing player data found, creating new player data");
                 playerData = new PlayerData(username);
                 playerData.setX(0);
                 playerData.setY(0);
                 playerData.setDirection("down");
                 worldData.savePlayerData(username, playerData);
             } else {
-                System.out.println("Loaded existing player data:");
-                System.out.println("Position: " + playerData.getX() + "," + playerData.getY());
-                System.out.println("Direction: " + playerData.getDirection());
-                System.out.println("Inventory: " + playerData.getInventoryItems());
+                GameLogger.info("Loaded existing player data:");
+                GameLogger.info("Position: " + playerData.getX() + "," + playerData.getY());
+                GameLogger.info("Direction: " + playerData.getDirection());
+                GameLogger.info("Inventory: " + playerData.getInventoryItems());
             }
 
             // Create actual Player instance
@@ -187,19 +221,27 @@ public class CreatureCaptureGame extends Game {
             worldData.setLastPlayed(System.currentTimeMillis());
             worldManager.saveWorld(worldData);
 
-            System.out.println("World initialization complete:");
-            System.out.println("- World: " + currentWorld.getName());
-            System.out.println("- Player: " + player.getUsername());
-            System.out.println("- Position: " + player.getX() + "," + player.getY());
-            System.out.println("- Direction: " + player.getDirection());
+            GameLogger.info("World initialization complete:");
+            GameLogger.info("- World: " + currentWorld.getName());
+            GameLogger.info("- Player: " + player.getUsername());
+            GameLogger.info("- Position: " + player.getX() + "," + player.getY());
+            GameLogger.info("- Direction: " + player.getDirection());
 
         } catch (Exception e) {
-            System.err.println("Failed to initialize world: " + e.getMessage());
-            e.printStackTrace();
-            throw new RuntimeException("Failed to initialize world", e);
+            Gdx.app.error("CreatureCaptureGame", "World initialization failed", e);
+            // On Android, show a dialog or fallback to default state
+            if (Gdx.app.getType() == Application.ApplicationType.Android) {
+                handleAndroidError(e);
+            } else {
+                throw new RuntimeException("Failed to initialize world", e);
+            }
         }
     }
-
+    private void handleAndroidError(Exception e) {
+        // Handle error gracefully on Android
+        Gdx.app.error("CreatureCaptureGame", "Fatal error: " + e.getMessage());
+        // Maybe show an error screen or restart the game
+    }
     public WorldManager getWorldManager() {
         return worldManager;
     }
@@ -213,8 +255,6 @@ public class CreatureCaptureGame extends Game {
         int defaultX = (int) savedData.getX();
         int defaultY = (int) savedData.getY();
 
-        System.out.println("Initializing player: " + username + " at position: (" + defaultX + ", " + defaultY + ")");
-
         player = new Player(
             defaultX,
             defaultY,
@@ -227,7 +267,6 @@ public class CreatureCaptureGame extends Game {
         player.updateFromState();
         currentWorld.setPlayer(player);
 
-        System.out.println("Player initialized successfully.");
     }
 
     public DatabaseManager getDatabaseManager() {
@@ -264,33 +303,19 @@ public class CreatureCaptureGame extends Game {
         }
     }
 
-    private void updateLastPlayed() {
-        lastPlayed = System.currentTimeMillis();
-        if (currentWorld != null) {
-            WorldData worldData = worldManager.getWorld(currentWorld.getName());
-            if (worldData != null) {
-                worldData.setLastPlayed(lastPlayed);
-                worldManager.saveWorld(worldData);
-                System.out.println("Last played time updated in WorldData.");
-            } else {
-                System.err.println("Failed to update last played time: WorldData is null.");
-            }
-        } else {
-            System.err.println("Failed to update last played time: World is null.");
-        }
-    }
+
 
 
     public synchronized void saveGameState() {
         // Prevent recursive saves
         if (isSaving) {
-            System.out.println("Save already in progress, skipping");
+            GameLogger.info("Save already in progress, skipping");
             return;
         }
 
         // Allow saving during disposal - remove isDisposing check
         if (isDisposed) {
-            System.out.println("Game already disposed, cannot save");
+            GameLogger.info("Game already disposed, cannot save");
             return;
         }
 
@@ -298,7 +323,7 @@ public class CreatureCaptureGame extends Game {
         try {
             Screen currentScreen = getScreen();
             if (!(currentScreen instanceof GameScreen)) {
-                System.out.println("Not saving - current screen is not GameScreen");
+                GameLogger.info("Not saving - current screen is not GameScreen");
                 return;
             }
 
@@ -306,30 +331,29 @@ public class CreatureCaptureGame extends Game {
             Player currentPlayer = gameScreen.getPlayer();
 
             if (currentPlayer == null) {
-                System.out.println("Not saving - player is null");
+                GameLogger.info("Not saving - player is null");
                 return;
             }
 
-            // Get latest player state
             PlayerData currentState = new PlayerData(currentPlayer.getUsername());
             currentState.updateFromPlayer(currentPlayer);
 
             // Debug print current state
-            System.out.println("Current state to save:");
-            System.out.println("Position: " + currentState.getX() + "," + currentState.getY());
-            System.out.println("Direction: " + currentState.getDirection());
-            System.out.println("Inventory: " + currentState.getInventoryItems());
+            GameLogger.info("Current state to save:");
+            GameLogger.info("Position: " + currentState.getX() + "," + currentState.getY());
+            GameLogger.info("Direction: " + currentState.getDirection());
+            GameLogger.info("Inventory: " + currentState.getInventoryItems());
 
             // Get current world and its data
             World currentWorld = gameScreen.getWorld();
             if (currentWorld == null) {
-                System.out.println("Not saving - world is null");
+                GameLogger.info("Not saving - world is null");
                 return;
             }
 
             WorldData worldData = currentWorld.getWorldData();
             if (worldData == null) {
-                System.out.println("Not saving - world data is null");
+                GameLogger.info("Not saving - world data is null");
                 return;
             }
 
@@ -361,24 +385,13 @@ public class CreatureCaptureGame extends Game {
             String jsonData = json.prettyPrint(worldData);
             worldFile.writeString(jsonData, false);
 
-            System.out.println("Saved world data to: " + worldFile.path());
-            System.out.println("Save data: " + jsonData);
-
             // Verify save
             WorldData readBack = json.fromJson(WorldData.class, worldFile.readString());
             PlayerData savedPlayer = readBack.getPlayerData(currentPlayer.getUsername());
 
-            if (savedPlayer != null) {
-                System.out.println("Verified saved data:");
-                System.out.println("Position: " + savedPlayer.getX() + "," + savedPlayer.getY());
-                System.out.println("Direction: " + savedPlayer.getDirection());
-                System.out.println("Inventory: " + savedPlayer.getInventoryItems());
-            } else {
-                System.out.println("Warning: Could not verify save - player data not found in saved file");
-            }
+
 
         } catch (Exception e) {
-            System.err.println("Failed to save game state: " + e.getMessage());
             e.printStackTrace();
         } finally {
             isSaving = false;
@@ -388,35 +401,20 @@ public class CreatureCaptureGame extends Game {
     private boolean verifyWorldSave(WorldData worldData, PlayerData expectedState) {
         PlayerData savedState = worldData.getPlayerData(expectedState.getUsername());
         if (savedState != null) {
-            System.out.println("Save verification:");
-            System.out.println("- Saved position: " + savedState.getX() + "," + savedState.getY());
-            System.out.println("- Saved inventory: " + String.join(", ", savedState.getInventoryItems()));
 
-            // Verify position matches
-            if (savedState.getX() != expectedState.getX() || savedState.getY() != expectedState.getY()) {
-                System.err.println("WARNING: Position mismatch in save!");
-                System.err.println("Expected: " + expectedState.getX() + "," + expectedState.getY());
-                System.err.println("Actual: " + savedState.getX() + "," + savedState.getY());
-            }
 
-            // Verify inventory matches
-            if (!savedState.getInventoryItems().equals(expectedState.getInventoryItems())) {
-                System.err.println("WARNING: Inventory mismatch in save!");
-                System.err.println("Expected: " + String.join(", ", expectedState.getInventoryItems()));
-                System.err.println("Actual: " + String.join(", ", savedState.getInventoryItems()));
-            }
+
         } else {
-            System.err.println("PlayerData not found during save verification.");
             return false;
         }
         return true;
     }
 
     public void saveGame() {
-        System.out.println("Attempting to save game");
+        GameLogger.info("Attempting to save game");
         try {
             boolean isPlayerNull = (currentWorld.getPlayer() == null);
-            System.out.println("CurrentWorld's player is null?: " + isPlayerNull);
+            GameLogger.info("CurrentWorld's player is null?: " + isPlayerNull);
             if (!isPlayerNull) {
                 Player player = currentWorld.getPlayer();
                 if (gameClient != null && player.getWorld() != null) {
@@ -441,12 +439,12 @@ public class CreatureCaptureGame extends Game {
                         WorldData worldData = currentWorldInstance.getWorldData();
                         worldData.savePlayerData(username, playerData);
                         worldManager.saveWorld(worldData);
-                        System.out.println("Single-player data saved successfully for user: " + username);
+                        GameLogger.info("Single-player data saved successfully for user: " + username);
                     } else {
                         // Multiplayer save
                         gameClient.updateLastKnownState(playerData);
                         gameClient.savePlayerState(playerData);
-                        System.out.println("Multiplayer data saved successfully for user: " + username);
+                        GameLogger.info("Multiplayer data saved successfully for user: " + username);
                     }
 
                     // Optional: Verify save
@@ -454,22 +452,22 @@ public class CreatureCaptureGame extends Game {
                     if (loadedWorldData != null) {
                         boolean verification = verifyWorldSave(loadedWorldData, playerData);
                         if (verification) {
-                            System.out.println("Save verification successful.");
+                            GameLogger.info("Save verification successful.");
                         } else {
-                            System.err.println("Save verification failed.");
+                            GameLogger.info("Save verification failed.");
                         }
                     } else {
-                        System.err.println("Failed to load WorldData for verification.");
+                        GameLogger.info("Failed to load WorldData for verification.");
                     }
 
                 } else {
                     throw new Exception("Game state is invalid: GameClient or Player's World is null");
                 }
             } else {
-                System.err.println("Cannot save game: Player is null");
+                GameLogger.info("Cannot save game: Player is null");
             }
         } catch (Exception e) {
-            System.err.println("Save game error: " + e.getMessage());
+            GameLogger.info("Save game error: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -498,14 +496,14 @@ public class CreatureCaptureGame extends Game {
                             // Save to disk
                             worldManager.saveWorld(worldData);
 
-                            System.out.println("Game state saved successfully:");
-                            System.out.println("Player position: " + currentState.getX() + "," + currentState.getY());
-                            System.out.println("Inventory: " + currentState.getInventoryItems());
+                            GameLogger.info("Game state saved successfully:");
+                            GameLogger.info("Player position: " + currentState.getX() + "," + currentState.getY());
+                            GameLogger.info("Inventory: " + currentState.getInventoryItems());
                         }
                     }
                 }
             } catch (Exception e) {
-                System.err.println("Failed to save game state: " + e.getMessage());
+                GameLogger.info("Failed to save game state: " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -516,9 +514,15 @@ public class CreatureCaptureGame extends Game {
             Json json = new Json();
             json.setUsePrototypes(false); // Important for clean serialization
 
-            FileHandle worldDir = Gdx.files.local("assets/worlds/" + player.getWorld().getName());
+            FileHandle baseDir;
+            if (Gdx.app.getType() == Application.ApplicationType.Android) {
+                baseDir = Gdx.files.local("worlds/");
+            } else {
+                baseDir = Gdx.files.local("assets/worlds/");
+            }
+
+            FileHandle worldDir = baseDir.child(player.getWorld().getName());
             if (!worldDir.exists()) {
-                System.out.println("World directory does not exist. Creating directory: " + worldDir.path());
                 worldDir.mkdirs();
             }
 
@@ -527,11 +531,11 @@ public class CreatureCaptureGame extends Game {
             // Update current player data before saving
             PlayerData currentPlayer = currentWorld.getPlayerData();
             if (currentPlayer != null) {
-                System.out.println("Saving current player state");
+                GameLogger.info("Saving current player state");
                 updatePlayerData(currentPlayer);
                 worldData.savePlayerData(currentPlayer.getUsername(), currentPlayer);
             } else {
-                System.err.println("Cannot save world data: PlayerData is null");
+                GameLogger.info("Cannot save world data: PlayerData is null");
             }
 
             worldData.updateLastPlayed();
@@ -541,47 +545,71 @@ public class CreatureCaptureGame extends Game {
             // Create a backup if the original file exists
             if (worldFile.exists()) {
                 backupFile.writeString(worldFile.readString(), false);
-                System.out.println("Backup created at: " + backupFile.path());
+                GameLogger.info("Backup created at: " + backupFile.path());
             }
 
             String jsonString = json.prettyPrint(worldData);
-            System.out.println("Saving world data: " + jsonString);
+            GameLogger.info("Saving world data: " + jsonString);
 
             worldFile.writeString(jsonString, false);
-            System.out.println("World save complete at: " + worldFile.path());
+            GameLogger.info("World save complete at: " + worldFile.path());
 
             // Verify save
             verifyWorldSave(worldData, currentPlayer);
 
         } catch (Exception e) {
-            System.err.println("Failed to save world: " + e.getMessage());
+            GameLogger.info("Failed to save world: " + e.getMessage());
             e.printStackTrace();
         }
     }
+    @Override
+    public void pause() {
+        super.pause();
+        try {
+            if (!isDisposed) {
+                saveGameState();
+            }
+        } catch (Exception e) {
+            Gdx.app.error("CreatureCaptureGame", "Error during pause", e);
+        }
+    }
 
+    @Override
+    public void resume() {
+        super.resume();
+        try {
+            // Reload textures if needed
+            if (gameAtlas == null) {
+                gameAtlas = new TextureAtlas(Gdx.files.internal("atlas/game-atlas"));
+                TextureManager.initialize(gameAtlas);
+            }
+        } catch (Exception e) {
+            Gdx.app.error("CreatureCaptureGame", "Error during resume", e);
+        }
+    }
     private void updatePlayerData(PlayerData playerData) {
         // Get current player state from world
         Player player = currentWorld.getPlayer();
         if (player != null) {
             playerData.updateFromPlayer(player);
         } else {
-            System.err.println("Cannot update PlayerData: Player is null");
+            GameLogger.info("Cannot update PlayerData: Player is null");
         }
     }
 
     private void setupShutdownHook() {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             if (isDisposed) {
-                System.out.println("Game already disposed, skipping shutdown save");
+                GameLogger.info("Game already disposed, skipping shutdown save");
                 return;
             }
 
-            System.out.println("Running shutdown hook - saving final state...");
+            GameLogger.info("Running shutdown hook - saving final state...");
             try {
                 saveGameState();
-                System.out.println("Final save completed in shutdown hook");
+                GameLogger.info("Final save completed in shutdown hook");
             } catch (Exception e) {
-                System.err.println("Error in shutdown hook: " + e.getMessage());
+                GameLogger.info("Error in shutdown hook: " + e.getMessage());
                 e.printStackTrace();
             }
         }));
@@ -590,23 +618,23 @@ public class CreatureCaptureGame extends Game {
     @Override
     public void dispose() {
         if (isDisposed) {
-            System.out.println("Already disposed, skipping");
+            GameLogger.info("Already disposed, skipping");
             return;
         }
 
-        System.out.println("Starting game disposal");
+        GameLogger.info("Starting game disposal");
         isDisposing = true;
         try {
             saveGameState();
-            System.out.println("Final save completed during disposal");
+            GameLogger.info("Final save completed during disposal");
         } catch (Exception e) {
-            System.err.println("Error during disposal save: " + e.getMessage());
+            GameLogger.info("Error during disposal save: " + e.getMessage());
             e.printStackTrace();
         } finally {
             isDisposing = false;
             isDisposed = true;
             super.dispose();
-            System.out.println("Game disposal complete");
+            GameLogger.info("Game disposal complete");
         }
     }
 }
