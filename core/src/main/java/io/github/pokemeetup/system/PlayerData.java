@@ -2,6 +2,8 @@ package io.github.pokemeetup.system;
 
 import io.github.pokemeetup.multiplayer.ServerPlayer;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
+import io.github.pokemeetup.system.gameplay.inventory.Item;
+import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.InventoryConverter;
 
@@ -10,11 +12,13 @@ import java.util.List;
 
 public class PlayerData {
     private String username;
-    private float x, y;
-    private String direction;
-    private boolean isMoving;
-    private boolean wantsToRun;
-    private List<String> inventoryItems; // List of strings in the format "itemName:count"
+    private float x = 0;
+    private float y = 0;
+    private String direction = "down"; // Default to "down"
+    private boolean isMoving = false;
+    private boolean wantsToRun = false;
+    private List<String> inventoryItems = new ArrayList<>();
+    private List<String> hotbarItems = new ArrayList<>();
     private boolean isDirty;
 
     public PlayerData(String username) {
@@ -75,34 +79,37 @@ public class PlayerData {
         this.isMoving = player.isMoving();
         this.wantsToRun = player.isRunning();
 
-        // Serialize inventory items
-        this.inventoryItems = InventoryConverter.toPlayerDataFormat(player.getInventory());
+        // Convert and store inventory items
+        this.inventoryItems = InventoryConverter.toPlayerDataFormat(player.getInventory().getItems());
+        GameLogger.info("Converted Inventory Items: " + this.inventoryItems);
+
+        // Convert and store hotbar items
+        this.hotbarItems = InventoryConverter.toPlayerDataFormat(player.getInventory().getHotbarItems());
+        GameLogger.info("Converted Hotbar Items: " + this.hotbarItems);
 
         this.isDirty = true;
     }
 
+
     // Apply data to the player
     public void applyToPlayer(Player player) {
-        if (player == null) return;
-
-        // Set position and movement
-        player.setX(this.x);
-        player.setY(this.y);
+        player.setX((int) this.x);
+        player.setY((int) this.y);
         player.setDirection(this.direction);
         player.setMoving(this.isMoving);
         player.setRunning(this.wantsToRun);
 
-        // Deserialize inventory items
-        Inventory inventory = new Inventory();
-        InventoryConverter.fromPlayerDataFormat(this.inventoryItems, inventory);
-        player.setInventory(inventory);
-
-        GameLogger.info("Applied player data to player:");
-        GameLogger.info("Position: " + x + "," + y);
-        GameLogger.info("Direction: " + direction);
-        GameLogger.info("Inventory items: " + inventoryItems);
+        InventoryConverter.applyInventoryDataToPlayer(this, player);
+        GameLogger.info("Applied inventory and hotbar to player.");
     }
 
+    public List<String> getHotbarItems() {
+        return hotbarItems;
+    }
+
+    public void setHotbarItems(List<String> hotbarItems) {
+        this.hotbarItems = hotbarItems;
+    }
     // Getters and setters
     public String getUsername() {
         return username;
@@ -143,7 +150,10 @@ public class PlayerData {
     public void clearDirty() {
         isDirty = false;
     }
-
+    public PlayerData() {
+        this.username = "";
+        this.inventoryItems = new ArrayList<>();
+    }
     public PlayerData copy() {
         PlayerData copy = new PlayerData(this.username);
         copy.x = this.x;
@@ -152,6 +162,7 @@ public class PlayerData {
         copy.isMoving = this.isMoving;
         copy.wantsToRun = this.wantsToRun;
         copy.inventoryItems = this.inventoryItems;
+        copy.hotbarItems = this.hotbarItems;
         copy.isDirty = this.isDirty;
         return copy;
     }

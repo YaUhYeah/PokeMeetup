@@ -88,17 +88,20 @@ public class GameScreen implements Screen, PickupActionHandler {
         this.worldName = worldName;
         this.game = game;
         this.isMultiplayer = !gameClient.isSinglePlayer();
-
         this.storageSystem = new ServerStorageSystem();
         this.gameClient = gameClient;
         gameClient.loadTextures(); // Load textures on main thread
-        uiStage = new Stage(new ScreenViewport());
+        this.font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
+
+        this.uiStage = new Stage(new ScreenViewport());
         gameClient.setLocalUsername(username);
         GameLogger.info("Set username in GameClient: " + username);
         this.skin = new Skin(Gdx.files.internal("Skins/uiskin.json"));
         this.uiSkin = this.skin; // Use the same skin for UI elements
+
         int pixelX = initialX * World.TILE_SIZE;
         int pixelY = initialY * World.TILE_SIZE;
+
         this.worldManager = new WorldManager(storageSystem);
         worldManager.init();
         this.currentWorld = worldManager.getWorld(worldName);
@@ -106,47 +109,20 @@ public class GameScreen implements Screen, PickupActionHandler {
         if (currentWorld == null) {
             throw new IllegalStateException("World " + worldName + " not found");
         }
-        if (isMultiplayer) {
-            try {
-                ServerConnectionConfig clientConfig = ServerConnectionConfig.getInstance(); // Load client configuration
 
-                gameClient = GameClientSingleton.getInstance(clientConfig);
-                gameClient.loadTextures(); // Load textures on main thread
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-            if (this.gameClient == null) {
-                Gdx.app.error("GameScreen", "Failed to initialize GameClient for multiplayer.");
-            }
-        }
-        batch = new SpriteBatch();
-        gameAtlas = new TextureAtlas(Gdx.files.internal("atlas/game-atlas"));
+        this.batch = new SpriteBatch();
+        this.gameAtlas = new TextureAtlas(Gdx.files.internal("atlas/game-atlas"));
 
         if (!ItemManager.isInitialized()) {
-            throw new RuntimeException("Failed to initialize ItemManager");
+            GameLogger.info("Initializing ItemManager");
+            ItemManager.initialize(gameAtlas);
         }
-        if (!isMultiplayer) {
-            inventory = Inventory.loadInventory();
-        } else {
-            inventory = new Inventory();
-        }
+
         // Initialize camera
-        camera = new OrthographicCamera();
+        this.camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
-        // Load textures
-
-        // Debug print atlas regions
-        for (TextureAtlas.AtlasRegion region : gameAtlas.getRegions()) {
-            GameLogger.info("Found region: " + region.name + " (index: " + region.index + ")");
-        }
-        font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
-
-        font.getData().setScale(0.8f); // Optional: Adjust font size
-        font.setColor(Color.WHITE);    // Optional: Set font color
-
-        // Set up input handling
-        // Create texture map for the world
+        // Load textures and set up tile textures
         Map<Integer, TextureRegion> tileTextures = new HashMap<>();
         TextureRegion snowRegion = gameAtlas.findRegion("snow");
         TextureRegion hauntedGrassRegion = gameAtlas.findRegion("haunted_grass");
@@ -184,21 +160,16 @@ public class GameScreen implements Screen, PickupActionHandler {
         tileTextures.put(9, hauntedShroomsRegion);       // HAUNTED_SHROOMS
         tileTextures.put(10, tallGrassRegion);           // TALL_GRASS
 
-        // Initialize world
-        // In GameScreen
+        // Initialize the world
+        long worldSeed = gameClient.getWorldSeed(); // Use the world seed from the game client
+        this.world = new World(worldName, gameAtlas, tileTextures, WORLD_WIDTH, WORLD_HEIGHT, worldSeed, gameClient);
 
-        long worldSeed = 123456789L; // Or generate/load this value
-        this.world = new World(worldName, gameAtlas, tileTextures, World.WORLD_SIZE, World.WORLD_SIZE, gameClient.getWorldSeed(), gameClient);
-        WorldData worldData = world.getWorldData();
+        // Retrieve or create player data
+        WorldData worldData = currentWorld;
         PlayerData savedPlayerData = null;
 
         if (worldData != null) {
-//            GameLogger.info(STR."Attempting to load player data for: \{username}");
             savedPlayerData = worldData.getPlayerData(username);
-            //          GameLogger.info(STR."Loaded player data: \{savedPlayerData != null ? "found" : "not found"}");
-            if (savedPlayerData != null) {
-                //            GameLogger.info(STR."Saved position: \{savedPlayerData.getX()},\{savedPlayerData.getY()}");
-            }
         }
 
         // Use saved position if available, otherwise use initial position
@@ -206,88 +177,46 @@ public class GameScreen implements Screen, PickupActionHandler {
         float startY = savedPlayerData != null ? savedPlayerData.getY() : initialY;
 
         // Create player with the correct position
-        // Initialize player with the correct position
-        player = new Player((int) startX, (int) startY, world, gameAtlas, username);
-        gameClient.setActivePlayer(player);
-        gameClient.setCurrentWorld(world);
+        this.player = new Player((int) startX, (int) startY, world, gameAtlas, username);
 
-// Initialize player data with saved state or default if null
-        PlayerData playerData;
+        // Initialize player data with saved state or default if null
         if (savedPlayerData != null) {
-            playerData = savedPlayerData;
+            this.playerData = savedPlayerData;
 
             // Apply saved state to player
             playerData.applyToPlayer(player);
         } else {
             // If no saved data, initialize player with default or passed starting values
-            playerData = new PlayerData(username);
+            this.playerData = new PlayerData(username);
             playerData.updateFromPlayer(player);
             if (worldData != null) {
                 worldData.savePlayerData(player.getUsername(), playerData);
             }
-
             GameLogger.info("No saved player data found. Initializing with default values.");
         }
 
-// Set player data in world
+        // Set player data in world
         world.setPlayerData(playerData);
         GameLogger.info("Set PlayerData in world for user: " + username);
 
-
-        GameLogger.info("Retrieved saved player data: " + (savedPlayerData != null ?
-            "pos(" + savedPlayerData.getX() + "," + savedPlayerData.getY() + ")" : "null"));
-
-        // Set direction if available
-        if (savedPlayerData != null) {
-            player.setDirection(savedPlayerData.getDirection());
-            player.setRunning(savedPlayerData.isWantsToRun());
-        }
-
-
-        if (world != null) {
-            world.setPlayerData(playerData);
-            GameLogger.info("Set PlayerData in world for user: " + username);
-        }
-        GameLogger.info("GameScreen initialization complete. PlayerData null? " +
-            (world.getPlayerData() == null));
-
-        GameLogger.info("Final player position: " + player.getX() + "," + player.getY());
         // Initialize player data management
         this.playerDataManager = new PlayerDataManager(player, world, isMultiplayer, storageSystem);
         playerDataManager.loadPlayerState();
+
+        // Initialize inventory
+        this.inventory = player.getInventory();
+
+        // Create hotbar UI
         createHotbarUI();
-        //        WorldData = world.getWorldData();
-        //        if (worldData != null) {
-        //            playerData = worldData.getPlayerData(username);
-        //        }
-        //        if (playerData == null) {
-        //            // Create new player data with default values
-        //            playerData = new PlayerData(username);
-        //            playerData.setX(World.DEFAULT_X_POSITION);
-        //            playerData.setY(World.DEFAULT_Y_POSITION);
-        //            world.getWorldData().savePlayerData(username, playerData);
-        //        }
-        //        world.setPlayerData(playerData);
 
-//        GameLogger.info(STR."GameScreen initialization complete. PlayerData null? \{world.getPlayerData() == null}");
-
-        //     GameLogger.info(STR."PlayerData set in World for user: \{player.getPlayerData().getUsername()}");
-// In GameScreen
-        gameMenu = new GameMenu(this, game, uiSkin, this.player, gameClient);
-        // Initialize input handler
-        inputHandler = new InputHandler(player, this);
-        inputMultiplexer = new InputMultiplexer();
-        InputMultiplexer inputMultiplexer = new InputMultiplexer();
-        inputMultiplexer.addProcessor(uiStage);      // UI input
-        inputMultiplexer.addProcessor(inputHandler); // Game input
-        Gdx.input.setInputProcessor(inputMultiplexer);
+        // Initialize game menu, input handlers, chat system, etc.
+        this.gameMenu = new GameMenu(this, game, uiSkin, this.player, gameClient);
+        this.inputHandler = new InputHandler(player, this);
         setupInputProcessors();
         gameClient.setLocalUsername(player.getPlayerData().getUsername());
         setupGameClientListeners();
-// In constructor:
-        chatSystem = new ChatSystem(uiStage, uiSkin, gameClient, username);
+        this.chatSystem = new ChatSystem(uiStage, uiSkin, gameClient, username);
     }
-
 
     private void ensureSaveDirectories() {
         FileHandle saveDir = Gdx.files.local("save");
@@ -871,6 +800,9 @@ public class GameScreen implements Screen, PickupActionHandler {
 
             // Add to inventory (tries hotbar first)
             boolean added = player.getInventory().addItem(randomItem);
+            GameLogger.info("Picked up: " + randomItem.getName() + " (Count: " + randomItem.getCount() + ")");
+            GameLogger.info("Inventory after pickup: " + inventory.getItems());
+
             if (added) {
                 updateHotbarUI();
             } else {
@@ -914,10 +846,12 @@ public class GameScreen implements Screen, PickupActionHandler {
         try {
             if (player != null) {
                 // Get final state
-                PlayerData finalState = getCurrentPlayerState();
+                PlayerData finalState = new PlayerData(player.getUsername());
+                finalState.updateFromPlayer(player);
                 GameLogger.info("Final player state before save:");
                 GameLogger.info("Position: " + finalState.getX() + "," + finalState.getY());
                 GameLogger.info("Inventory: " + finalState.getInventoryItems());
+                GameLogger.info("Hotbar: " + finalState.getHotbarItems());
 
                 // Update world data
                 WorldData worldData = world.getWorldData();
@@ -934,17 +868,13 @@ public class GameScreen implements Screen, PickupActionHandler {
         }
 
         // Cleanup resources
-        batch.dispose();
         if (gameClient != null) {
             gameClient.dispose();
         }
 
-        // Clean up other resources
+        // Dispose other resources
         gameAtlas.dispose();
         player.dispose();
-        if (gameClient != null) {
-            gameClient.dispose(); // Dispose of game client if in multiplayer
-        }
 
         // Ensure other players are disposed of
         for (OtherPlayer op : otherPlayers.values()) {
@@ -953,9 +883,7 @@ public class GameScreen implements Screen, PickupActionHandler {
 
         // Ensure save directories are created if necessary
         ensureSaveDirectories();
-        if (gameClient != null) {
-            gameClient.dispose(); // This will trigger final save
-        }
+
         // Update player coordinates in the database when the game screen is disposed
         DatabaseManager dbManager = game.getDatabaseManager();
         dbManager.updatePlayerCoordinates(player.getUsername(), (int) player.getX(), (int) player.getY());

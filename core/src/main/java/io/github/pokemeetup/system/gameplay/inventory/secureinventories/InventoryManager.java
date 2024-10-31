@@ -41,7 +41,7 @@ public class InventoryManager {
 
     public Inventory getPlayerInventory(String playerId, PlayerData playerData) {
         return playerInventories.computeIfAbsent(playerId, id -> {
-            Inventory inventory = loadInventory(playerId, playerData);
+            Inventory inventory = loadInventory(playerData);
             if (inventory == null) {
                 inventory = new Inventory();
             }
@@ -49,13 +49,13 @@ public class InventoryManager {
         });
     }
 
-    private Inventory loadInventory(String playerId, PlayerData playerData) {
+    private Inventory loadInventory(PlayerData playerData) {
         if (playerData == null) return null;
 
         List<String> inventoryItems = playerData.getInventoryItems();
         if (inventoryItems != null && !inventoryItems.isEmpty()) {
             Inventory inventory = new Inventory();
-            InventoryConverter.fromPlayerDataFormat(inventoryItems, inventory);
+            InventoryConverter.fromPlayerDataFormat(playerData.getInventoryItems(), inventory);
             return inventory;
         }
 
@@ -123,7 +123,7 @@ public class InventoryManager {
             if (inventory != null) {
                 NetworkProtocol.InventoryUpdate update = new NetworkProtocol.InventoryUpdate();
                 update.username = playerId;
-                update.itemNames = (ArrayList<String>) InventoryConverter.toPlayerDataFormat(inventory);
+                update.itemNames = (ArrayList<String>) InventoryConverter.toPlayerDataFormat(inventory.getItems());
 
                 gameClient.sendInventoryUpdate(update.username, update.itemNames);
             }
@@ -135,8 +135,9 @@ public class InventoryManager {
             return;
         }
         try {
-            List<String> inventoryStrings = InventoryConverter.toPlayerDataFormat(inventory);
+            List<String> inventoryStrings = InventoryConverter.toPlayerDataFormat(inventory.getItems());
             playerData.setInventoryItems(inventoryStrings);
+            playerData.setHotbarItems(InventoryConverter.toPlayerDataFormat(inventory.getHotbarItems()));
 
             GameLogger.info("Saved inventory data for player: " + playerData.getUsername());
         } catch (Exception e) {

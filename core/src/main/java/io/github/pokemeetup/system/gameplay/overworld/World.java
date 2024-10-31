@@ -436,11 +436,11 @@ public class World {
         finalNoise = (finalNoise + 1.5) / 3.0;
 
         // More extreme distribution
-        if (temperatureGradient > 0.3) {  // Northern regions
+        if (temperatureGradient > 0.5) {  // Northern regions
             return biomeManager.getBiome(BiomeType.SNOW);
-        } else if (finalNoise < 0.4) {
-            return biomeManager.getBiome(BiomeType.HAUNTED);
-        } else if (finalNoise < 0.7) {
+        } else if (finalNoise < 0.9) {
+            return biomeManager.getBiome(BiomeType.PLAINS);
+        } else if (finalNoise < 1) {
             return biomeManager.getBiome(BiomeType.PLAINS);
         } else {
             return biomeManager.getBiome(BiomeType.FOREST);

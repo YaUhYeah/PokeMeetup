@@ -102,7 +102,6 @@ public class WorldManager {
             GameLogger.error("Failed to initialize WorldManager: " + e.getMessage());
         }
     }
-
     private void loadWorlds() {
         worlds.clear();
         FileHandle worldsDir = Gdx.files.local(WORLDS_DIR);
@@ -119,6 +118,7 @@ public class WorldManager {
                             GameLogger.info("Loaded world: " + world.getName());
                         } catch (Exception e) {
                             GameLogger.error("Failed to load world from: " + worldFile.path());
+                            GameLogger.error("Exception: " + e.getMessage());
                         }
                     }
                 }
@@ -126,6 +126,7 @@ public class WorldManager {
         }
         GameLogger.info("Loaded " + worlds.size() + " worlds");
     }
+
 
     private void deleteDirectoryRecursively(FileHandle directory) {
         if (directory.exists()) {

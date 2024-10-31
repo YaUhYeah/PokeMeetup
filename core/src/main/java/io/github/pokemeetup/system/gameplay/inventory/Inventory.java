@@ -43,8 +43,9 @@ public class Inventory {
         craftingGrid = new Item[2][2];
         selectedHotbarSlot = 0;
         GameLogger.info("Created new inventory with " + INVENTORY_SIZE + " slots");
-    }    // Update getSelectedIndex to work with first 9 slots
+    }
 
+    // Update getSelectedIndex to work with first 9 slots
     public int getSelectedIndex() {
         return selectedHotbarSlot;  // This should be 0-8
     }
@@ -68,7 +69,6 @@ public class Inventory {
             selectedHotbarSlot = index;
         }
     }
-
 
     public boolean addItemToHotbar(Item newItem) {
         // Try to stack with existing items in hotbar
@@ -118,75 +118,12 @@ public class Inventory {
         return false; // Inventory is full
     }
 
-
     // Update hotbar-related methods to use first 9 slots
     public void updateHotbarDisplay() {
         for (int i = 0; i < HOTBAR_SIZE; i++) {
             if (hotbarCache != null) {
                 hotbarCache.set(i, getItem(i));
             }
-        }
-    }
-
-    public static Inventory loadInventory() {
-        FileHandle file = Gdx.files.local(SAVE_FILE);
-        if (file.exists()) {
-            try {
-                Json json = new Json();
-                InventoryData data = json.fromJson(InventoryData.class, file.readString());
-                Inventory inventory = new Inventory();
-
-                // Load inventory items
-                for (int i = 0; i < data.items.length; i++) {
-                    ItemData itemData = data.items[i];
-                    if (itemData != null) {
-                        Item item = ItemManager.getItem(itemData.name);
-                        if (item != null) {
-                            item.setCount(itemData.count);
-                            inventory.inventoryItems.set(i, item);
-                        }
-                    }
-                }
-
-                // Load hotbar items
-                for (int i = 0; i < data.hotBarItems.length; i++) {
-                    ItemData itemData = data.hotBarItems[i];
-                    if (itemData != null) {
-                        Item item = ItemManager.getItem(itemData.name);
-                        if (item != null) {
-                            item.setCount(itemData.count);
-                            inventory.hotbarItems.set(i, item);
-                        }
-                    }
-                }
-
-                return inventory;
-            } catch (Exception e) {
-                GameLogger.info("Failed to load inventory: " + e.getMessage());
-            }
-        }
-        return new Inventory();
-    }
-
-    public void updateHeldItemPosition(float mouseX, float mouseY) {
-        // Offset the icon a bit from the cursor to make it more visible
-        heldItemX = mouseX - 16;
-        heldItemY = mouseY - 16;
-    }
-
-    public void renderHeldItem(SpriteBatch batch) {
-        if (heldItem != null) {
-            // Directly draw the held item's icon without calling begin/end
-            batch.draw(heldItem.getIcon(), heldItemX, heldItemY, 32, 32);
-        }
-    }
-
-    public Item getItemAt(int row, int col) {
-        // Check that the row and column are within the bounds of the crafting grid
-        if (row >= 0 && row < craftingGrid.length && col >= 0 && col < craftingGrid[row].length) {
-            return craftingGrid[row][col];
-        } else {
-            return null; // Return null if the indices are out of bounds
         }
     }
 
@@ -290,6 +227,7 @@ public class Inventory {
         }
         GameLogger.info("Inventory cleared");
     }
+
     public boolean addItem(Item newItem) {
         // First try to add to the hotbar
         if (addItemToHotbar(newItem.copy())) {
@@ -297,6 +235,7 @@ public class Inventory {
         }
         return addItemToInventory(newItem);
     }
+
     public List<String> getItemNames() {
         List<String> names = new ArrayList<>();
         for (Item item : inventoryItems) {
@@ -340,16 +279,17 @@ public class Inventory {
         }
     }
 
-    private List<Item> items; // Main inventory items
+    // Remove the uninitialized 'items' variable
+    // private List<Item> items; // Main inventory items
 
+    // Corrected methods to use 'inventoryItems'
     public Item getItemAtSlot(int index) {
-        return items.get(index);
+        return inventoryItems.get(index);
     }
 
     public void setItemAtSlot(int index, Item item) {
-        items.set(index, item);
+        inventoryItems.set(index, item);
     }
-
 
     public void setHotbarItemAtSlot(int index, Item item) {
         // Ensure the index is within bounds
@@ -359,7 +299,7 @@ public class Inventory {
         hotbarItems.set(index, item);
     }
 
-
+    // Other methods remain the same...
 
     // Saving the inventory to a JSON file
     public void saveInventory() {
@@ -404,7 +344,6 @@ public class Inventory {
             }
         }
     }
-
 
     public boolean canAddItem(Item item) {
         if (item == null) return false;
