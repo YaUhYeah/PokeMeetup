@@ -1,27 +1,22 @@
 package io.github.pokemeetup.screens;
 
-import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.Screen;
+import com.badlogic.gdx.*;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
-import com.badlogic.gdx.scenes.scene2d.Actor;
-import com.badlogic.gdx.scenes.scene2d.InputEvent;
-import com.badlogic.gdx.scenes.scene2d.InputListener;
-import com.badlogic.gdx.scenes.scene2d.Stage;
+import com.badlogic.gdx.scenes.scene2d.*;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
-import com.badlogic.gdx.utils.Align;
-import com.badlogic.gdx.utils.SerializationException;
-import com.badlogic.gdx.utils.Timer;
+import com.badlogic.gdx.utils.*;
+import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import io.github.pokemeetup.CreatureCaptureGame;
+import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
-import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
-import io.github.pokemeetup.utils.GameLogger;
+import io.github.pokemeetup.utils.TextureManager;
 
 import java.io.IOException;
 
@@ -34,7 +29,7 @@ public class ModeSelectionScreen implements Screen {
 
     public ModeSelectionScreen(CreatureCaptureGame game) {
         this.game = game;
-        this.stage = new Stage();
+        this.stage = new Stage(new ScreenViewport());
         Gdx.input.setInputProcessor(stage);
 
         this.skin = new Skin();
@@ -48,19 +43,19 @@ public class ModeSelectionScreen implements Screen {
             Gdx.app.error("SkinSetup", "Failed to initialize UI", e);
             return;
         }
-
+        AudioManager.getInstance().setMusicEnabled(true);
         createUI();
     }
 
     private BitmapFont initializeSkin() {
-        // Add BitmapFont
-        BitmapFont font = new BitmapFont(); // Default font
+        // Add BitmapFont with larger font size
+        BitmapFont font = new BitmapFont(Gdx.files.internal("Skins/default.fnt")); // Use a larger font file
         skin.add("default", font);
 
         // Define Colors
-        skin.add("white", new Color(1, 1, 1, 1));
-        skin.add("black", new Color(0, 0, 0, 1));
-        skin.add("gray", new Color(0.8f, 0.8f, 0.8f, 1));
+        skin.add("white", Color.WHITE);
+        skin.add("black", Color.BLACK);
+        skin.add("gray", Color.GRAY);
 
         // Create drawables
         Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
@@ -68,93 +63,96 @@ public class ModeSelectionScreen implements Screen {
         pixmap.fill();
         skin.add("white", new Texture(pixmap));
 
-        // Create a TextureRegion for the window background
-        TextureRegion windowBackground = new TextureRegion(new Texture(pixmap));
-        skin.add("window", windowBackground);
-
-        // Create panel-background drawable
-        pixmap.setColor(new Color(0.2f, 0.2f, 0.2f, 1));
-        pixmap.fill();
-        skin.add("panel-background", new TextureRegionDrawable(new TextureRegion(new Texture(pixmap))));
-
         // Clean up the pixmap
         pixmap.dispose();
 
         // Create styles
         TextButton.TextButtonStyle textButtonStyle = new TextButton.TextButtonStyle();
         textButtonStyle.up = skin.newDrawable("white", Color.DARK_GRAY);
-        textButtonStyle.down = skin.newDrawable("white", Color.DARK_GRAY);
-        textButtonStyle.checked = skin.newDrawable("white", Color.BLUE);
-        textButtonStyle.over = skin.newDrawable("white", Color.LIGHT_GRAY);
+        textButtonStyle.down = skin.newDrawable("white", Color.LIGHT_GRAY);
+        textButtonStyle.over = skin.newDrawable("white", Color.GRAY);
         textButtonStyle.font = skin.getFont("default");
+        textButtonStyle.fontColor = Color.WHITE;
         skin.add("default", textButtonStyle);
 
         Label.LabelStyle labelStyle = new Label.LabelStyle();
         labelStyle.font = skin.getFont("default");
+        labelStyle.fontColor = Color.WHITE;
         skin.add("default", labelStyle);
 
         // Create and add WindowStyle
         Window.WindowStyle windowStyle = new Window.WindowStyle();
         windowStyle.titleFont = skin.getFont("default");
-        windowStyle.background = skin.newDrawable("window", new Color(0.2f, 0.2f, 0.2f, 0.8f));
+        windowStyle.background = skin.newDrawable("white", new Color(0.2f, 0.2f, 0.2f, 0.8f));
         windowStyle.titleFontColor = Color.WHITE;
         skin.add("default", windowStyle);
 
         return font;
     }
 
-    // Helper method to create a solid color drawable
-
-
     private void createUI() {
-        // Main container table
-        Table mainContainer = new Table();
-        mainContainer.setFillParent(true);
-        mainContainer.pad(50);
+        // Create root table
+        Table rootTable = new Table();
+        rootTable.setFillParent(true);
 
-        // Add the main container to the stage
-        stage.addActor(mainContainer);
+        Table mainTable = new Table();
+        mainTable.setFillParent(true);
+        TextureRegion backgroundRegion = new TextureRegionDrawable(TextureManager.ui.findRegion("ethereal")).getRegion();
+        Image backgroundImage = new Image(backgroundRegion);
+        backgroundImage.setFillParent(true);
+        stage.addActor(backgroundImage);
 
+        stage.addActor(backgroundImage);
+        // Add root table on top
+        stage.addActor(rootTable);
+
+        // Title Label
         Label titleLabel = new Label("PokeMeetup", skin);
-        titleLabel.setFontScale(3.0f);
+        titleLabel.setFontScale(1.5f);
 
+        // Version Label
         Label versionLabel = new Label("Version 1.0", skin);
-        versionLabel.setColor(skin.getColor("white"));
+        versionLabel.setFontScale(0.8f);
 
-        // Create Buttons
-        TextButton singlePlayerButton = new TextButton("Single Player", skin);
-        TextButton multiplayerButton = new TextButton("Multiplayer", skin);
-        TextButton exitButton = new TextButton("Exit Game", skin);
-        // Arrange UI elements using Table
-        mainContainer.add(titleLabel).padBottom(10).row();
-        mainContainer.add(versionLabel).padBottom(50).row();
-        mainContainer.add(singlePlayerButton).width(300).height(70).padBottom(30).row();
-        mainContainer.add(multiplayerButton).width(300).height(70).padBottom(30).row();
-        mainContainer.add(exitButton).width(300).height(70).padBottom(30).row();
+        // Buttons with styles
+        TextButton.TextButtonStyle buttonStyle = skin.get("default", TextButton.TextButtonStyle.class);
+        buttonStyle.font.getData().setScale(1.2f);
+
+        TextButton singlePlayerButton = new TextButton("Single Player", buttonStyle);
+        TextButton multiplayerButton = new TextButton("Multiplayer", buttonStyle);
+        TextButton exitButton = new TextButton("Exit Game", buttonStyle);
+
+        // Build the UI layout
+        rootTable.pad(20);
+        rootTable.defaults().pad(10).width(Value.percentWidth(0.6f, rootTable)).height(50);
+
+        rootTable.add(titleLabel).expandX().center().row();
+        rootTable.add(versionLabel).expandX().center().padBottom(30).row();
+        rootTable.add(singlePlayerButton).row();
+        rootTable.add(multiplayerButton).row();
+        rootTable.add(exitButton).row();
 
         // Add button listeners
         singlePlayerButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
-                try {
-                    GameClientSingleton.getSinglePlayerInstance();
-                    game.setScreen(new WorldSelectionScreen(game));
-                    dispose();
-                } catch (IOException e) {
-                    showError("Failed to start single player mode: " + e.getMessage());
-                }
+                // Start single player mode
+                GameClientSingleton.getSinglePlayerInstance();
+                game.setScreen(new WorldSelectionScreen(game));
+                dispose();
             }
         });
 
         multiplayerButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
+                // Navigate to multiplayer login
                 try {
                     game.setScreen(new LoginScreen(game));
+                    dispose();
                 } catch (IOException e) {
-                    throw new RuntimeException(e);
+                    showError("Failed to start multiplayer mode: " + e.getMessage());
                 }
-                dispose();
             }
         });
 
@@ -167,22 +165,20 @@ public class ModeSelectionScreen implements Screen {
     }
 
     private void showError(String message) {
-        try {
-            Dialog dialog = new Dialog("Error", skin);
-            dialog.text(message);
-            dialog.button("OK");
-            dialog.show(stage);
-        } catch (Exception e) {
-            // Fallback in case Dialog creation fails
-            Gdx.app.error("DialogError", "Failed to show error dialog: " + e.getMessage());
-            GameLogger.info("Error Dialog failed: " + e.getMessage());
-            e.printStackTrace();
-        }
+        Dialog dialog = new Dialog("Error", skin);
+        dialog.text(message);
+        dialog.button("OK");
+        dialog.show(stage);
     }
 
     @Override
     public void render(float delta) {
-        Gdx.gl.glClearColor(0, 0, 0, 1); // Clear with black
+        // Handle back button on Android
+        if (Gdx.input.isKeyJustPressed(Input.Keys.BACK)) {
+            Gdx.app.exit();
+            return;
+        }
+
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
         stage.act(delta);
         stage.draw();
@@ -206,7 +202,9 @@ public class ModeSelectionScreen implements Screen {
     // Other required Screen methods...
     @Override
     public void show() {
+        AudioManager.getInstance().playMenuMusic();
     }
+
 
     @Override
     public void hide() {

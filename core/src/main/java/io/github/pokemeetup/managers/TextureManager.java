@@ -8,7 +8,6 @@ import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.Map;
 
-import static io.github.pokemeetup.utils.TextureManager.getGameAtlas;
 
 public class TextureManager {
     private static Map<String, TextureRegion> additionalRegions = new HashMap<>();
@@ -17,11 +16,5 @@ public class TextureManager {
         additionalRegions.put(name, region);
     }
 
-    public static TextureRegion getRegion(String name) {
-        TextureRegion region = getGameAtlas().findRegion(name);
-        if (region == null) {
-            region = additionalRegions.get(name);
-        }
-        return region;
-    }
+
 }

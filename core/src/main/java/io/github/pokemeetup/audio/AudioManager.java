@@ -1,13 +1,11 @@
 package io.github.pokemeetup.audio;
 
 import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.Preferences;
 import com.badlogic.gdx.audio.Music;
 import com.badlogic.gdx.audio.Sound;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
 
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,15 +15,22 @@ public class AudioManager {
     private final Map<BiomeType, Music> biomeMusic;
     private final Map<String, Sound> customSounds;
     private final float MUSIC_FADE_DURATION = 2.0f;
+    private final float FADE_OUT_DURATION = 2f; // 1.5 seconds for fade-out
+    private Music menuMusic; // New field for menu music
     private Music currentMusic;
     private BiomeType currentBiome;
     private float masterVolume = 1.0f;
     private float musicVolume = 0.7f;
     private float soundVolume = 1.0f;
     private boolean musicEnabled = true;
+    private float fadeOutTimer = 0f;
     private boolean soundEnabled = true;
     private float musicFadeTimer = 0;
     private Music nextMusic;
+
+    private boolean isFadingOut = false;
+    private BiomeType pendingBiome; // New field to track the latest biome
+
 
     private AudioManager() {
         sounds = new EnumMap<>(SoundEffect.class);
@@ -41,6 +46,19 @@ public class AudioManager {
         return instance;
     }
 
+    public static void setInstance(AudioManager instance) {
+        AudioManager.instance = instance;
+    }
+
+    public void playSound(AudioManager.SoundEffect effect) {
+        if (!soundEnabled) return;
+
+        Sound sound = sounds.get(effect);
+        if (sound != null) {
+            sound.play(soundVolume * masterVolume);
+        }
+    }
+
     private void initializeAudio() {
         // Load sound effects
         for (SoundEffect effect : SoundEffect.values()) {
@@ -51,6 +69,11 @@ public class AudioManager {
                 Gdx.app.error("AudioManager", "Failed to load sound: " + effect.getPath());
             }
         }
+
+        // Load menu music and set it to loop
+        menuMusic = Gdx.audio.newMusic(Gdx.files.internal("music/menu_music.mp3"));
+        menuMusic.setLooping(true);
+        menuMusic.setVolume(musicVolume * masterVolume);
 
         // Load biome music
         loadBiomeMusic(BiomeType.FOREST, "music/forest_theme.mp3");
@@ -66,100 +89,193 @@ public class AudioManager {
 
         try {
             Music music = Gdx.audio.newMusic(Gdx.files.internal(path));
-            music.setLooping(true);
             music.setVolume(musicVolume * masterVolume);
+            // Do not set looping here; we'll set it when playing
             biomeMusic.put(biome, music);
         } catch (Exception e) {
             Gdx.app.error("AudioManager", "Failed to load music: " + path + ", error: " + e.getMessage(), e);
         }
     }
 
-
-    public void playSound(SoundEffect effect) {
-        if (!soundEnabled) return;
-
-        Sound sound = sounds.get(effect);
-        if (sound != null) {
-            sound.play(soundVolume * masterVolume);
+    public void playMenuMusic() {
+        if (musicEnabled && menuMusic != null && !menuMusic.isPlaying()) {
+            menuMusic.setLooping(true); // Ensure it loops
+            menuMusic.play();
         }
     }
 
-    private void loadSettings() {
-        Preferences prefs = Gdx.app.getPreferences("audio_settings");
-        setMusicVolume(prefs.getFloat("music_volume", 0.7f));
-        setSoundVolume(prefs.getFloat("sound_volume", 1.0f));
-        setMusicEnabled(prefs.getBoolean("music_enabled", true));
-        setSoundEnabled(prefs.getBoolean("sound_enabled", true));
+    public void stopMenuMusic() {
+        if (menuMusic != null) {
+            menuMusic.stop();
+        }
     }
 
-    // Add getters for the UI
+    public Map<SoundEffect, Sound> getSounds() {
+        return sounds;
+    }
+
+    public Map<BiomeType, Music> getBiomeMusic() {
+        return biomeMusic;
+    }
+
+    public Map<String, Sound> getCustomSounds() {
+        return customSounds;
+    }
+
+    public float getMUSIC_FADE_DURATION() {
+        return MUSIC_FADE_DURATION;
+    }
+
+    public float getFADE_OUT_DURATION() {
+        return FADE_OUT_DURATION;
+    }
+
+    public Music getMenuMusic() {
+        return menuMusic;
+    }
+
+    public void setMenuMusic(Music menuMusic) {
+        this.menuMusic = menuMusic;
+    }
+
+    public Music getCurrentMusic() {
+        return currentMusic;
+    }
+
+    public void setCurrentMusic(Music currentMusic) {
+        this.currentMusic = currentMusic;
+    }
+
+    public BiomeType getCurrentBiome() {
+        return currentBiome;
+    }
+
+    public void setCurrentBiome(BiomeType currentBiome) {
+        this.currentBiome = currentBiome;
+    }
+
+    public float getMasterVolume() {
+        return masterVolume;
+    }
+
+    public void setMasterVolume(float masterVolume) {
+        this.masterVolume = masterVolume;
+    }
+
     public float getMusicVolume() {
         return musicVolume;
     }
 
-    public void setMusicVolume(float volume) {
-        this.musicVolume = Math.max(0, Math.min(1.0f, volume));
-        updateVolumes();
+    public void setMusicVolume(float musicVolume) {
+        this.musicVolume = musicVolume;
     }
 
     public float getSoundVolume() {
         return soundVolume;
     }
 
-    public void setSoundVolume(float volume) {
-        this.soundVolume = Math.max(0, Math.min(1.0f, volume));
+    public void setSoundVolume(float soundVolume) {
+        this.soundVolume = soundVolume;
     }
 
     public boolean isMusicEnabled() {
         return musicEnabled;
     }
 
-    // Enable/Disable methods
-    public void setMusicEnabled(boolean enabled) {
-        this.musicEnabled = enabled;
-        if (!enabled && currentMusic != null) {
-            currentMusic.pause();
-        } else if (enabled && currentMusic != null) {
-            currentMusic.play();
-        }
+    public void setMusicEnabled(boolean musicEnabled) {
+        this.musicEnabled = musicEnabled;
+    }
+
+    public float getFadeOutTimer() {
+        return fadeOutTimer;
+    }
+
+    public void setFadeOutTimer(float fadeOutTimer) {
+        this.fadeOutTimer = fadeOutTimer;
     }
 
     public boolean isSoundEnabled() {
         return soundEnabled;
     }
 
-    public void setSoundEnabled(boolean enabled) {
-        this.soundEnabled = enabled;
+    public void setSoundEnabled(boolean soundEnabled) {
+        this.soundEnabled = soundEnabled;
     }
 
-    public void playSoundWithPitch(SoundEffect effect, float pitch) {
-        if (!soundEnabled) return;
-
-        Sound sound = sounds.get(effect);
-        if (sound != null) {
-            sound.play(soundVolume * masterVolume, pitch, 0);
-        }
+    public float getMusicFadeTimer() {
+        return musicFadeTimer;
     }
-    // Volume control methods
+
+    public void setMusicFadeTimer(float musicFadeTimer) {
+        this.musicFadeTimer = musicFadeTimer;
+    }
+
+    public Music getNextMusic() {
+        return nextMusic;
+    }
+
+    public void setNextMusic(Music nextMusic) {
+        this.nextMusic = nextMusic;
+    }
+
+    public boolean isFadingOut() {
+        return isFadingOut;
+    }
+
+    public void setFadingOut(boolean fadingOut) {
+        isFadingOut = fadingOut;
+    }
+
+    public void fadeOutMenuMusic() {
+        isFadingOut = true;
+        fadeOutTimer = FADE_OUT_DURATION;
+    }
 
     public void updateBiomeMusic(BiomeType newBiome) {
-        if (!musicEnabled || newBiome == currentBiome) return;
+        if (!musicEnabled || (pendingBiome != null && newBiome == pendingBiome)) return;
 
-        Music targetMusic = biomeMusic.get(newBiome);
-        if (targetMusic != null && targetMusic != currentMusic) {
-            if (currentMusic != null) {
-                // Start fade transition with safe initial volumes
-                nextMusic = targetMusic;
-                musicFadeTimer = MUSIC_FADE_DURATION;
-                currentMusic.setVolume(Math.max(0, musicVolume * masterVolume));
-                nextMusic.setVolume(0); // Start at 0 and fade in
-            } else {
-                // Direct start if no music is playing
-                targetMusic.setVolume(Math.max(0, musicVolume * masterVolume));
-                targetMusic.play();
+        pendingBiome = newBiome;
+
+        if (currentMusic == null || !currentMusic.isPlaying()) {
+            // No current music playing, start the music for pendingBiome
+            startMusicForPendingBiome();
+        }
+        // Else, current music is playing; will handle transition when it ends
+    }
+
+    private void startMusicForPendingBiome() {
+        if (pendingBiome != null) {
+            Music targetMusic = biomeMusic.get(pendingBiome);
+            if (targetMusic != null) {
                 currentMusic = targetMusic;
+                currentBiome = pendingBiome;
+                pendingBiome = null;
+                currentMusic.setVolume(Math.max(0, musicVolume * masterVolume));
+                currentMusic.setLooping(false); // Don't loop so it can end naturally
+                currentMusic.play();
+                setMusicCompletionListener();
+            } else {
+                // No music for the pending biome
+                currentMusic = null;
+                currentBiome = null;
+                pendingBiome = null;
             }
-            currentBiome = newBiome;
+        } else {
+            // No pending biome, stop current music
+            currentMusic = null;
+            currentBiome = null;
+        }
+    }
+
+    private void setMusicCompletionListener() {
+        if (currentMusic != null) {
+            currentMusic.setOnCompletionListener(new Music.OnCompletionListener() {
+                @Override
+                public void onCompletion(Music music) {
+                    // When current music completes
+                    startMusicForPendingBiome();
+                }
+            });
         }
     }
 
@@ -167,67 +283,27 @@ public class AudioManager {
         if (currentMusic != null) {
             currentMusic.setVolume(Math.max(0, musicVolume * masterVolume));
         }
-        if (nextMusic != null) {
-            nextMusic.setVolume(Math.max(0, musicVolume * masterVolume));
-        }
     }
 
     public void update(float delta) {
-        if (musicFadeTimer > 0 && nextMusic != null) {
-            musicFadeTimer -= delta;
-            // Clamp fadeAlpha between 0 and 1
-            float fadeAlpha = Math.max(0, Math.min(1, musicFadeTimer / MUSIC_FADE_DURATION));
+        if (isFadingOut && menuMusic.isPlaying()) {
+            fadeOutTimer -= delta;
+            float fadeAlpha = Math.max(0, fadeOutTimer / FADE_OUT_DURATION);
+            menuMusic.setVolume(fadeAlpha * 0.7f);
 
-            if (currentMusic != null) {
-                float currentVolume = Math.max(0, (musicVolume * masterVolume) * fadeAlpha);
-                currentMusic.setVolume(currentVolume);
-            }
-
-            // Ensure next music volume is never negative
-            float nextVolume = Math.max(0, (musicVolume * masterVolume) * (1 - fadeAlpha));
-            nextMusic.setVolume(nextVolume);
-
-            if (!nextMusic.isPlaying()) {
-                nextMusic.play();
-            }
-
-            if (musicFadeTimer <= 0) {
-                if (currentMusic != null) {
-                    currentMusic.stop();
-                }
-                // Ensure final volume is set correctly
-                nextMusic.setVolume(Math.max(0, musicVolume * masterVolume));
-                currentMusic = nextMusic;
-                nextMusic = null;
-                musicFadeTimer = 0;
+            if (fadeOutTimer <= 0) {
+                menuMusic.stop();
+                isFadingOut = false;
             }
         }
+        // No need to handle music fade transitions since we play the entire song
     }
 
-    public void setMasterVolume(float volume) {
-        this.masterVolume = Math.max(0, Math.min(1.0f, volume));
-        updateVolumes();
-    }
+    // Rest of the class remains the same...
 
-    // Custom sound management
-    public void addCustomSound(String identifier, String path) {
-        try {
-            Sound sound = Gdx.audio.newSound(Gdx.files.internal(path));
-            customSounds.put(identifier, sound);
-        } catch (Exception e) {
-            Gdx.app.error("AudioManager", "Failed to load custom sound: " + path);
-        }
-    }
+    // Sound effects, volume controls, and other methods...
 
-    public void playCustomSound(String identifier) {
-        if (!soundEnabled) return;
-
-        Sound sound = customSounds.get(identifier);
-        if (sound != null) {
-            sound.play(soundVolume * masterVolume);
-        }
-    }
-
+    // Dispose method
     public void dispose() {
         for (Sound sound : sounds.values()) {
             sound.dispose();
@@ -243,10 +319,18 @@ public class AudioManager {
         customSounds.clear();
     }
 
+    // Enum for SoundEffect remains the same...
     public enum SoundEffect {
         ITEM_PICKUP("sounds/pickup.ogg"),
         MENU_SELECT("sounds/select.ogg"),
-        MENU_BACK("sounds/back.ogg");
+        MENU_BACK("sounds/back.ogg"),
+        BATTLE_WIN("sounds/battle_win.ogg"),
+        CRITICAL_HIT("sounds/critical_hit.ogg"),
+        CURSOR_MOVE("sounds/cursor_move.ogg"),
+        DAMAGE("sounds/damage.ogg"),
+        MOVE_SELECT("sounds/move_select.ogg"),
+        NOT_EFFECTIVE("sounds/not_effective.ogg"),
+        SUPER_EFFECTIVE("sounds/super_effective.ogg");
 
         private final String path;
 

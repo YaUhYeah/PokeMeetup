@@ -4,7 +4,6 @@ import io.github.pokemeetup.managers.DatabaseManager;
 import io.github.pokemeetup.multiplayer.server.PlayerEvents;
 import io.github.pokemeetup.multiplayer.server.events.EventManager;
 import io.github.pokemeetup.multiplayer.server.storage.StorageSystem;
-import io.github.pokemeetup.system.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.PasswordUtils;

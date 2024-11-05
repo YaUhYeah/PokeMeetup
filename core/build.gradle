@@ -31,7 +31,8 @@ dependencies {
 
 
   implementation("at.favre.lib:bcrypt:0.10.2")
-  if(enableGraalNative == 'true') {
+    implementation 'androidx.games:games-activity:3.0.5'
+    if(enableGraalNative == 'true') {
     implementation "io.github.berstanio:gdx-svmhelper-annotations:$graalHelperVersion"
   }
 }

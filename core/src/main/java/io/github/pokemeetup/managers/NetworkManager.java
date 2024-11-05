@@ -85,16 +85,16 @@ public class NetworkManager {
         worldState.entities = new ArrayList<>();
         worldState.players = new ArrayList<>();
 
-        // Add entities
-        for (Entity entity : gameServer.getWorldManager().getCurrentWorld().getEntities()) {
-            NetworkProtocol.EntityUpdate entityUpdate = new NetworkProtocol.EntityUpdate();
-            entityUpdate.entityId = entity.getId();
-            entityUpdate.x = entity.getPosition().x;
-            entityUpdate.y = entity.getPosition().y;
-            entityUpdate.velocity = entity.getVelocity();
-            entityUpdate.entityType = entity.getType().toString();
-            worldState.entities.add(entityUpdate);
-        }
+//        // Add entities
+//        for (Entity entity : gameServer.getWorldManager().getCurrentWorld().getEntities()) {
+//            NetworkProtocol.EntityUpdate entityUpdate = new NetworkProtocol.EntityUpdate();
+//            entityUpdate.entityId = entity.getId();
+//            entityUpdate.x = entity.getPosition().x;
+//            entityUpdate.y = entity.getPosition().y;
+//            entityUpdate.velocity = entity.getVelocity();
+//            entityUpdate.entityType = entity.getType().toString();
+//            worldState.entities.add(entityUpdate);
+//        }
 
         // Add players
         for (ServerPlayer player : gameServer.getPlayerManager().getOnlinePlayers()) {

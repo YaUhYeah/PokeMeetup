@@ -1,64 +1,99 @@
 package io.github.pokemeetup.multiplayer.server.storage;
 
 import com.badlogic.gdx.utils.Json;
-import io.github.pokemeetup.system.PlayerData;
-import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
+import com.badlogic.gdx.utils.JsonValue;
+import io.github.pokemeetup.system.data.PlayerData;
+import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.utils.GameLogger;
+import io.github.pokemeetup.utils.storage.JsonConfig;
 
-import java.io.*;
+import java.io.IOException;
 import java.nio.file.*;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class FileStorage implements StorageSystem {
+    private static final String MULTIPLAYER_ROOT = "multiplayer/";
     private final Path baseDir;
     private final Path worldsDir;
     private final Path playersDir;
     private final Json json;
 
-    // Cache to prevent constant file reads
+    // Cache for multiplayer data
     private final ConcurrentHashMap<String, PlayerData> playerCache;
     private final ConcurrentHashMap<String, WorldData> worldCache;
 
     public FileStorage(String baseDirectory) {
-        this.baseDir = Paths.get(baseDirectory);
+        // Always use multiplayer root
+        this.baseDir = Paths.get(baseDirectory, MULTIPLAYER_ROOT);
         this.worldsDir = baseDir.resolve("worlds");
         this.playersDir = baseDir.resolve("players");
-        this.json = new Json();
+
+        this.json = JsonConfig.getInstance();
+        setupJsonSerializers(json);
+
         this.playerCache = new ConcurrentHashMap<>();
         this.worldCache = new ConcurrentHashMap<>();
+
+        GameLogger.info("Initializing multiplayer storage at: " + baseDir);
+    }
+
+    private void setupJsonSerializers(Json json) {
+        // Add UUID serializer
+        json.setSerializer(UUID.class, new Json.Serializer<UUID>() {
+            @Override
+            public void write(Json json, UUID uuid, Class knownType) {
+                json.writeValue(uuid != null ? uuid.toString() : null);
+            }
+
+            @Override
+            public UUID read(Json json, JsonValue jsonData, Class type) {
+                if (jsonData == null || jsonData.isNull()) return null;
+                try {
+                    return UUID.fromString(jsonData.asString());
+                } catch (Exception e) {
+                    GameLogger.error("Error parsing UUID: " + jsonData);
+                    return null;
+                }
+            }
+        });
+
+        // Add any other necessary serializers for multiplayer data
     }
 
     @Override
     public void initialize() throws IOException {
-        // Create directories if they don't exist
+        // Create directory structure
         Files.createDirectories(worldsDir);
         Files.createDirectories(playersDir);
 
-        // Load existing data into cache
+        // Load existing multiplayer data
         loadExistingData();
 
-        GameLogger.info("File storage initialized at: " + baseDir);
+        GameLogger.info("Multiplayer storage initialized");
     }
 
     private void loadExistingData() throws IOException {
-        // Load players
+        // Load player data
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(playersDir, "*.json")) {
             for (Path file : stream) {
                 String username = file.getFileName().toString().replace(".json", "");
                 PlayerData data = loadPlayerData(username);
                 if (data != null) {
                     playerCache.put(username, data);
+                    GameLogger.info("Loaded multiplayer player data: " + username);
                 }
             }
         }
 
-        // Load worlds
+        // Load world data
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(worldsDir, "*.json")) {
             for (Path file : stream) {
                 String worldName = file.getFileName().toString().replace(".json", "");
                 WorldData data = loadWorldData(worldName);
                 if (data != null) {
                     worldCache.put(worldName, data);
+                    GameLogger.info("Loaded multiplayer world: " + worldName);
                 }
             }
         }
@@ -67,10 +102,18 @@ public class FileStorage implements StorageSystem {
     @Override
     public void savePlayerData(String username, PlayerData data) throws IOException {
         Path file = playersDir.resolve(username + ".json");
+
+        // Create backup if file exists
+        if (Files.exists(file)) {
+            Path backup = file.resolveSibling(username + ".bak");
+            Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+        }
+
         String jsonData = json.prettyPrint(data);
         Files.writeString(file, jsonData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         playerCache.put(username, data);
-        GameLogger.info("Saved player data for: " + username);
+
+        GameLogger.info("Saved multiplayer player data: " + username);
     }
 
     @Override
@@ -86,11 +129,13 @@ public class FileStorage implements StorageSystem {
             if (Files.exists(file)) {
                 String jsonData = Files.readString(file);
                 PlayerData data = json.fromJson(PlayerData.class, jsonData);
-                playerCache.put(username, data);
+                if (data != null) {
+                    playerCache.put(username, data);
+                }
                 return data;
             }
         } catch (IOException e) {
-            GameLogger.info("Error loading player data for " + username + ": " + e.getMessage());
+            GameLogger.error("Error loading multiplayer player data: " + username + " - " + e.getMessage());
         }
         return null;
     }
@@ -98,10 +143,18 @@ public class FileStorage implements StorageSystem {
     @Override
     public void saveWorldData(String worldName, WorldData data) throws IOException {
         Path file = worldsDir.resolve(worldName + ".json");
+
+        // Create backup if file exists
+        if (Files.exists(file)) {
+            Path backup = file.resolveSibling(worldName + ".bak");
+            Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+        }
+
         String jsonData = json.prettyPrint(data);
         Files.writeString(file, jsonData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         worldCache.put(worldName, data);
-        GameLogger.info("Saved world data for: " + worldName);
+
+        GameLogger.info("Saved multiplayer world: " + worldName);
     }
 
     @Override
@@ -117,11 +170,13 @@ public class FileStorage implements StorageSystem {
             if (Files.exists(file)) {
                 String jsonData = Files.readString(file);
                 WorldData data = json.fromJson(WorldData.class, jsonData);
-                worldCache.put(worldName, data);
+                if (data != null) {
+                    worldCache.put(worldName, data);
+                }
                 return data;
             }
         } catch (IOException e) {
-            GameLogger.info("Error loading world data for " + worldName + ": " + e.getMessage());
+            GameLogger.error("Error loading multiplayer world: " + worldName + " - " + e.getMessage());
         }
         return null;
     }
@@ -134,12 +189,14 @@ public class FileStorage implements StorageSystem {
 
     @Override
     public void shutdown() {
-        // Save any cached data
+        GameLogger.info("Shutting down multiplayer storage...");
+
+        // Save all cached data
         playerCache.forEach((username, data) -> {
             try {
                 savePlayerData(username, data);
             } catch (IOException e) {
-                GameLogger.info("Error saving player data during shutdown: " + e.getMessage());
+                GameLogger.error("Error saving player data during shutdown: " + e.getMessage());
             }
         });
 
@@ -147,10 +204,11 @@ public class FileStorage implements StorageSystem {
             try {
                 saveWorldData(worldName, data);
             } catch (IOException e) {
-                GameLogger.info("Error saving world data during shutdown: " + e.getMessage());
+                GameLogger.error("Error saving world data during shutdown: " + e.getMessage());
             }
         });
 
         clearCache();
+        GameLogger.info("Multiplayer storage shutdown complete");
     }
 }

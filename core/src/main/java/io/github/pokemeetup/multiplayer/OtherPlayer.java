@@ -1,448 +1,355 @@
 package io.github.pokemeetup.multiplayer;
 
 import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.graphics.Pixmap;
-import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.*;
-import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
+import io.github.pokemeetup.pokemon.Pokemon;
+import io.github.pokemeetup.pokemon.PokemonParty;
 import io.github.pokemeetup.system.Player;
+import io.github.pokemeetup.system.data.PokemonData;
+import io.github.pokemeetup.system.gameplay.PlayerAnimations;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
 import io.github.pokemeetup.utils.GameLogger;
 
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * Represents another player in the multiplayer game.
+ * Handles synchronization of position, movement, direction, and inventory based on network updates.
+ */
 public class OtherPlayer {
     private static final float LERP_ALPHA = 0.2f;
-    private final String username;
-    private float x, y;
-    private String direction;
-    private boolean isMoving;
-    private boolean wantsToRun;
-    private Animation<TextureRegion> runUpAnimation;
-    private Animation<TextureRegion> runDownAnimation;
-    private Animation<TextureRegion> runLeftAnimation;
-    private Animation<TextureRegion> runRightAnimation;
-    private Animation<TextureRegion> walkUpAnimation;
-    private Animation<TextureRegion> walkDownAnimation;
-    private Animation<TextureRegion> walkLeftAnimation;
-    private Animation<TextureRegion> walkRightAnimation;
-    private TextureRegion currentFrame;
-    private BitmapFont font;
-    private Vector2 targetPosition;
-    private Vector2 currentPosition;
-    private Inventory inventory;
-    private float stateTime;
+    private static final float ANIMATION_FRAME_DURATION = 0.25f / 4;
+    private static final float RUN_ANIMATION_FRAME_DURATION = 0.1f;
 
+    private final String username;
+    private final Inventory inventory;
+    private final PlayerAnimations animations;
+    private final Object positionLock = new Object();
+    private final Object inventoryLock = new Object();
+    private final AtomicBoolean isMoving;
+    private final AtomicBoolean wantsToRun;
+    private Vector2 position;
+    private Vector2 targetPosition;
+    private String direction;
+    private float stateTime;
+    private BitmapFont font;
+
+    private PokemonParty pokemonParty;
+    private Map<UUID, Pokemon> ownedPokemon;
+
+    /**
+     * Constructs an OtherPlayer instance.
+     *
+     * @param username The username of the other player.
+     * @param x        The initial X position.
+     * @param y        The initial Y position.
+     * @param atlas    The TextureAtlas containing player textures.
+     */
     public OtherPlayer(String username, float x, float y, TextureAtlas atlas) {
-        this.username = username != null ? username : "Unknown";
-        this.inventory = new Inventory();
-        this.x = x;
-        this.y = y;
-        this.currentPosition = new Vector2(x, y);
+        this.username = (username != null && !username.isEmpty()) ? username : "Unknown";
+        this.position = new Vector2(x, y);
         this.targetPosition = new Vector2(x, y);
+        this.inventory = new Inventory();
         this.direction = "down";
-        this.isMoving = false;
-        this.wantsToRun = false;
+        this.isMoving = new AtomicBoolean(false);
+        this.wantsToRun = new AtomicBoolean(false);
         this.stateTime = 0;
-        initializeAnimations(atlas);
+        this.pokemonParty = new PokemonParty();
+        this.ownedPokemon = new HashMap<>();
+        this.animations = new PlayerAnimations();
+
+        GameLogger.info("Created OtherPlayer: " + this.username + " at (" + x + ", " + y + ")");
     }
 
+    public void updatePokemon(NetworkProtocol.PokemonUpdate update) {
+        // Get or create the Pokemon
+        Pokemon pokemon = ownedPokemon.get(update.uuid);
+        if (pokemon == null) {
+            pokemon = update.data.toPokemon();
+            if (pokemon != null) {
+                pokemon.setUuid(update.uuid);
+                ownedPokemon.put(update.uuid, pokemon);
+            } else {
+                GameLogger.error("Failed to create Pokemon from update data");
+                return;
+            }
+        }
+
+        // Update Pokemon state
+        pokemon.setPosition(new Vector2(update.x, update.y));
+        pokemon.setCurrentHp(update.data.getBaseHp());
+        // Update other volatile stats as needzed
+    }
+
+    public void updateParty(List<PokemonData> partyData) {
+        pokemonParty.clearParty();
+        for (PokemonData data : partyData) {
+            Pokemon pokemon = ownedPokemon.get(data.getUuid());
+            if (pokemon == null) {
+                pokemon = data.toPokemon();
+                if (pokemon != null) {
+                    pokemon.setUuid(data.getUuid());
+                    ownedPokemon.put(data.getUuid(), pokemon);
+                }
+            }
+            if (pokemon != null) {
+                pokemonParty.addPokemon(pokemon);
+            }
+        }
+    }
+
+    /**
+     * Updates the OtherPlayer's state each frame.
+     *
+     * @param delta The time elapsed since the last frame.
+     */
+    public void update(float delta) {
+        synchronized (positionLock) {
+            // Interpolate position smoothly towards targetPosition
+            if (!position.epsilonEquals(targetPosition, 0.1f)) {
+                // Increase LERP_ALPHA dynamically to reach target position faster
+                float dynamicLerpAlpha = LERP_ALPHA + Math.min(0.5f, position.dst(targetPosition) * 0.01f);
+                position.lerp(targetPosition, dynamicLerpAlpha);
+            }
+        }
+
+        // Only advance animation state if moving
+        if (isMoving.get()) {
+            stateTime += delta;
+        }
+    }
+
+    public void updateFromNetwork(NetworkProtocol.PlayerUpdate netUpdate) {
+        if (netUpdate == null) {
+            GameLogger.error("Received null PlayerUpdate for OtherPlayer: " + username);
+            return;
+        }
+
+        // Synchronize position based on server-provided tile position
+        synchronized (positionLock) {
+            // Convert tile coordinates to pixel coordinates if necessary
+            float pixelX = netUpdate.x;
+            float pixelY = netUpdate.y;
+
+            // Set target position to smoothly interpolate towards
+            targetPosition.set(pixelX, pixelY);
+
+            direction = (netUpdate.direction != null) ? netUpdate.direction : "down";
+            isMoving.set(netUpdate.isMoving);
+            wantsToRun.set(netUpdate.wantsToRun);
+        }
+
+        GameLogger.info("OtherPlayer " + username + " updated from network: Position=(" + netUpdate.x + ", " + netUpdate.y + "), Direction=" + direction);
+    }
+
+    /**
+     * Renders the OtherPlayer on the screen.
+     *
+     * @param batch The SpriteBatch used for rendering.
+     */
+    public void render(SpriteBatch batch) {
+        TextureRegion currentFrame = animations.getCurrentFrame(
+            direction,
+            isMoving.get(),
+            wantsToRun.get(),
+            stateTime
+        );
+
+        if (currentFrame == null) {
+            GameLogger.error("OtherPlayer " + username + " has null currentFrame. Check PlayerAnimations.");
+            return;
+        }
+
+        synchronized (positionLock) {
+            batch.draw(currentFrame, position.x, position.y,
+                Player.FRAME_WIDTH, Player.FRAME_HEIGHT);
+        }
+
+        renderUsername(batch);
+    }
+
+    /**
+     * Renders the OtherPlayer's username above their character.
+     *
+     * @param batch The SpriteBatch used for rendering.
+     */
+    private void renderUsername(SpriteBatch batch) {
+        if (username == null || username.isEmpty()) return;
+
+        ensureFontLoaded();
+        GlyphLayout layout = new GlyphLayout(font, username);
+        float textWidth = layout.width;
+
+        synchronized (positionLock) {
+            font.draw(batch, username,
+                position.x + (Player.FRAME_WIDTH - textWidth) / 2,
+                position.y + Player.FRAME_HEIGHT + 15);
+        }
+    }
+
+    /**
+     * Ensures that the font is loaded and ready for rendering.
+     */
+    private void ensureFontLoaded() {
+        if (font == null) {
+            try {
+                font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
+                font.getData().setScale(0.8f);
+                GameLogger.error("Loaded font for OtherPlayer: " + username);
+            } catch (Exception e) {
+                GameLogger.error("Failed to load font for OtherPlayer: " + username + " - " + e.getMessage());
+                font = new BitmapFont(); // Fallback to default font
+            }
+        }
+    }
+
+    /**
+     * Disposes of resources used by OtherPlayer.
+     */
+    public void dispose() {
+        if (font != null) {
+            font.dispose();
+            font = null;
+            GameLogger.error("Disposed font for OtherPlayer: " + username);
+        }
+        animations.dispose();
+        GameLogger.error(
+            ("Disposed animations for OtherPlayer: " + username));
+    }
+
+    /**
+     * Gets the current position of the OtherPlayer.
+     *
+     * @return A copy of the position vector.
+     */
+    public Vector2 getPosition() {
+        synchronized (positionLock) {
+            return new Vector2(position);
+        }
+    }
+
+    public void setPosition(Vector2 position) {
+        this.position = position;
+    }
+
+    // Getters with appropriate synchronization
+
+    /**
+     * Gets the OtherPlayer's Inventory.
+     *
+     * @return The Inventory instance.
+     */
+    public Inventory getInventory() {
+        synchronized (inventoryLock) {
+            return inventory;
+        }
+    }
+
+    /**
+     * Gets the username of the OtherPlayer.
+     *
+     * @return The username string.
+     */
+    public String getUsername() {
+        return username;
+    }
+
+    /**
+     * Gets the direction the OtherPlayer is facing.
+     *
+     * @return The direction string.
+     */
+    public String getDirection() {
+        synchronized (positionLock) {
+            return direction;
+        }
+    }
+
+    /**
+     * Checks if the OtherPlayer is currently moving.
+     *
+     * @return True if moving, false otherwise.
+     */
+    public boolean isMoving() {
+        return isMoving.get();
+    }
+
+    /**
+     * Checks if the OtherPlayer wants to run.
+     *
+     * @return True if wants to run, false otherwise.
+     */
+    public boolean isWantsToRun() {
+        return wantsToRun.get();
+    }
+
+    /**
+     * Gets the current X position of the OtherPlayer.
+     *
+     * @return The X coordinate.
+     */
+    public float getX() {
+        synchronized (positionLock) {
+            return position.x;
+        }
+    }
+
+    /**
+     * Sets the OtherPlayer's X position.
+     *
+     * @param x The new X position.
+     */
+
+    /**
+     * Sets the X position of the OtherPlayer.
+     *
+     * @param x The new X coordinate.
+     */
+    public void setX(float x) {
+        synchronized (positionLock) {
+            this.position.x = x;
+        }
+    }
+
+    /**
+     * Gets the current Y position of the OtherPlayer.
+     *
+     * @return The Y coordinate.
+     */
+    public float getY() {
+        synchronized (positionLock) {
+            return position.y;
+        }
+    }
+
+    /**
+     * Sets the Y position of the OtherPlayer.
+     *
+     * @param y The new Y coordinate.
+     */
+    public void setY(float y) {
+        synchronized (positionLock) {
+            this.position.y = y;
+        }
+    }
+
+    /**
+     * Gets the target position of the OtherPlayer.
+     * This is used for interpolating the player's movement.
+     *
+     * @return A copy of the target position Vector2.
+     */
     public Vector2 getTargetPosition() {
-        return targetPosition;
+        synchronized (positionLock) {
+            return new Vector2(targetPosition);
+        }
     }
 
     public void setTargetPosition(Vector2 targetPosition) {
         this.targetPosition = targetPosition;
     }
 
-    public void update(float delta) {
-        // Interpolate position
-        if (targetPosition != null) {
-            x = MathUtils.lerp(x, targetPosition.x, LERP_ALPHA);
-            y = MathUtils.lerp(y, targetPosition.y, LERP_ALPHA);
-        }
-        // Update animation
-        updateCurrentFrame();
-    }
-
-    public void updateFromNetwork(NetworkProtocol.PlayerUpdate netUpdate) {
-        if (netUpdate != null) {
-            // Update the position, direction, and movement state based on the network update
-            this.targetPosition = new Vector2(netUpdate.x, netUpdate.y);
-            this.x = netUpdate.x;
-            this.y = netUpdate.y;
-            this.direction = netUpdate.direction != null ? netUpdate.direction : "down";
-            this.isMoving = netUpdate.isMoving;
-            this.wantsToRun = netUpdate.wantsToRun;
-
-            GameLogger.info("Updated OtherPlayer " + netUpdate.username + " to position (" + netUpdate.x + ", " + netUpdate.y + ")");
-        }
-    }
-
-
-    public Inventory getInventory() {
-        return inventory;
-    }
-
-    public void setInventory(Inventory inventory) {
-        this.inventory = inventory;
-    }
-
-    private void ensureFontLoaded() {
-        if (font == null) {
-            try {
-                font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
-                font.getData().setScale(0.8f);
-            } catch (Exception e) {
-                GameLogger.info("Error loading font: " + e.getMessage());
-                font = new BitmapFont(); // Fallback to default font
-            }
-        }
-    }
-
-    public void render(SpriteBatch batch) {
-        updateCurrentFrame();
-//        GameLogger.info(STR."Rendering OtherPlayer \{username} at position (\{x}, \{y})");
-        batch.draw(currentFrame, x, y, Player.FRAME_WIDTH, Player.FRAME_HEIGHT);
-
-        if (username != null) {
-            ensureFontLoaded(); // Ensure font is loaded before use
-            GlyphLayout layout = new GlyphLayout(font, username);
-            float textWidth = layout.width;
-            font.draw(batch, username, x + (Player.FRAME_WIDTH - textWidth) / 2,
-                y + Player.FRAME_HEIGHT + 15);
-        }
-    }
-
-    public String getUsername() {
-        return username;
-    }
-
-    public float getX() {
-        return x;
-    }
-
-    public void setX(float x) {
-        this.x = x;
-    }
-
-    public void setRunUpAnimation(Animation<TextureRegion> runUpAnimation) {
-        this.runUpAnimation = runUpAnimation;
-    }
-
-    public void setRunDownAnimation(Animation<TextureRegion> runDownAnimation) {
-        this.runDownAnimation = runDownAnimation;
-    }
-
-    public void setRunLeftAnimation(Animation<TextureRegion> runLeftAnimation) {
-        this.runLeftAnimation = runLeftAnimation;
-    }
-
-    public void setRunRightAnimation(Animation<TextureRegion> runRightAnimation) {
-        this.runRightAnimation = runRightAnimation;
-    }
-
-    public void setWalkUpAnimation(Animation<TextureRegion> walkUpAnimation) {
-        this.walkUpAnimation = walkUpAnimation;
-    }
-
-    public void setWalkDownAnimation(Animation<TextureRegion> walkDownAnimation) {
-        this.walkDownAnimation = walkDownAnimation;
-    }
-
-    public void setWalkLeftAnimation(Animation<TextureRegion> walkLeftAnimation) {
-        this.walkLeftAnimation = walkLeftAnimation;
-    }
-
-    public void setWalkRightAnimation(Animation<TextureRegion> walkRightAnimation) {
-        this.walkRightAnimation = walkRightAnimation;
-    }
-
-    public void setCurrentFrame(TextureRegion currentFrame) {
-        this.currentFrame = currentFrame;
-    }
-
-    public void setFont(BitmapFont font) {
-        this.font = font;
-    }
-
-    public void setCurrentPosition(Vector2 currentPosition) {
-        this.currentPosition = currentPosition;
-    }
-
-    public void setStateTime(float stateTime) {
-        this.stateTime = stateTime;
-    }
-
-    public float getY() {
-        return y;
-    }
-
-    public void setY(float y) {
-        this.y = y;
-    }
-
-    public String getDirection() {
-        return direction;
-    }
-
-    public void setDirection(String direction) {
-        this.direction = direction;
-    }
-
-    public boolean isMoving() {
-        return isMoving;
-    }
-
-    public void setMoving(boolean moving) {
-        isMoving = moving;
-    }
-
-    public boolean isWantsToRun() {
-        return wantsToRun;
-    }
-
-    public void setWantsToRun(boolean wantsToRun) {
-        this.wantsToRun = wantsToRun;
-    }
-
-    private void updateCurrentFrame() {
-        Animation<TextureRegion> currentAnimation;
-
-        // Default to down if direction is null
-        if (direction == null) {
-            direction = "down";
-        }
-
-        if (isMoving) {
-            boolean running = wantsToRun;
-            if ("up".equalsIgnoreCase(direction)) {
-                currentAnimation = running ? runUpAnimation : walkUpAnimation;
-            } else if ("down".equalsIgnoreCase(direction)) {
-                currentAnimation = running ? runDownAnimation : walkDownAnimation;
-            } else if ("left".equalsIgnoreCase(direction)) {
-                currentAnimation = running ? runLeftAnimation : walkLeftAnimation;
-            } else if ("right".equalsIgnoreCase(direction)) {
-                currentAnimation = running ? runRightAnimation : walkRightAnimation;
-            } else {
-                currentAnimation = walkDownAnimation;
-            }
-
-
-            stateTime += Gdx.graphics.getDeltaTime();
-            currentFrame = currentAnimation.getKeyFrame(stateTime, true);
-        } else {
-            // Standing frames with null safety
-            if ("up".equalsIgnoreCase(direction)) {
-                currentFrame = walkUpAnimation.getKeyFrames()[0];
-            } else if ("down".equalsIgnoreCase(direction)) {
-                currentFrame = walkDownAnimation.getKeyFrames()[0];
-            } else if ("left".equalsIgnoreCase(direction)) {
-                currentFrame = walkLeftAnimation.getKeyFrames()[0];
-            } else if ("right".equalsIgnoreCase(direction)) {
-                currentFrame = walkRightAnimation.getKeyFrames()[0];
-            } else {
-                currentFrame = walkDownAnimation.getKeyFrames()[0];
-            }
-
-            stateTime = 0;
-        }
-    }
-
-    // Update the updateFromNetwork method to include null safety
-    public void updateFromNetwork(Object update) {
-        if (update instanceof NetworkProtocol.PlayerUpdate) {
-            NetworkProtocol.PlayerUpdate netUpdate = (NetworkProtocol.PlayerUpdate) update;
-            this.x = netUpdate.x; // Update position
-            this.y = netUpdate.y;
-            this.targetPosition = new Vector2(netUpdate.x, netUpdate.y); // Update the target position
-
-            this.direction = netUpdate.direction; // Ensure direction is updated if necessary
-            this.isMoving = netUpdate.isMoving;
-            this.wantsToRun = netUpdate.wantsToRun;
-            if (netUpdate.inventoryItemNames != null) {
-                this.inventory.loadFromStrings(netUpdate.inventoryItemNames);  // Load inventory items
-                GameLogger.info("Updated inventory for " + username + ": " + netUpdate.inventoryItemNames);
-            }
-            handlePlayerUpdate((NetworkProtocol.PlayerUpdate) update);
-        } else if (update instanceof OtherPlayer) {
-            handleOtherPlayerUpdate((OtherPlayer) update);
-        } else {
-            GameLogger.info("Unknown update type: " + update.getClass().getName());
-        }
-    }
-
-    private void handlePlayerUpdate(NetworkProtocol.PlayerUpdate update) {
-        if (update == null) return;
-
-        this.x = update.x;
-        this.y = update.y;
-        this.direction = update.direction != null ? update.direction : "down";
-        this.isMoving = update.isMoving;
-        this.wantsToRun = update.wantsToRun;
-        if (this.targetPosition == null) {
-            this.targetPosition = new Vector2();
-        }
-        this.targetPosition.set(update.x, update.y);
-
-        // Update inventory if present
-        if (update.inventoryItemNames != null && this.inventory != null) {
-            this.inventory.loadFromStrings(update.inventoryItemNames);
-        }
-
-        // Update state time for animations
-        if (this.isMoving) {
-            this.stateTime += Gdx.graphics.getDeltaTime();
-        } else {
-            this.stateTime = 0;
-        }
-
-        updateCurrentFrame();
-    }
-
-    private void handleOtherPlayerUpdate(OtherPlayer otherPlayer) {
-        if (otherPlayer == null) return;
-
-        this.x = otherPlayer.getX();
-        this.y = otherPlayer.getY();
-        this.direction = otherPlayer.getDirection() != null ? otherPlayer.getDirection() : "down";
-        this.isMoving = otherPlayer.isMoving();
-        this.wantsToRun = otherPlayer.isWantsToRun();
-        if (this.targetPosition == null) {
-            this.targetPosition = new Vector2();
-        }
-        this.targetPosition.set(otherPlayer.getX(), otherPlayer.getY());
-
-        // Update inventory if available
-        if (otherPlayer.getInventory() != null && this.inventory != null) {
-            this.inventory = otherPlayer.getInventory();
-        }
-
-        // Update animations
-        updateCurrentFrame();
-    }
-
-    private boolean validateFrames(TextureRegion[] frames) {
-        for (TextureRegion frame : frames) {
-            if (frame == null) return false;
-        }
-        return true;
-    }
-
-    private void createPlaceholderFrames(TextureRegion[]... frameArrays) {
-        // Create a simple colored rectangle as placeholder
-        Pixmap pixmap = new Pixmap(32, 48, Pixmap.Format.RGBA8888);
-        pixmap.setColor(1, 0, 1, 1); // Magenta color for missing textures
-        pixmap.fill();
-
-        Texture placeholderTexture = new Texture(pixmap);
-        TextureRegion placeholderRegion = new TextureRegion(placeholderTexture);
-
-        pixmap.dispose();
-
-        // Fill all frame arrays with the placeholder
-        for (TextureRegion[] frames : frameArrays) {
-            for (int i = 0; i < frames.length; i++) {
-                if (frames[i] == null) {
-                    frames[i] = placeholderRegion;
-                }
-            }
-        }
-    }
-
-
-    private void initializeAnimations(TextureAtlas atlas) {
-        if (atlas == null) {
-            throw new IllegalArgumentException("TextureAtlas cannot be null");
-        }
-
-        // Arrays to store frames
-        TextureRegion[] walkDownFrames = new TextureRegion[4];
-        TextureRegion[] walkLeftFrames = new TextureRegion[4];
-        TextureRegion[] walkRightFrames = new TextureRegion[4];
-        TextureRegion[] walkUpFrames = new TextureRegion[4];
-        TextureRegion[] runDownFrames = new TextureRegion[4];
-        TextureRegion[] runLeftFrames = new TextureRegion[4];
-        TextureRegion[] runRightFrames = new TextureRegion[4];
-        TextureRegion[] runUpFrames = new TextureRegion[4];
-
-        try {
-            // Walking animations - load frames using indices 1-4
-            walkDownFrames[0] = atlas.findRegion("boy_walk_down", 1);
-            walkDownFrames[1] = atlas.findRegion("boy_walk_down", 2);
-            walkDownFrames[2] = atlas.findRegion("boy_walk_down", 3);
-            walkDownFrames[3] = atlas.findRegion("boy_walk_down", 4);
-
-            walkLeftFrames[0] = atlas.findRegion("boy_walk_left", 1);
-            walkLeftFrames[1] = atlas.findRegion("boy_walk_left", 2);
-            walkLeftFrames[2] = atlas.findRegion("boy_walk_left", 3);
-            walkLeftFrames[3] = atlas.findRegion("boy_walk_left", 4);
-
-            walkRightFrames[0] = atlas.findRegion("boy_walk_right", 1);
-            walkRightFrames[1] = atlas.findRegion("boy_walk_right", 2);
-            walkRightFrames[2] = atlas.findRegion("boy_walk_right", 3);
-            walkRightFrames[3] = atlas.findRegion("boy_walk_right", 4);
-
-            walkUpFrames[0] = atlas.findRegion("boy_walk_up", 1);
-            walkUpFrames[1] = atlas.findRegion("boy_walk_up", 2);
-            walkUpFrames[2] = atlas.findRegion("boy_walk_up", 3);
-            walkUpFrames[3] = atlas.findRegion("boy_walk_up", 4);
-
-            // Validate that all frames were loaded successfully
-            // Running animations - load frames using indices 1-4
-            runDownFrames[0] = atlas.findRegion("boy_run_down", 1);
-            runDownFrames[1] = atlas.findRegion("boy_run_down", 2);
-            runDownFrames[2] = atlas.findRegion("boy_run_down", 3);
-            runDownFrames[3] = atlas.findRegion("boy_run_down", 4);
-
-            runLeftFrames[0] = atlas.findRegion("boy_run_left", 1);
-            runLeftFrames[1] = atlas.findRegion("boy_run_left", 2);
-            runLeftFrames[2] = atlas.findRegion("boy_run_left", 3);
-            runLeftFrames[3] = atlas.findRegion("boy_run_left", 4);
-
-            runRightFrames[0] = atlas.findRegion("boy_run_right", 1);
-            runRightFrames[1] = atlas.findRegion("boy_run_right", 2);
-            runRightFrames[2] = atlas.findRegion("boy_run_right", 3);
-            runRightFrames[3] = atlas.findRegion("boy_run_right", 4);
-
-            runUpFrames[0] = atlas.findRegion("boy_run_up", 1);
-            runUpFrames[1] = atlas.findRegion("boy_run_up", 2);
-            runUpFrames[2] = atlas.findRegion("boy_run_up", 3);
-            runUpFrames[3] = atlas.findRegion("boy_run_up", 4);
-            boolean framesValid = validateFrames(walkDownFrames) && validateFrames(walkLeftFrames) &&
-                validateFrames(walkRightFrames) && validateFrames(walkUpFrames);
-            float runFrameDuration = 0.1f; // Faster frame duration for running
-            runDownAnimation = new Animation<>(runFrameDuration, runDownFrames);
-            runLeftAnimation = new Animation<>(runFrameDuration, runLeftFrames);
-            runRightAnimation = new Animation<>(runFrameDuration, runRightFrames);
-            runUpAnimation = new Animation<>(runFrameDuration, runUpFrames);
-            if (!framesValid) {
-                Gdx.app.error("OtherPlayer", "Some animation frames failed to load. Creating placeholder frames.");
-                createPlaceholderFrames(walkDownFrames, walkLeftFrames, walkRightFrames, walkUpFrames);
-            }
-
-        } catch (Exception e) {
-            Gdx.app.error("OtherPlayer", "Error loading animation frames: " + e.getMessage());
-            createPlaceholderFrames(walkDownFrames, walkLeftFrames, walkRightFrames, walkUpFrames);
-        }
-
-        // Create walking animations
-        float frameDuration = 0.25f / 4; // Adjust based on your game's movement speed
-
-        walkDownAnimation = new Animation<>(frameDuration, walkDownFrames);
-        walkLeftAnimation = new Animation<>(frameDuration, walkLeftFrames);
-        walkRightAnimation = new Animation<>(frameDuration, walkRightFrames);
-        walkUpAnimation = new Animation<>(frameDuration, walkUpFrames);
-
-        // Initialize currentFrame to a default standing frame
-        currentFrame = walkDownFrames[0]; // Start facing down
-    }
-
-    public void dispose() {
-        if (font != null) {
-            font.dispose();
-            font = null;
-        }
-        // Dispose other resources if needed
-    }
 }

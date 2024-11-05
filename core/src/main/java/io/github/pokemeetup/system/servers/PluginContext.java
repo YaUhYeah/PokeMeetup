@@ -1,7 +1,6 @@
 package io.github.pokemeetup.system.servers;
 
-import io.github.pokemeetup.system.gameplay.overworld.World;
-import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
+import io.github.pokemeetup.system.data.WorldData;
 
 import java.util.Map;
 

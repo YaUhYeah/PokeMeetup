@@ -2,7 +2,15 @@ package io.github.pokemeetup.lwjgl3;
 
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3Application;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3ApplicationConfiguration;
+import com.badlogic.gdx.utils.Json;
 import io.github.pokemeetup.CreatureCaptureGame;
+import io.github.pokemeetup.pokemon.Pokemon;
+import io.github.pokemeetup.system.data.PokemonData;
+import io.github.pokemeetup.utils.storage.JsonConfig;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 
 /** Launches the desktop (LWJGL3) application. */
 public class Lwjgl3Launcher {

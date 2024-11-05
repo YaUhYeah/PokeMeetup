@@ -1,382 +1,504 @@
 package io.github.pokemeetup.system.gameplay.inventory;
 
-import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.files.FileHandle;
-import com.badlogic.gdx.graphics.g2d.SpriteBatch;
-import com.badlogic.gdx.utils.Json;
+import io.github.pokemeetup.system.data.ItemData;
+import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingSystem;
 import io.github.pokemeetup.utils.GameLogger;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 public class Inventory {
-    public static final int HOTBAR_SIZE = 9;  // First 9 slots
-    public static final int INVENTORY_ROWS = 3;
-    public static final int INVENTORY_COLS = 9;
-    public static final int INVENTORY_SIZE = INVENTORY_ROWS * INVENTORY_COLS;
-    public static final int INVENTORY_CAPACITY = INVENTORY_SIZE * 64;  // Total 27 slots
-
-    public static final int CRAFTING_GRID_SIZE = 4; // 2x2 for inventory crafting
-    private static final String SAVE_FILE = "assets/save/inventory.json";
-    private final Item[][] craftingGrid;
-    private float heldItemX;
-    private float heldItemY;
-    private String[] itemNames; // Array of item names for serialization
-    private Item craftingResult;
-    private int selectedHotbarSlot;
-    private Item heldItem = null;  // Currently held item
-    private int heldItemCount = 0; // Count of held item
-    private List<Item> hotbarCache;
-    private final List<Item> inventoryItems;  // Main inventory slots
-    private final List<Item> hotbarItems;     // Hotbar slots
+    public static final int INVENTORY_SIZE = 36; // Total slots available
+    private final List<ItemData> items;
+    private final Map<UUID, ItemData> itemTracker;
+    private final Object inventoryLock = new Object();
+    private CraftingSystem craftingSystem;
+    private int selectedSlot;
 
     public Inventory() {
-        inventoryItems = new ArrayList<>(INVENTORY_SIZE);
-        hotbarItems = new ArrayList<>(HOTBAR_SIZE);
-        for (int i = 0; i < INVENTORY_SIZE; i++) {
-            inventoryItems.add(null);
-        }
-        for (int i = 0; i < HOTBAR_SIZE; i++) {
-            hotbarItems.add(null);
-        }
-        craftingGrid = new Item[2][2];
-        selectedHotbarSlot = 0;
-        GameLogger.info("Created new inventory with " + INVENTORY_SIZE + " slots");
-    }
+        this.craftingSystem = new CraftingSystem(this);
 
-    // Update getSelectedIndex to work with first 9 slots
-    public int getSelectedIndex() {
-        return selectedHotbarSlot;  // This should be 0-8
+        this.items = new ArrayList<>(Collections.nCopies(INVENTORY_SIZE, null));
+        this.itemTracker = new ConcurrentHashMap<>();
+        this.selectedSlot = 0;
     }
+    // Add these to the Inventory class
 
-    public void selectItem(int index) {
-        if (index >= 0 && index < HOTBAR_SIZE) {  // Only allow selecting first 9 slots
-            selectedHotbarSlot = index;
+    /**
+     * Checks if the inventory is completely empty.
+     *
+     * @return true if all slots are empty, false otherwise
+     */
+    public boolean isEmpty() {
+        synchronized (inventoryLock) {
+            return items.stream().allMatch(Objects::isNull);
         }
     }
 
-    public List<Item> getHotbarItems() {
-        return hotbarItems;
-    }
-
-    public int getSelectedHotbarSlot() {
-        return selectedHotbarSlot;
-    }
-
-    public void selectHotbarSlot(int index) {
-        if (index >= 0 && index < HOTBAR_SIZE) {
-            selectedHotbarSlot = index;
+    /**
+     * Gets the number of empty slots in the inventory.
+     *
+     * @return count of empty slots
+     */
+    public int getEmptySlotCount() {
+        synchronized (inventoryLock) {
+            return (int) items.stream().filter(Objects::isNull).count();
         }
     }
 
-    public boolean addItemToHotbar(Item newItem) {
-        // Try to stack with existing items in hotbar
-        for (int i = 0; i < hotbarItems.size(); i++) {
-            Item existingItem = hotbarItems.get(i);
-            if (existingItem != null && existingItem.canStackWith(newItem)) {
-                int leftover = existingItem.addToStack(newItem.getCount());
-                if (leftover == 0) {
-                    return true; // Successfully added all items
+    /**
+     * Finds the first empty slot in the inventory.
+     *
+     * @return index of first empty slot, or -1 if inventory is full
+     */
+    public int getFirstEmptySlot() {
+        synchronized (inventoryLock) {
+            for (int i = 0; i < items.size(); i++) {
+                if (items.get(i) == null) {
+                    return i;
                 }
-                newItem.setCount(leftover);
             }
-        }
-
-        // Add to empty slot if any
-        for (int i = 0; i < hotbarItems.size(); i++) {
-            if (hotbarItems.get(i) == null) {
-                hotbarItems.set(i, newItem.copy());
-                return true; // Successfully added item to hotbar
-            }
-        }
-
-        return false; // Hotbar is full
-    }
-
-    public boolean addItemToInventory(Item newItem) {
-        // Try to stack with existing items in inventory
-        for (int i = 0; i < inventoryItems.size(); i++) {
-            Item existingItem = inventoryItems.get(i);
-            if (existingItem != null && existingItem.canStackWith(newItem)) {
-                int leftover = existingItem.addToStack(newItem.getCount());
-                if (leftover == 0) {
-                    return true; // Successfully added all items
-                }
-                newItem.setCount(leftover);
-            }
-        }
-
-        // Add to empty slot if any
-        for (int i = 0; i < inventoryItems.size(); i++) {
-            if (inventoryItems.get(i) == null) {
-                inventoryItems.set(i, newItem.copy());
-                return true; // Successfully added item to inventory
-            }
-        }
-
-        return false; // Inventory is full
-    }
-
-    // Update hotbar-related methods to use first 9 slots
-    public void updateHotbarDisplay() {
-        for (int i = 0; i < HOTBAR_SIZE; i++) {
-            if (hotbarCache != null) {
-                hotbarCache.set(i, getItem(i));
-            }
+            return -1;
         }
     }
 
-    // Check if currently holding an item
-    public boolean isHoldingItem() {
-        return heldItem != null;
-    }
-
-    // Get the currently held item
-    public Item getHeldItem() {
-        return heldItem;
-    }
-
-    // Get count of held item
-    public int getHeldItemCount() {
-        return heldItemCount;
-    }
-
-    // Set an item as held
-    public void setHeldItem(Item item, int count) {
-        this.heldItem = item;
-        this.heldItemCount = count;
-    }
-
-    // Clear the held item
-    public void clearHeldItem() {
-        this.heldItem = null;
-        this.heldItemCount = 0;
-    }
-
-    // Decrease held item count by 1
-    public void decrementHeldItem() {
-        if (heldItemCount > 0) {
-            heldItemCount--;
-            if (heldItemCount == 0) {
-                heldItem = null;
-            }
-        }
-    }
-
-    public void setItem(int index, Item item) {
-        if (index >= 0 && index < inventoryItems.size()) {
-            inventoryItems.set(index, item);
-            if (itemNames != null) {
-                itemNames[index] = item != null ? item.getName() : null;
-            }
-        }
-    }
-
-    public void loadFromStrings(List<String> itemStrings) {
-        if (itemStrings == null) {
-            GameLogger.info("No inventory data to load");
-            return;
-        }
-
-        // Clear existing items first
-        for (int i = 0; i < INVENTORY_SIZE; i++) {
-            inventoryItems.set(i, null);
-        }
-
-        GameLogger.info("Loading inventory items: " + itemStrings);
-
-        for (String itemString : itemStrings) {
-            try {
-                String[] parts = itemString.trim().split(":");
-                if (parts.length == 2) {
-                    String itemName = parts[0].trim();
-                    int count = Integer.parseInt(parts[1].trim());
-
-                    Item item = ItemManager.getItem(itemName);
-                    if (item != null) {
-                        // Create a new item instance to avoid sharing references
-                        Item newItem = new Item(
-                            item.getName(),
-                            item.getName().toLowerCase(),
-                            item.getIcon()
-                        );
-                        newItem.setCount(count);
-                        addItem(newItem);
-                    } else {
-                        GameLogger.info("Unknown item: " + itemName);
-                    }
-                }
-            } catch (Exception e) {
-                GameLogger.info("Error loading item: " + itemString + " - " + e.getMessage());
-            }
-        }
-
-        // Debug output final inventory state
-        GameLogger.info("Final inventory contents:");
-        for (Item item : inventoryItems) {
-            if (item != null) {
-                GameLogger.info("- " + item.getName() + " x" + item.getCount());
-            }
+    /**
+     * Gets the total count of a specific item type in the inventory.
+     *
+     * @param itemId the item ID to count
+     * @return total count of the specified item
+     */
+    public int getItemCount(String itemId) {
+        synchronized (inventoryLock) {
+            return items.stream()
+                .filter(item -> item != null && item.getItemId().equals(itemId))
+                .mapToInt(ItemData::getCount)
+                .sum();
         }
     }
 
     public void clear() {
-        for (int i = 0; i < INVENTORY_SIZE; i++) {
-            inventoryItems.set(i, null);
-        }
-        GameLogger.info("Inventory cleared");
-    }
-
-    public boolean addItem(Item newItem) {
-        // First try to add to the hotbar
-        if (addItemToHotbar(newItem.copy())) {
-            return true;
-        }
-        return addItemToInventory(newItem);
-    }
-
-    public List<String> getItemNames() {
-        List<String> names = new ArrayList<>();
-        for (Item item : inventoryItems) {
-            if (item != null) {
-                names.add(item.getName());
+        synchronized (inventoryLock) {
+            // Clear all slots
+            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                items.set(i, null);
             }
+
+            // Clear the tracker
+            itemTracker.clear();
+
+            // Reset selected slot
+            selectedSlot = 0;
+
+            // Reset crafting system if needed
+            if (craftingSystem != null) {
+                craftingSystem = new CraftingSystem(this);
+            }
+
+            GameLogger.info("Inventory cleared");
         }
-        return names;
     }
 
-    public void setItemNames(String[] itemNames) {
-        if (itemNames != null && itemNames.length == INVENTORY_SIZE) {
-            this.itemNames = Arrays.copyOf(itemNames, INVENTORY_SIZE);
+    public void removeItemAt(int index) {
+        synchronized (inventoryLock) {
+            if (index < 0 || index >= items.size()) {
+                return;
+            }
 
-            // Rebuild the items list based on itemNames
-            inventoryItems.clear();
-            for (String itemName : itemNames) {
-                if (itemName != null) {
-                    inventoryItems.add(ItemManager.getItem(itemName));
-                } else {
-                    inventoryItems.add(null);
-                }
+            ItemData removedItem = items.get(index);
+            if (removedItem != null) {
+                itemTracker.remove(removedItem.getUuid());
+                items.set(index, null);
+                GameLogger.info("Removed item from slot " + index + ": " + removedItem.getItemId());
             }
         }
     }
 
-    public Item getSelectedItem() {
-        String itemName = itemNames[selectedHotbarSlot];
-        return ItemManager.getItem(itemName);
-    }
-
-    public List<Item> getItems() {
-        return new ArrayList<>(inventoryItems);
-    }
-
-    public Item getItem(int index) {
-        if (index >= 0 && index < inventoryItems.size()) {
-            return inventoryItems.get(index);
-        } else {
-            return null;
-        }
-    }
-
-    // Remove the uninitialized 'items' variable
-    // private List<Item> items; // Main inventory items
-
-    // Corrected methods to use 'inventoryItems'
-    public Item getItemAtSlot(int index) {
-        return inventoryItems.get(index);
-    }
-
-    public void setItemAtSlot(int index, Item item) {
-        inventoryItems.set(index, item);
-    }
-
-    public void setHotbarItemAtSlot(int index, Item item) {
-        // Ensure the index is within bounds
-        while (hotbarItems.size() <= index) {
-            hotbarItems.add(null); // Fill with nulls if necessary
-        }
-        hotbarItems.set(index, item);
-    }
-
-    // Other methods remain the same...
-
-    // Saving the inventory to a JSON file
-    public void saveInventory() {
-        try {
-            Json json = new Json();
-            InventoryData data = new InventoryData();
-            data.items = new ItemData[INVENTORY_SIZE];
-
-            for (int i = 0; i < inventoryItems.size(); i++) {
-                Item item = inventoryItems.get(i);
-                if (item != null) {
-                    ItemData itemData = new ItemData();
-                    itemData.name = item.getName();
-                    itemData.count = item.getCount();
-                    data.items[i] = itemData;
-                }
-            }
-
-            FileHandle file = Gdx.files.local(SAVE_FILE);
-            file.writeString(json.toJson(data), false);
-        } catch (Exception e) {
-            GameLogger.info("Failed to save inventory: " + e.getMessage());
-        }
-    }
-
-    public void setHotbarCache(List<Item> items) {
-        this.hotbarCache = new ArrayList<>();
-        for (Item item : items) {
-            this.hotbarCache.add(item != null ? item.copy() : null);
-        }
-    }
-
-    public List<Item> getHotbarCache() {
-        return hotbarCache;
-    }
-
-    public void restoreHotbarFromCache() {
-        if (hotbarCache != null) {
-            int startIndex = INVENTORY_SIZE - HOTBAR_SIZE;
-            for (int i = 0; i < HOTBAR_SIZE; i++) {
-                setItem(startIndex + i, hotbarCache.get(i));
-            }
-        }
-    }
-
-    public boolean canAddItem(Item item) {
+    public boolean canAddItem(ItemData item) {
         if (item == null) return false;
 
-        // First check if we can stack with existing items
-        for (Item existingItem : inventoryItems) {
-            if (existingItem != null && existingItem.canStackWith(item)) {
-                if (existingItem.getCount() + item.getCount() <= Item.MAX_STACK_SIZE) {
+        synchronized (inventoryLock) {
+            // First check for stacking possibilities
+            for (ItemData existingItem : items) {
+                if (existingItem != null && existingItem.getItemId().equals(item.getItemId())) {
+                    int spaceAvailable = Item.MAX_STACK_SIZE - existingItem.getCount();
+                    if (spaceAvailable >= item.getCount()) {
+                        return true;
+                    }
+                }
+            }
+
+            // Then check for empty slots
+            return items.stream().anyMatch(Objects::isNull);
+        }
+    }
+
+    public boolean addItem(ItemData newItem) {
+        if (newItem == null || newItem.isEmpty()) {
+            GameLogger.error("Cannot add null or empty item to inventory.");
+            return false;
+        }
+
+        synchronized (inventoryLock) {
+            // Try to stack with existing items
+            for (int i = 0; i < items.size(); i++) {
+                ItemData existingItem = items.get(i);
+                if (existingItem != null && existingItem.canStackWith(newItem)) {
+                    int spaceAvailable = Item.MAX_STACK_SIZE - existingItem.getCount();
+                    if (spaceAvailable > 0) {
+                        int amountToAdd = Math.min(spaceAvailable, newItem.getCount());
+                        existingItem.setCount(existingItem.getCount() + amountToAdd);
+                        newItem.setCount(newItem.getCount() - amountToAdd);
+                        if (newItem.getCount() <= 0) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Add to first empty slot
+            for (int i = 0; i < items.size(); i++) {
+                if (items.get(i) == null) {
+                    if (newItem.getUuid() == null || itemTracker.containsKey(newItem.getUuid())) {
+                        newItem.setUuid(UUID.randomUUID());
+                    }
+                    ItemData itemToAdd = newItem.copy();
+                    items.set(i, itemToAdd);
+                    itemTracker.put(itemToAdd.getUuid(), itemToAdd);
+                    GameLogger.info("Added item " + itemToAdd.getItemId() +
+                        " with UUID " + itemToAdd.getUuid() + " to slot " + i);
                     return true;
                 }
             }
         }
 
-        // Then check for empty slots
-        return getFirstEmptySlot() != -1;
+        return false;
     }
 
-    private int getFirstEmptySlot() {
-        for (int i = 0; i < inventoryItems.size(); i++) {
-            if (inventoryItems.get(i) == null) {
-                return i;
+    public int getSelectedSlot() {
+        return selectedSlot;
+    }
+
+    public void setSelectedSlot(int index) {
+        if (index >= 0 && index < INVENTORY_SIZE) {
+            this.selectedSlot = index;
+        }
+    }
+
+    public ItemData getItemAt(int index) {
+        if (index >= 0 && index < items.size()) {
+            return items.get(index);
+        }
+        return null;
+    }
+
+    public void setItemAt(int index, ItemData item) {
+        synchronized (inventoryLock) {
+            if (index < 0 || index >= items.size()) {
+                GameLogger.error("Invalid inventory index: " + index);
+                return;
+            }
+
+            ItemData oldItem = items.get(index);
+            if (oldItem != null && oldItem.getUuid() != null) {
+                itemTracker.remove(oldItem.getUuid());
+            }
+
+            if (item != null) {
+                if (item.getUuid() == null || itemTracker.containsKey(item.getUuid())) {
+                    item.setUuid(UUID.randomUUID());
+                }
+                items.set(index, item.copy());
+                itemTracker.put(item.getUuid(), items.get(index));
+            } else {
+                items.set(index, null);
             }
         }
-        return -1;
     }
 
-    private static class InventoryData {
-        public ItemData[] items;
-        public ItemData[] hotBarItems;
+    public synchronized void update() {
+        synchronized (inventoryLock) {
+            // Remove any invalid items
+            for (int i = 0; i < items.size(); i++) {
+                ItemData item = items.get(i);
+                if (item != null && (item.getCount() <= 0 || item.getUuid() == null)) {
+                    items.set(i, null);
+                    itemTracker.remove(item.getUuid());
+                }
+            }
+
+            // Validate UUID consistency
+            Set<UUID> trackedUuids = new HashSet<>(itemTracker.keySet());
+            for (ItemData item : items) {
+                if (item != null) {
+                    if (!trackedUuids.contains(item.getUuid())) {
+                        itemTracker.put(item.getUuid(), item);
+                    }
+                    trackedUuids.remove(item.getUuid());
+                }
+            }
+
+            // Remove orphaned entries from tracker
+            for (UUID orphanedUuid : trackedUuids) {
+                itemTracker.remove(orphanedUuid);
+            }
+        }
     }
 
-    private static class ItemData {
-        public String name;
-        public int count;
+    public synchronized boolean removeItem(ItemData item) {
+        if (item == null) return false;
+
+        synchronized (inventoryLock) {
+            // First try to find and remove exact UUID match
+            for (int i = 0; i < items.size(); i++) {
+                ItemData existingItem = items.get(i);
+                if (existingItem != null && existingItem.getUuid().equals(item.getUuid())) {
+                    if (existingItem.getCount() >= item.getCount()) {
+                        existingItem.setCount(existingItem.getCount() - item.getCount());
+                        if (existingItem.getCount() <= 0) {
+                            items.set(i, null);
+                            itemTracker.remove(existingItem.getUuid());
+                        }
+                        return true;
+                    }
+                    return false;
+                }
+            }
+
+            // If no UUID match, try to remove by item type
+            int remainingToRemove = item.getCount();
+            for (int i = 0; i < items.size() && remainingToRemove > 0; i++) {
+                ItemData existingItem = items.get(i);
+                if (existingItem != null && existingItem.getItemId().equals(item.getItemId())) {
+                    int amountToRemove = Math.min(remainingToRemove, existingItem.getCount());
+                    existingItem.setCount(existingItem.getCount() - amountToRemove);
+                    remainingToRemove -= amountToRemove;
+
+                    if (existingItem.getCount() <= 0) {
+                        items.set(i, null);
+                        itemTracker.remove(existingItem.getUuid());
+                    }
+                }
+            }
+
+            return remainingToRemove == 0;
+        }
     }
+
+    /**
+     * Sets items in a specific range of the inventory.
+     *
+     * @param startIndex The starting index to place items
+     * @param newItems   The items to set
+     * @param replace    Whether to replace existing items (true) or only fill empty slots (false)
+     */
+    public void setItemsInRange(int startIndex, List<ItemData> newItems, boolean replace) {
+        if (newItems == null) return;
+        if (startIndex < 0 || startIndex >= INVENTORY_SIZE) {
+            throw new IllegalArgumentException("Invalid start index: " + startIndex);
+        }
+
+        synchronized (inventoryLock) {
+            for (int i = 0; i < newItems.size() && (startIndex + i) < INVENTORY_SIZE; i++) {
+                int index = startIndex + i;
+                ItemData newItem = newItems.get(i);
+
+                if (newItem == null) {
+                    if (replace) {
+                        ItemData oldItem = items.get(index);
+                        if (oldItem != null && oldItem.getUuid() != null) {
+                            itemTracker.remove(oldItem.getUuid());
+                        }
+                        items.set(index, null);
+                    }
+                    continue;
+                }
+
+                if (!replace && items.get(index) != null) {
+                    continue; // Skip if slot is occupied and not replacing
+                }
+
+                // Create deep copy and ensure UUID
+                ItemData copy = newItem.copy();
+                if (copy.getUuid() == null || itemTracker.containsKey(copy.getUuid())) {
+                    copy.setUuid(UUID.randomUUID());
+                }
+
+                // Remove old item from tracker if it exists
+                ItemData oldItem = items.get(index);
+                if (oldItem != null && oldItem.getUuid() != null) {
+                    itemTracker.remove(oldItem.getUuid());
+                }
+
+                // Set new item
+                items.set(index, copy);
+                itemTracker.put(copy.getUuid(), copy);
+            }
+        }
+    }
+
+    /**
+     * Gets a deep copy of all inventory items.
+     *
+     * @return A new list containing copies of all inventory items
+     */
+    public List<ItemData> getAllItemsCopy() {
+        synchronized (inventoryLock) {
+            return items.stream()
+                .map(item -> item != null ? item.copy() : null)
+                .collect(Collectors.toList());
+        }
+    }
+
+    // Add to WorldObject class
+
+    /**
+     * Clears all items from the inventory.
+     */
+    public void clearAllItems() {
+        synchronized (inventoryLock) {
+            items.clear();
+            itemTracker.clear();
+            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                items.add(null);
+            }
+            GameLogger.info("Cleared all inventory items");
+        }
+    }
+
+    /**
+     * Validates and repairs the inventory state, including UUID assignments and item counts.
+     */
+
+    public boolean stackItems(int sourceSlot, int targetSlot) {
+        synchronized (inventoryLock) {
+            ItemData sourceItem = items.get(sourceSlot);
+            ItemData targetItem = items.get(targetSlot);
+
+            if (sourceItem == null || targetItem == null ||
+                !sourceItem.getItemId().equals(targetItem.getItemId())) {
+                return false;
+            }
+
+            int spaceAvailable = Item.MAX_STACK_SIZE - targetItem.getCount();
+            if (spaceAvailable <= 0) return false;
+
+            int amountToMove = Math.min(spaceAvailable, sourceItem.getCount());
+            targetItem.setCount(targetItem.getCount() + amountToMove);
+            sourceItem.setCount(sourceItem.getCount() - amountToMove);
+
+            if (sourceItem.getCount() <= 0) {
+                items.set(sourceSlot, null);
+            }
+
+            return true;
+        }
+    }
+
+    public CraftingSystem getCraftingSystem() {
+        return craftingSystem;
+    }
+
+    public List<ItemData> getAllItems() {
+        return new ArrayList<>(items);
+    }
+
+    /**
+     * Sets all inventory items from an array.
+     *
+     * @param newItems Array of ItemData to set. Must be of length INVENTORY_SIZE (36).
+     */
+    public void setAllItems(ItemData[] newItems) {
+        if (newItems == null) {
+            throw new IllegalArgumentException("newItems array cannot be null");
+        }
+        if (newItems.length != INVENTORY_SIZE) {
+            throw new IllegalArgumentException("newItems array must be of length " + INVENTORY_SIZE);
+        }
+        setAllItems(Arrays.asList(newItems));
+    }
+
+    /**
+     * Sets all inventory items from a list.
+     *
+     * @param newItems List of ItemData to set. Must be of size INVENTORY_SIZE (36).
+     */
+    public void setAllItems(List<ItemData> newItems) {
+        if (newItems == null) {
+            throw new IllegalArgumentException("newItems list cannot be null");
+        }
+
+        synchronized (inventoryLock) {
+            // Clear current items and tracker
+            items.clear();
+            itemTracker.clear();
+
+            // Add each item in the new list
+            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                ItemData item = (i < newItems.size()) ? newItems.get(i) : null;
+
+                if (item != null) {
+                    // Create a deep copy to avoid reference issues
+                    ItemData copy = item.copy();
+
+                    // Ensure UUID is valid and unique
+                    if (copy.getUuid() == null || itemTracker.containsKey(copy.getUuid())) {
+                        copy.setUuid(UUID.randomUUID());
+                    }
+
+                    items.add(copy);
+                    itemTracker.put(copy.getUuid(), copy);
+                } else {
+                    items.add(null);
+                }
+            }
+
+            GameLogger.info("Updated all inventory items. Total items: " + itemTracker.size());
+        }
+    }
+
+    public void validateAndRepair() {
+        synchronized (inventoryLock) {
+            // Count total items for verification
+            int beforeCount = getAllItems().stream()
+                .filter(Objects::nonNull)
+                .mapToInt(ItemData::getCount)
+                .sum();
+
+            // Stack similar items where possible
+            for (int i = 0; i < items.size(); i++) {
+                ItemData currentItem = items.get(i);
+                if (currentItem != null) {
+                    for (int j = i + 1; j < items.size(); j++) {
+                        ItemData otherItem = items.get(j);
+                        if (otherItem != null &&
+                            currentItem.getItemId().equals(otherItem.getItemId())) {
+                            stackItems(j, i);
+                        }
+                    }
+                }
+            }
+
+            // Remove empty slots
+            for (int i = 0; i < items.size(); i++) {
+                if (items.get(i) != null && items.get(i).getCount() <= 0) {
+                    items.set(i, null);
+                }
+            }
+
+            // Verify count hasn't changed
+            int afterCount = getAllItems().stream()
+                .filter(Objects::nonNull)
+                .mapToInt(ItemData::getCount)
+                .sum();
+
+            GameLogger.info("Inventory validation - Before: " + beforeCount + ", After: " + afterCount);
+            if (beforeCount != afterCount) {
+                GameLogger.error("Item count mismatch during validation!");
+            }
+        }
+    }
+
+    // Additional necessary methods...
 }

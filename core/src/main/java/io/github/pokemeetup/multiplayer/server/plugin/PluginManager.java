@@ -1,10 +1,9 @@
 package io.github.pokemeetup.multiplayer.server.plugin;
 
-import com.badlogic.gdx.utils.Json;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import io.github.pokemeetup.multiplayer.server.GameServer;
-import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
+import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.servers.PluginContext;
 
 import java.io.*;

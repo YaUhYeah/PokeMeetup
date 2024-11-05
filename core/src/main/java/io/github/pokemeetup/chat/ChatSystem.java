@@ -7,22 +7,26 @@ import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.scenes.scene2d.InputEvent;
+import com.badlogic.gdx.scenes.scene2d.InputListener;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
-import com.badlogic.gdx.utils.Align;
 import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.utils.TimeUtils;
 
 import java.util.LinkedList;
 import java.util.Queue;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-public class ChatSystem {   // ... existing fields ...
+public class ChatSystem {
+    // ... existing fields ...
+    public static final float CHAT_PADDING = 10f;
+    public static final float MIN_CHAT_WIDTH = 300f;
+    public static final float MIN_CHAT_HEIGHT = 200f;
     private static final int MAX_MESSAGES = 50;
     private static final float MESSAGE_FADE_TIME = 10f;
-    private static final float CHAT_WIDTH = 400f;
-    private static final float CHAT_HEIGHT = 200f;
     private static final Color WINDOW_BACKGROUND = new Color(0, 0, 0, 0.8f);
     private static final Color[] CHAT_COLORS = {
         new Color(0.8f, 0.3f, 0.3f, 1), // Red
@@ -33,15 +37,7 @@ public class ChatSystem {   // ... existing fields ...
         new Color(0.3f, 0.8f, 0.8f, 1), // Cyan
         new Color(0.8f, 0.5f, 0.3f, 1), // Orange
         new Color(0.5f, 0.8f, 0.3f, 1)  // Lime
-    }; // Add constants for positioning
-    private static final float CHAT_PADDING = 10f;
-    private static final float MIN_CHAT_WIDTH = 300f;
-    private static final float MIN_CHAT_HEIGHT = 200f;
-
-    // Add field to track window size
-    private float windowWidth;
-    private float windowHeight;
-
+    };
     private static float DEFAULT_CHAT_WIDTH = 400f;
     private static float DEFAULT_CHAT_HEIGHT = 200f;
     private final Stage stage;
@@ -53,9 +49,13 @@ public class ChatSystem {   // ... existing fields ...
     private Table chatWindow;
     private ScrollPane messageScroll;
     private Table messageTable;
-    private TextField inputField;
     private boolean isActive;
     private float inactiveTimer;
+    private boolean isInitialized = false;
+    private float chatWidth = DEFAULT_CHAT_WIDTH;
+    private float chatHeight = DEFAULT_CHAT_HEIGHT;
+    private boolean ignoreNextCharacter = false;
+    private TextField inputField;
 
     public ChatSystem(Stage stage, Skin skin, GameClient gameClient, String username) {
         this.stage = stage;
@@ -68,86 +68,46 @@ public class ChatSystem {   // ... existing fields ...
         setupChatHandler();
     }
 
-    // Add resize method
+    public void setSize(float width, float height) {
+        this.chatWidth = width;
+        this.chatHeight = height;
+
+        if (chatWindow != null) {
+            chatWindow.setSize(width, height);
+
+            // Update message scroll size
+            if (messageScroll != null) {
+                messageScroll.setSize(width, height - 40); // Leave room for input
+            }
+
+            // Force layout update
+            chatWindow.invalidateHierarchy();
+        }
+    }
+
+    public void setPosition(float x, float y) {
+        if (chatWindow != null) {
+            chatWindow.setPosition(x, y);
+        }
+    }
+
     public void resize(int width, int height) {
-        // Scale chat window based on screen size
-        float scaleX = width / 1920f; // Base resolution
-        float scaleY = height / 1080f;
-        currentScale = Math.min(scaleX, scaleY);
-
-        // Update chat window size and position
-        windowWidth = width;
-        windowHeight = height;
-
-        // Calculate chat window size based on screen size
-        float chatWidth = Math.max(MIN_CHAT_WIDTH, width * 0.2f);
+        float chatWidth = Math.max(MIN_CHAT_WIDTH, width * 0.25f);
         float chatHeight = Math.max(MIN_CHAT_HEIGHT, height * 0.3f);
 
-        // Position in top left corner with padding
-        chatWindow.setBounds(CHAT_PADDING, height - chatHeight - CHAT_PADDING,
-            chatWidth, chatHeight);
-
-        // Update scroll pane size
-        messageScroll.setSize(chatWidth, chatHeight - 40); // Leave room for input
-
-        // Scale font if needed
-
-        // Update input field height
-        float inputHeight = 30 * currentScale;
-        Cell<?> inputCell = chatWindow.getCell(inputField);
-        if (inputCell != null) {
-            inputCell.height(inputHeight);
-        }
-
-        // Force layout update
-        chatWindow.invalidate();
-        messageScroll.invalidate();
-        messageTable.invalidate();
+        chatWindow.setSize(chatWidth, chatHeight);
+        chatWindow.setPosition(
+            CHAT_PADDING,
+            height - chatHeight - CHAT_PADDING
+        );
     }
+    private static final Pattern TEAM_CHAT_PATTERN = Pattern.compile("^#(.*)");
 
-    // Add these methods to support manual positioning if needed
-    public void setPosition(float x, float y) {
-        chatWindow.setPosition(x, y);
-    }
 
-    public void setSize(float width, float height) {
-        DEFAULT_CHAT_WIDTH = width;
-        DEFAULT_CHAT_HEIGHT = height;
-        resize(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
-    }
 
-    // Add method to get current dimensions
-    public float[] getDimensions() {
-        return new float[]{chatWindow.getWidth(), chatWindow.getHeight()};
-    }
 
-    private void setupInputHandling() {
-        stage.addListener(event -> {
-            if (!(event instanceof InputEvent)) return false;
-
-            if (Gdx.input.isKeyJustPressed(Input.Keys.SLASH)||Gdx.input.isKeyJustPressed(Input.Keys.T) && !isActive) {
-                activateChat();
-                return true;
-            }
-
-            if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && isActive) {
-                deactivateChat();
-                return true;
-            }
-
-            return false;
-        });
-
-        inputField.setTextFieldListener((textField, c) -> {
-            if (c == '\n') {
-                String message = textField.getText().trim();
-                if (!message.isEmpty()) {
-                    sendMessage(message);
-                }
-                textField.setText("");
-                deactivateChat();
-            }
-        });
+    public boolean isActive() {
+        return isActive;
     }
 
     private void setupChatHandler() {
@@ -167,20 +127,66 @@ public class ChatSystem {   // ... existing fields ...
         addMessageToChat(chatMessage);
     }
 
-    private void handleIncomingMessage(NetworkProtocol.ChatMessage message) {
+    public void handleIncomingMessage(NetworkProtocol.ChatMessage message) {
         Gdx.app.postRunnable(() -> addMessageToChat(message));
     }
 
-    private void activateChat() {
+    // Remove the InputListener from setupInputHandling()
+    private void setupInputHandling() {
+        // Remove the stage capture listener and replace with a normal listener
+        // that only activates when specific conditions are met
+        stage.addListener(new InputListener() {
+            @Override
+            public boolean keyDown(InputEvent event, int keycode) {
+                // Only handle T and SLASH when chat is not active
+                if (!isActive) {
+                    if (keycode == Input.Keys.T || keycode == Input.Keys.SLASH) {
+                        activateChat();
+                        return true;
+                    }
+                    return false;
+                }
+
+                // When chat is active, handle ESCAPE
+                if (keycode == Input.Keys.ESCAPE) {
+                    deactivateChat();
+                    event.cancel(); // Cancel the event so it doesn't trigger game pause
+                    return true;
+                }
+
+                return false;
+            }
+        });
+
+        // Modify the input field listener
+        inputField.setTextFieldListener((textField, c) -> {
+            if (c == '\n' || c == '\r') {
+                String message = textField.getText().trim();
+                if (!message.isEmpty()) {
+                    sendMessage(message);
+                }
+                textField.setText("");
+                deactivateChat();
+            }
+        });
+    }
+
+
+    public void activateChat() {
         isActive = true;
         inputField.setVisible(true);
         inputField.setText("");
-        stage.setKeyboardFocus(inputField);
         inactiveTimer = 0;
         chatWindow.getColor().a = 1f;
+
+        // Delay setting keyboard focus to the next frame
+        Gdx.app.postRunnable(() -> {
+            stage.setKeyboardFocus(inputField);
+        });
     }
 
-    private void deactivateChat() {
+
+    public void deactivateChat() {
         isActive = false;
         inputField.setVisible(false);
         stage.setKeyboardFocus(null);
@@ -201,28 +207,33 @@ public class ChatSystem {   // ... existing fields ...
     }
 
     private void createChatUI() {
-        // Create a drawable for the window background
+        if (isInitialized) {
+            // Chat UI has already been initialized
+            return;
+        }
+        chatWindow = new Table();
+
+        // Create background
         Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
         pixmap.setColor(WINDOW_BACKGROUND);
         pixmap.fill();
         TextureRegion bgTexture = new TextureRegion(new Texture(pixmap));
         pixmap.dispose();
 
-        chatWindow = new Table();
         chatWindow.setBackground(new TextureRegionDrawable(bgTexture));
-        chatWindow.setSize(CHAT_WIDTH, CHAT_HEIGHT);
-        chatWindow.setPosition(10, 10);
 
-        // Create inner table for content with padding
-        Table innerTable = new Table();
-        innerTable.pad(10);
+        // Create content table with padding
+        Table contentTable = new Table();
+        contentTable.pad(10);
 
+        // Create message area
         messageTable = new Table();
         messageScroll = new ScrollPane(messageTable, skin);
         messageScroll.setFadeScrollBars(false);
         messageScroll.setScrollingDisabled(true, false);
+        contentTable.add(messageScroll).expand().fill().padBottom(5).row();
 
-        // Style input field
+        // Create input field
         TextField.TextFieldStyle textFieldStyle = new TextField.TextFieldStyle(skin.get(TextField.TextFieldStyle.class));
         textFieldStyle.background = skin.newDrawable("white", new Color(0.2f, 0.2f, 0.2f, 0.8f));
         textFieldStyle.fontColor = Color.WHITE;
@@ -230,16 +241,15 @@ public class ChatSystem {   // ... existing fields ...
 
         inputField = new TextField("", textFieldStyle);
         inputField.setMessageText("Press T to chat...");
+        contentTable.add(inputField).expandX().fillX().height(30);
 
-        innerTable.add(messageScroll).expand().fill().padBottom(5);
-        innerTable.row();
-        innerTable.add(inputField).expandX().fillX().height(30);
+        chatWindow.add(contentTable).expand().fill();
+        stage.addActor(chatWindow);
 
-        chatWindow.add(innerTable).expand().fill();
-
+        // Initialize in hidden state
         inputField.setVisible(false);
         setupInputHandling();
-        stage.addActor(chatWindow);
+        isInitialized = true;
     }
 
     private Color getSenderColor(String sender) {

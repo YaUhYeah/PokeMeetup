@@ -1,7 +1,7 @@
 package io.github.pokemeetup.multiplayer.server.storage;
 
-import io.github.pokemeetup.system.PlayerData;
-import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
+import io.github.pokemeetup.system.data.PlayerData;
+import io.github.pokemeetup.system.data.WorldData;
 import java.io.IOException;
 
 public interface StorageSystem {

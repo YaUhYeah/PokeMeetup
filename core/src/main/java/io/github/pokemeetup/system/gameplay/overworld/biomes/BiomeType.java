@@ -4,5 +4,7 @@ public enum BiomeType {
     PLAINS,
     FOREST,
     SNOW,
-    HAUNTED;
+    HAUNTED,
+    DESERT,
+    RAIN_FOREST
 }

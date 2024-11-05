@@ -14,6 +14,7 @@ import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import io.github.pokemeetup.CreatureCaptureGame;
+import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.managers.DatabaseManager;
 import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
@@ -24,11 +25,15 @@ import io.github.pokemeetup.utils.AssetManagerSingleton;
 import io.github.pokemeetup.utils.GameLogger;
 
 import java.io.IOException;
-import java.util.ArrayList;
 
 public class LoginScreen implements Screen {
     private static final float FADE_DURATION = 0.3f;
-
+    private static final boolean DEBUG_MODE = false; // Toggle for debug mode
+    private static final String[] DEBUG_USERS = {
+        "allidoisgame1:Ferfer44$",
+        "yauhyeah:Derder44$",
+        "etienne:Derder44$"
+    };
     private final Stage stage;
     private final Skin skin;
     private final CreatureCaptureGame game;
@@ -54,7 +59,7 @@ public class LoginScreen implements Screen {
         this.skin = AssetManagerSingleton.getSkin();
         loadServers();
         setupUI();
-
+        loadSavedCredentials();
         // Remove immediate connection
         // gameClient initialization moves to login button click
 
@@ -79,12 +84,11 @@ public class LoginScreen implements Screen {
         try {
             servers = ServerConfigManager.getInstance().getServers();
         } catch (Exception e) {
-            GameLogger.info("Error loading servers: "+e.getMessage());
+            GameLogger.info("Error loading servers: " + e.getMessage());
             servers = new Array<>();
 
         }
     }
-
 
     private void loadSavedCredentials() {
         if (prefs.getBoolean("rememberMe", false)) {
@@ -94,18 +98,22 @@ public class LoginScreen implements Screen {
         }
     }
 
+
+    // Modified saveCredentials method to ensure preferences are saved immediately:
     private void saveCredentials(String username, String password, boolean remember) {
         prefs.putBoolean("rememberMe", remember);
         if (remember) {
             prefs.putString("username", username);
-            // In production, use encryption for password storage
-            prefs.putString("password", password);
+            prefs.putString("password", password); // In production, encrypt this
         } else {
             prefs.remove("username");
             prefs.remove("password");
         }
-        prefs.flush();
-    }private void debugLogin(String username, String password) {
+        prefs.flush(); // Make sure to call flush() to save immediately
+        GameLogger.info("Credentials saved. Remember me: " + remember);
+    }
+
+    private void debugLogin(String username, String password) {
         try {
             // Get default server config
             ServerConnectionConfig config = serverSelect.getItems().first();
@@ -115,35 +123,39 @@ public class LoginScreen implements Screen {
             gameClient.setLocalUsername(username);
 
             // Connect and login
-        gameClient.connectToServer(config);
-                gameClient.setLoginResponseListener(response -> {
-                    Gdx.app.postRunnable(() -> {
-                        if (response.success) {
-                            game.enableMultiplayerMode();
+            gameClient.connectToServer(config);
+            gameClient.setLoginResponseListener(response -> {
+                Gdx.app.postRunnable(() -> {
+                    if (response.success) {
+                        game.setMultiplayerMode(true);
+                        try {
                             game.initializeWorld(CreatureCaptureGame.MULTIPLAYER_WORLD_NAME, true);
-                            fadeToScreen(new GameScreen(game, username, gameClient,
-                                response.x, response.y,
-                                CreatureCaptureGame.MULTIPLAYER_WORLD_NAME));
-                        } else {
-                            feedbackLabel.setColor(Color.RED);
-                            feedbackLabel.setText("Debug login failed: " + response.message);
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
                         }
-                    });
+                        fadeToScreen(new GameScreen(game, username, gameClient,
+                            CreatureCaptureGame.MULTIPLAYER_WORLD_NAME));
+                    } else {
+                        feedbackLabel.setColor(Color.RED);
+                        feedbackLabel.setText("Debug login failed: " + response.message);
+                    }
                 });
+            });
 
-                gameClient.sendLoginRequest(username, password);
+            gameClient.sendLoginRequest(username, password);
 
         } catch (Exception e) {
             feedbackLabel.setColor(Color.RED);
             feedbackLabel.setText("Debug login error: " + e.getMessage());
-        }}
+        }
+    }
 
     private void setupUI() {
         Table mainTable = new Table();
         mainTable.setFillParent(true);
 
         // Title
-        Label titleLabel = new Label("PokeMeetup", skin, "title");
+        Label titleLabel = new Label("PokeMeetup", skin);
         titleLabel.setFontScale(2f);
 
         // Input fields
@@ -198,7 +210,8 @@ public class LoginScreen implements Screen {
         // Add listeners
         setupButtonListeners(loginButton, registerButton, backButton);
 
-        stage.addActor(mainTable);  if (DEBUG_MODE) {
+        stage.addActor(mainTable);
+        if (DEBUG_MODE) {
             Table debugTable = new Table();
             debugTable.pad(10);
 
@@ -222,7 +235,7 @@ public class LoginScreen implements Screen {
     }
 
     private void showAddServerDialog(SelectBox selectBox) {
-        final Dialog dialog = new Dialog("Add Custom Server", skin, "dialog") {
+        final Dialog dialog = new Dialog("Add Custom Server", skin) {
             private final TextField nameField;
             private final TextField ipField;
             private final TextField portField;
@@ -323,12 +336,7 @@ public class LoginScreen implements Screen {
             }
         };
         dialog.show(stage);
-    }private static final boolean DEBUG_MODE = true; // Toggle for debug mode
-    private static final String[] DEBUG_USERS = {
-        "allidoisgame1:Ferfer4455$",
-        "yauhyeah:Derder44$",
-        "etienne:Derder44$"
-    };
+    }
 
     private void showMessage(String title, String message) {
         Dialog messageDialog = new Dialog(title, skin, "dialog");
@@ -358,7 +366,7 @@ public class LoginScreen implements Screen {
                     return;
                 }
 
-                // Get the selected server configuration
+                // Get selected server
                 ServerConnectionConfig selectedConfig = serverSelect.getSelected();
                 if (selectedConfig == null) {
                     feedbackLabel.setColor(Color.RED);
@@ -366,87 +374,71 @@ public class LoginScreen implements Screen {
                     return;
                 }
 
-                // Disable buttons during login attempt
-                loginButton.setDisabled(true);
-                registerButton.setDisabled(true);
+                // Disable UI during login attempt
+                setUIEnabled(false);
                 feedbackLabel.setColor(Color.WHITE);
                 feedbackLabel.setText("Connecting...");
 
-                // Save credentials if 'Remember Me' is checked
-                saveCredentials(username, password, remember);
+                // Clean up any existing client
+                GameClientSingleton.clearInstance();
 
-                // Connect to the selected server and send login request
                 new Thread(() -> {
                     try {
-                        // Initialize GameClient first
+                        // Initialize new client
                         gameClient = GameClientSingleton.getInstance(selectedConfig);
-
                         if (gameClient == null) {
-                            Gdx.app.postRunnable(() -> {
-                                feedbackLabel.setColor(Color.RED);
-                                feedbackLabel.setText("Failed to initialize game client");
-                                loginButton.setDisabled(false);
-                                registerButton.setDisabled(false);
-                            });
-                            return;
+                            throw new RuntimeException("Failed to initialize game client");
                         }
 
-                        // Set username for the client
+                        // Set username before connection
                         gameClient.setLocalUsername(username);
 
-                        // Try to connect
+                        // Set up login response listener before connecting
+                        gameClient.setLoginResponseListener(response -> {
+                            Gdx.app.postRunnable(() -> {
+                                handleLoginResponse(response, username, password, remember);
+                            });
+                        });
+
+                        // Connect to server
+                        GameLogger.info("Attempting connection to: " + selectedConfig.getServerIP());
                         gameClient.connectToServer(selectedConfig);
 
-                        // Wait for connection
+                        // Wait for connection with timeout
                         long startTime = System.currentTimeMillis();
+                        long timeout = 5000; // 5 seconds timeout
+
                         while (!gameClient.isConnected() &&
-                            System.currentTimeMillis() - startTime < 5000) {
+                            System.currentTimeMillis() - startTime < timeout) {
                             Thread.sleep(100);
                         }
 
-                        if (gameClient.isConnected()) {
-                            // Set up login response listener
-                            gameClient.setLoginResponseListener(response -> {
-                                Gdx.app.postRunnable(() -> {
-                                    if (response.success) {
-                                        game.enableMultiplayerMode();
-                                        game.initializeWorld(CreatureCaptureGame.MULTIPLAYER_WORLD_NAME, true);
-                                        fadeToScreen(new GameScreen(game, username, gameClient,
-                                            response.x, response.y,
-                                            CreatureCaptureGame.MULTIPLAYER_WORLD_NAME));
-                                    } else {
-                                        feedbackLabel.setColor(Color.RED);
-                                        feedbackLabel.setText(response.message);
-                                        loginButton.setDisabled(false);
-                                        registerButton.setDisabled(false);
-                                    }
-                                });
-                            });
-
-                            // Send login request
-                            gameClient.sendLoginRequest(username, password);
-                            Gdx.app.postRunnable(() ->
-                                feedbackLabel.setText("Login request sent..."));
-                        } else {
-                            Gdx.app.postRunnable(() -> {
-                                feedbackLabel.setColor(Color.RED);
-                                feedbackLabel.setText("Could not connect to server. Please try again.");
-                                loginButton.setDisabled(false);
-                                registerButton.setDisabled(false);
-                            });
+                        if (!gameClient.isConnected()) {
+                            throw new IOException("Connection timed out after 5 seconds");
                         }
+
+                        // Send login request
+                        GameLogger.info("Connected, sending login request for: " + username);
+                        gameClient.sendLoginRequest(username, password);
+
                     } catch (Exception e) {
+                        GameLogger.error("Login failed: " + e.getMessage());
                         Gdx.app.postRunnable(() -> {
                             feedbackLabel.setColor(Color.RED);
-                            feedbackLabel.setText("Error: " + e.getMessage());
-                            loginButton.setDisabled(false);
-                            registerButton.setDisabled(false);
+                            feedbackLabel.setText("Connection failed: " + e.getMessage());
+                            setUIEnabled(true);
                         });
-                        e.printStackTrace();
+
+                        // Clean up on error
+                        if (gameClient != null) {
+                            gameClient.disconnect();
+                            gameClient = null;
+                        }
                     }
                 }).start();
             }
         });
+
 
         registerButton.addListener(new ChangeListener() {
             @Override
@@ -454,109 +446,176 @@ public class LoginScreen implements Screen {
                 String username = usernameField.getText().trim();
                 String password = passwordField.getText().trim();
 
+                GameLogger.info("Registration attempt starting for user: " + username);
+
                 // Basic input validation
-                if (username.isEmpty() || password.isEmpty()) {
-                    feedbackLabel.setColor(Color.RED);
-                    feedbackLabel.setText("Username and password cannot be empty.");
+                if (!validateRegistrationInput(username, password)) {
                     return;
                 }
-
-                // Validate password
-                String passwordError = validatePassword(password);
-                if (passwordError != null) {
-                    feedbackLabel.setColor(Color.RED);
-                    feedbackLabel.setText(passwordError);
-                    return;
-                }
-
-                // Disable buttons during registration attempt
-                loginButton.setDisabled(true);
-                registerButton.setDisabled(true);
-                feedbackLabel.setColor(Color.WHITE);
-                feedbackLabel.setText("Registering...");
 
                 // Get selected server config
                 ServerConnectionConfig selectedConfig = serverSelect.getSelected();
                 if (selectedConfig == null) {
                     feedbackLabel.setColor(Color.RED);
                     feedbackLabel.setText("Please select a server.");
-                    loginButton.setDisabled(false);
-                    registerButton.setDisabled(false);
                     return;
                 }
 
-                // Initialize client and register in background
+                // Disable buttons during registration attempt
+                setUIEnabled(false);
+                feedbackLabel.setColor(Color.WHITE);
+                feedbackLabel.setText("Checking username availability...");
+
                 new Thread(() -> {
                     try {
-                        // Initialize GameClient first
-                        gameClient = GameClientSingleton.getInstance(selectedConfig);
+                        // Cleanup existing client if any
+                        if (gameClient != null) {
+                            gameClient.disconnect();
+                        }
 
+                        // Initialize GameClient
+                        gameClient = GameClientSingleton.getInstance(selectedConfig);
                         if (gameClient == null) {
-                            Gdx.app.postRunnable(() -> {
-                                feedbackLabel.setColor(Color.RED);
-                                feedbackLabel.setText("Failed to initialize game client");
-                                loginButton.setDisabled(false);
-                                registerButton.setDisabled(false);
-                            });
-                            return;
+                            throw new RuntimeException("Failed to initialize game client");
                         }
 
                         // Connect to server
                         gameClient.connectToServer(selectedConfig);
 
-                        // Wait for connection
-                        long startTime = System.currentTimeMillis();
-                        while (!gameClient.isConnected() &&
-                            System.currentTimeMillis() - startTime < 5000) {
-                            Thread.sleep(100);
+                        // Wait for connection with timeout
+                        if (!waitForConnection()) {
+                            throw new IOException("Could not connect to server");
                         }
 
-                        if (gameClient.isConnected()) {
-                            // Set registration response listener
-                            gameClient.setRegistrationResponseListener(response -> {
-                                Gdx.app.postRunnable(() -> {
-                                    if (response.success) {
-                                        feedbackLabel.setColor(Color.GREEN);
-                                        feedbackLabel.setText("Registration successful! Please log in.");
-                                    } else {
-                                        feedbackLabel.setColor(Color.RED);
-                                        feedbackLabel.setText(response.message);
-                                    }
-                                    loginButton.setDisabled(false);
-                                    registerButton.setDisabled(false);
-                                });
-                            });
-
-                            // Send registration request
-                            gameClient.sendRegisterRequest(username, password);
-                        } else {
+                        // Set up username check listener
+                        gameClient.setUsernameCheckListener(response -> {
                             Gdx.app.postRunnable(() -> {
-                                feedbackLabel.setColor(Color.RED);
-                                feedbackLabel.setText("Could not connect to server");
-                                loginButton.setDisabled(false);
-                                registerButton.setDisabled(false);
+                                if (response.available) {
+                                    // Username is available, proceed with registration
+                                    proceedWithRegistration(username, password);
+                                } else {
+                                    feedbackLabel.setColor(Color.RED);
+                                    feedbackLabel.setText("Username is already taken. Please choose another.");
+                                    setUIEnabled(true);
+
+                                    // Cleanup after failed check
+                                    gameClient.disconnect();
+                                    gameClient = null;
+                                }
                             });
-                        }
+                        });
+
+                        // Send username check request
+                        gameClient.checkUsernameAvailability(username);
 
                     } catch (Exception e) {
+                        GameLogger.error("Username check error: " + e.getMessage());
                         Gdx.app.postRunnable(() -> {
                             feedbackLabel.setColor(Color.RED);
-                            feedbackLabel.setText("Registration error: " + e.getMessage());
-                            loginButton.setDisabled(false);
-                            registerButton.setDisabled(false);
+                            feedbackLabel.setText("Error checking username: " + e.getMessage());
+                            setUIEnabled(true);
                         });
-                        e.printStackTrace();
+
+                        // Cleanup on error
+                        if (gameClient != null) {
+                            gameClient.disconnect();
+                            gameClient = null;
+                        }
                     }
                 }).start();
             }
         });
-
         backButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
                 fadeToScreen(new ModeSelectionScreen(game));
             }
         });
+    }
+
+    private boolean validateRegistrationInput(String username, String password) {
+        // Username validation
+        if (username.isEmpty() || password.isEmpty()) {
+            feedbackLabel.setColor(Color.RED);
+            feedbackLabel.setText("Username and password cannot be empty.");
+            return false;
+        }
+
+        if (username.length() < 3 || username.length() > 20) {
+            feedbackLabel.setColor(Color.RED);
+            feedbackLabel.setText("Username must be between 3 and 20 characters.");
+            return false;
+        }
+
+        if (!username.matches("^[a-zA-Z0-9_]+$")) {
+            feedbackLabel.setColor(Color.RED);
+            feedbackLabel.setText("Username can only contain letters, numbers, and underscores.");
+            return false;
+        }
+
+        // Password validation
+        String passwordError = validatePassword(password);
+        if (passwordError != null) {
+            feedbackLabel.setColor(Color.RED);
+            feedbackLabel.setText(passwordError);
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean waitForConnection() {
+        long startTime = System.currentTimeMillis();
+        while (!gameClient.isConnected() &&
+            System.currentTimeMillis() - startTime < 5000) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                return false;
+            }
+        }
+        return gameClient.isConnected();
+    }
+
+    private void proceedWithRegistration(String username, String password) {
+        feedbackLabel.setColor(Color.WHITE);
+        feedbackLabel.setText("Creating account...");
+
+        // Set up registration response listener
+        gameClient.setRegistrationResponseListener(response -> {
+            Gdx.app.postRunnable(() -> {
+                if (response.success) {
+                    feedbackLabel.setColor(Color.GREEN);
+                    feedbackLabel.setText("Registration successful! Please log in.");
+                    passwordField.setText(""); // Clear password for security
+                } else {
+                    feedbackLabel.setColor(Color.RED);
+                    feedbackLabel.setText(response.message != null ?
+                        response.message : "Registration failed. Please try again.");
+                }
+                setUIEnabled(true);
+            });
+
+            // Cleanup after registration attempt
+            gameClient.disconnect();
+            gameClient = null;
+        });
+
+        // Send registration request
+        try {
+            gameClient.sendRegisterRequest(username, password);
+        } catch (Exception e) {
+            GameLogger.error("Registration error: " + e.getMessage());
+            Gdx.app.postRunnable(() -> {
+                feedbackLabel.setColor(Color.RED);
+                feedbackLabel.setText("Registration failed: " + e.getMessage());
+                setUIEnabled(true);
+            });
+
+            // Cleanup on error
+            gameClient.disconnect();
+            gameClient = null;
+        }
     }
 
     private void handleRegister(String username, String password, Label feedbackLabel) throws Exception {
@@ -578,11 +637,18 @@ public class LoginScreen implements Screen {
         }
     }
 
-    private boolean isMultiplayerMode() {
-        return game.isMultiplayerMode();  // This will now check multiplayer mode flag
+    private boolean isValidUsername(String username) {
+        return username != null &&
+            username.length() >= 3 &&
+            username.length() <= 20 &&
+            username.matches("^[a-zA-Z0-9_]+$");
     }
 
+    // Update the password validation method to be more detailed
     private String validatePassword(String password) {
+        if (password == null || password.isEmpty()) {
+            return "Password cannot be empty.";
+        }
         if (password.length() < 8) {
             return "Password must be at least 8 characters long.";
         }
@@ -593,13 +659,21 @@ public class LoginScreen implements Screen {
             return "Password must contain at least one lowercase letter.";
         }
         if (!password.matches(".*\\d.*")) {
-            return "Password must contain at least one digit.";
+            return "Password must contain at least one number.";
         }
-        if (!password.matches(".*[!@#$%^&*()].*")) {
+        if (!password.matches(".*[!@#$%^&*()\\[\\]{}_+=\\-.,].*")) {
             return "Password must contain at least one special character.";
+        }
+        if (password.contains(" ")) {
+            return "Password cannot contain spaces.";
         }
         return null; // Password is valid
     }
+
+    private boolean isMultiplayerMode() {
+        return game.isMultiplayerMode();  // This will now check multiplayer mode flag
+    }
+
 
     private void handleLogin(Label feedbackLabel, ServerConnectionConfig selectedConfig, Button loginButton, Button registerButton, TextField usernameField, TextField passwordField) {
         String username = usernameField.getText().trim();
@@ -623,7 +697,9 @@ public class LoginScreen implements Screen {
                 if (!connected) return;
 
                 gameClient.setLoginResponseListener(response -> {
-                    Gdx.app.postRunnable(() -> handleLoginResponse(response, username, password));
+                    Gdx.app.postRunnable(() -> {
+                        handleLoginResponse(response, username, password,true);
+                    });
                 });
 
                 gameClient.sendLoginRequest(username, password);
@@ -665,7 +741,7 @@ public class LoginScreen implements Screen {
                 return true;
             }
         } catch (Exception e) {
-//            GameLogger.info(STR."Connection error: {}\{e.getMessage()}");
+            //            GameLogger.info(STR."Connection error: {}\{e.getMessage()}");
             Gdx.app.postRunnable(() -> {
                 feedbackLabel.setColor(Color.RED);
                 feedbackLabel.setText("Connection error: " + "e.getMessage()}");
@@ -674,17 +750,48 @@ public class LoginScreen implements Screen {
         }
     }
 
-    private void handleLoginResponse(NetworkProtocol.LoginResponse response, String username, String password) {
-        if (response.success) {
-            saveCredentials(username, password, rememberMeBox.isChecked());
-            game.initializeWorld(CreatureCaptureGame.MULTIPLAYER_WORLD_NAME, true);
-            fadeToScreen(new GameScreen(game, username, gameClient, response.x, response.y,
-                CreatureCaptureGame.MULTIPLAYER_WORLD_NAME));
-        } else {
+
+    private void handleLoginResponse(NetworkProtocol.LoginResponse response,
+                                     String username, String password, boolean remember) {
+        try {
+            if (response.success) {
+                // Save credentials if requested
+                if (remember) {
+                    saveCredentials(username, password, true);
+                    GameLogger.info("Credentials saved. Remember me: " + remember);
+                }
+
+                // Initialize world
+                game.setMultiplayerMode(true);
+                game.initializeMultiplayerWorld(
+                    response.worldName,
+                    response.worldSeed,
+                    response.worldData
+                );
+
+                // Transition to game screen
+                fadeToScreen(new GameScreen(game, username, gameClient, response.worldName));
+            } else {
+                feedbackLabel.setColor(Color.RED);
+                feedbackLabel.setText(response.message);
+                passwordField.setText("");
+                setUIEnabled(true);
+
+                // Clean up on failed login
+                gameClient.disconnect();
+                gameClient = null;
+            }
+        } catch (Exception e) {
+            GameLogger.error("Error handling login response: " + e.getMessage());
             feedbackLabel.setColor(Color.RED);
-            feedbackLabel.setText(response.message);
-            passwordField.setText("");
+            feedbackLabel.setText("Error: " + e.getMessage());
             setUIEnabled(true);
+
+            // Clean up on error
+            if (gameClient != null) {
+                gameClient.disconnect();
+                gameClient = null;
+            }
         }
     }
 
@@ -753,7 +860,6 @@ public class LoginScreen implements Screen {
 
     @Override
     public void show() {
-        // Called when this screen becomes the current screen
     }
 
 

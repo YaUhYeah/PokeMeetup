@@ -2,101 +2,223 @@
   {
     "name": "Plains",
     "type": "PLAINS",
-    "allowedTileTypes": [
-      1,
-      10
-    ],
-    "tileTextures": {
-      "1": "grass",
-      "10": "tall_grass"
-    },
+    "allowedTileTypes": [1, 10],
     "tileDistribution": {
-      "1": 90,
-      "10": 10
+      "1": 70.0,
+      "10": 30.0
     },
-    "spawnableObjects": [
-      "TREE"
-    ],
+    "spawnableObjects": ["TREE"],
     "spawnChances": {
       "1": 0.08,
       "10": 0.03
+    },
+    "transitionTiles": {
+      "SNOW": {
+        "1": 4,
+        "10": 6
+      },
+      "HAUNTED": {
+        "1": 5,
+        "10": 7
+      },
+      "FOREST": {
+        "1": 11,
+        "10": 12
+      },
+      "RAIN_FOREST": {
+        "1": 13,
+        "10": 14
+      },
+      "DESERT": {
+        "1": 15,
+        "10": 16
+      }
     }
   },
   {
     "name": "Forest",
     "type": "FOREST",
-    "allowedTileTypes": [
-      1,
-      10
-    ],
-    "tileTextures": {
-      "1": "grass",
-      "10": "tall_grass"
-    },
+    "allowedTileTypes": [11, 12],
     "tileDistribution": {
-      "1": 70,
-      "10": 30
+      "11": 60.0,
+      "12": 40.0
     },
-    "spawnableObjects": [
-      "TREE"
-    ],
+    "spawnableObjects": ["TREE"],
     "spawnChances": {
-      "1": 0.20,
-      "10": 0.10
+      "11": 0.20,
+      "12": 0.10
+    },
+    "transitionTiles": {
+      "PLAINS": {
+        "11": 1,
+        "12": 10
+      },
+      "HAUNTED": {
+        "11": 5,
+        "12": 7
+      },
+      "SNOW": {
+        "11": 4,
+        "12": 6
+      },
+      "RAIN_FOREST": {
+        "11": 13,
+        "12": 14
+      },
+      "DESERT": {
+        "11": 15,
+        "12": 16
+      }
     }
   },
   {
     "name": "Snow",
     "type": "SNOW",
-    "allowedTileTypes": [
-      4,
-      6
-    ],
-    "tileTextures": {
-      "4": "snow",
-      "6": "snow_tall_grass"
-    },
+    "allowedTileTypes": [4, 6],
     "tileDistribution": {
-      "4": 70,
-      "6": 30
+      "4": 70.0,
+      "6": 30.0
     },
-    "spawnableObjects": [
-      "SNOW_TREE"
-    ],
+    "spawnableObjects": ["SNOW_TREE"],
     "spawnChances": {
       "4": 0.08,
       "6": 0.04
+    },
+    "transitionTiles": {
+      "PLAINS": {
+        "4": 1,
+        "6": 10
+      },
+      "FOREST": {
+        "4": 11,
+        "6": 12
+      },
+      "HAUNTED": {
+        "4": 5,
+        "6": 7
+      },
+      "RAIN_FOREST": {
+        "4": 13,
+        "6": 14
+      },
+      "DESERT": {
+        "4": 15,
+        "6": 16
+      }
     }
   },
   {
     "name": "Haunted",
     "type": "HAUNTED",
-    "allowedTileTypes": [
-      5,
-      7,
-      8,
-      9
-    ],
-    "tileTextures": {
-      "5": "haunted_grass",
-      "7": "haunted_tall_grass",
-      "8": "haunted_shroom",
-      "9": "haunted_shrooms"
-    },
+    "allowedTileTypes": [5, 7, 8, 9],
     "tileDistribution": {
-      "5": 70,
-      "7": 15,
-      "8": 5,
-      "9": 10
+      "5": 70.0,
+      "7": 15.0,
+      "8": 5.0,
+      "9": 10.0
     },
-    "spawnableObjects": [
-      "HAUNTED_TREE"
-    ],
+    "spawnableObjects": ["HAUNTED_TREE"],
     "spawnChances": {
       "5": 0.05,
       "7": 0.06,
       "8": 0.01,
       "9": 0.02
+    },
+    "transitionTiles": {
+      "PLAINS": {
+        "5": 1,
+        "7": 10,
+        "8": 10,
+        "9": 10
+      },
+      "FOREST": {
+        "5": 11,
+        "7": 10,
+        "8": 10,
+        "9": 10
+      },
+      "SNOW": {
+        "5": 4,
+        "7": 6,
+        "8": 6,
+        "9": 6
+      },
+      "RAIN_FOREST": {
+        "5": 13,
+        "7": 14,
+        "8": 14,
+        "9": 14
+      },
+      "DESERT": {
+        "5": 15,
+        "7": 16,
+        "8": 16,
+        "9": 16
+      }
+    }
+  },
+  {
+    "name": "Rainforest",
+    "type": "RAIN_FOREST",
+    "allowedTileTypes": [13, 14],
+    "tileDistribution": {
+      "13": 80.0,
+      "14": 20.0
+    },
+    "spawnableObjects": ["TREE"],
+    "spawnChances": {
+      "13": 0.15,
+      "14": 0.05
+    },
+    "transitionTiles": {
+      "FOREST": {
+        "13": 11,
+        "14": 12
+      },
+      "PLAINS": {
+        "13": 1,
+        "14": 10
+      },
+      "DESERT": {
+        "13": 15,
+        "14": 16
+      },
+      "SNOW": {
+        "13": 4,
+        "14": 6
+      }
+    }
+  },
+  {
+    "name": "Desert",
+    "type": "DESERT",
+    "allowedTileTypes": [15, 16],
+    "tileDistribution": {
+      "15": 90.0,
+      "16": 10.0
+    },
+    "spawnableObjects": ["CACTUS"],
+    "spawnChances": {
+      "15": 0.10,
+      "16": 0.02
+    },
+    "transitionTiles": {
+      "PLAINS": {
+        "15": 1,
+        "16": 10
+      },
+      "FOREST": {
+        "15": 11,
+        "16": 12
+      },
+      "RAIN_FOREST": {
+        "15": 13,
+        "16": 14
+      },
+      "SNOW": {
+        "15": 4,
+        "16": 6
+      }
     }
   }
 ]

@@ -4,8 +4,8 @@ import com.badlogic.gdx.Application;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.utils.Json;
-import io.github.pokemeetup.system.PlayerData;
-import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldData;
+import io.github.pokemeetup.system.data.PlayerData;
+import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.HashMap;
