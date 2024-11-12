@@ -21,7 +21,7 @@ public class InputHandler extends InputAdapter {
         @Override
         public boolean keyDown(int keycode) {
             switch (keycode) {
-                case Input.Keys.W:    // Use WASD or arrow keys
+                case Input.Keys.W:
                 case Input.Keys.UP:
                     upPressed = true;
                     return true;
@@ -50,7 +50,6 @@ public class InputHandler extends InputAdapter {
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
         if (player.isBuildMode()) {
             if (button == Input.Buttons.LEFT) {
-                // Convert screen coordinates to world coordinates
                 Vector3 worldCoords = new Vector3(screenX, screenY, 0);
                 int tileX = (int) (worldCoords.x / World.TILE_SIZE);
                 int tileY = (int) (worldCoords.y / World.TILE_SIZE);

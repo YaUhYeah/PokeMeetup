@@ -2,61 +2,59 @@ package io.github.pokemeetup.server.deployment;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonSyntaxException;
 import io.github.pokemeetup.multiplayer.server.GameServer;
 import io.github.pokemeetup.multiplayer.server.ServerStorageSystem;
 import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
+import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
+import io.github.pokemeetup.utils.storage.GameFileSystem;
 import org.h2.tools.Server;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.logging.Logger;
 
 public class ServerLauncher {
+    private static final String DEFAULT_ICON = "server-icon.png";
+    private static final String DEFAULT_MOTD = "Basic and default server description fr!";
     private static final Logger logger = Logger.getLogger(ServerLauncher.class.getName());
-    private static final String DEFAULT_CONFIG_PATH = "config/server.json";
+    private static final Path SERVER_ROOT = Paths.get(".");
 
     public static void main(String[] args) {
         Server h2Server = null;
         try {
-            // Start H2 TCP Server on port 9101 with base directory './data'
-            h2Server = Server.createTcpServer(
-                "-tcpPort", "9101",
-                "-tcpAllowOthers",
-                "-ifNotExists",
-                "-baseDir", "./data" // Ensure this matches DB_PATH in DatabaseManager
-            ).start();
+            // Initialize server deployment
+            logger.info("Initializing server deployment...");
+            DeploymentHelper.createServerDeployment(SERVER_ROOT);
+            logger.info("Server deployment initialized");
 
-            if (h2Server.isRunning(true)) {
-                logger.info("H2 Server started and listening on port 9101");
-            }
+            // Initialize file system
+            GameFileSystem.getInstance().setDelegate(new ServerFileDelegate());
+            logger.info("Server file system initialized");
 
-            // Load server config
+            // Start H2 Database Server
+            h2Server = startH2Server();
+
+            // Load server configuration
             ServerConnectionConfig config = loadServerConfig();
-            logger.info("Loaded server configuration successfully");
+            logger.info("Server configuration loaded");
 
-            // Create server storage system
+            // Initialize storage and world management
             ServerStorageSystem storage = new ServerStorageSystem();
-
-            // Initialize WorldManager with server storage
             WorldManager worldManager = WorldManager.getInstance(storage, true);
             worldManager.init();
+            logger.info("World management system initialized");
 
-            // Create and start server
+            // Create and start game server
             GameServer server = new GameServer(config);
             server.start();
+            logger.info("Game server started successfully");
 
             // Add shutdown hook
-            Server finalH2Server = h2Server;
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                logger.info("Shutting down server...");
-                server.shutdown();
-                finalH2Server.stop();
-                logger.info("H2 Server stopped.");
-            }));
+            addShutdownHook(server, h2Server);
 
         } catch (Exception e) {
             logger.severe("Failed to start server: " + e.getMessage());
@@ -68,78 +66,103 @@ public class ServerLauncher {
         }
     }
 
-    private static ServerConnectionConfig loadServerConfig() {
-        Path configFile = Paths.get(DEFAULT_CONFIG_PATH);
-        Gson gson = new GsonBuilder()
-            .setPrettyPrinting()
-            .serializeNulls()
-            .create();
+    private static Server startH2Server() throws Exception {
+        Server h2Server = Server.createTcpServer(
+            "-tcpPort", "9101",
+            "-tcpAllowOthers",
+            "-ifNotExists",
+            "-baseDir", "./data"
+        ).start();
 
-        // Create default config if it doesn't exist or is corrupted
-        ServerConnectionConfig defaultConfig = new ServerConnectionConfig(
-            "0.0.0.0",              // Listen on all interfaces
-            54555,                  // Default TCP port
-            54556,                  // Default UDP port
-            "Pokemon Meetup Server", // Server name
-            true,                   // Allow new registrations
-            100                    // ata directory (ensure consistency)
-        );
+        if (h2Server.isRunning(true)) {
+            logger.info("H2 Database Server started on port 9101");
+        }
+        return h2Server;
+    }
+
+    private static ServerConnectionConfig loadServerConfig() throws IOException {
+        Path configDir = SERVER_ROOT.resolve("config");
+        Path configFile = configDir.resolve("server.json");
 
         try {
-            if (!Files.exists(configFile)) {
-                Files.createDirectories(configFile.getParent());
-                writeConfig(configFile, defaultConfig, gson);
-                logger.info("Created new default server configuration");
-                return defaultConfig;
+            if (!configFile.toFile().exists()) {
+                logger.info("Configuration not found, loading defaults");
+                return new ServerConnectionConfig(
+                    "0.0.0.0",
+                    54555,
+                    54556,
+                    "Pokemon Meetup Server",
+                    true,
+                    100
+                );
             }
 
-            // Try to load existing config
+            Gson gson = new GsonBuilder()
+                .setPrettyPrinting()
+                .serializeNulls()
+                .create();
+
             String jsonContent = Files.readString(configFile);
-            try {
-                ServerConnectionConfig config = gson.fromJson(jsonContent, ServerConnectionConfig.class);
-                if (isValidConfig(config)) {
-                    // Ensure server listens on all interfaces
-                    config.setServerIP("0.0.0.0");
-                    return config;
+            ServerConnectionConfig config = gson.fromJson(jsonContent, ServerConnectionConfig.class);
+
+            // Ensure server listens on all interfaces
+            config.setServerIP("0.0.0.0");
+
+            return config;
+        } catch (Exception e) { Path iconPath = SERVER_ROOT.resolve(DEFAULT_ICON);
+            if (!Files.exists(iconPath)) {
+                // Copy default icon from resources
+                try (InputStream is = ServerLauncher.class.getResourceAsStream("/assets/default-server-icon.png")) {
+                    if (is != null) {
+                        Files.copy(is, iconPath);
+                    }
                 }
-            } catch (JsonSyntaxException e) {
-                logger.warning("Invalid config file format, creating backup and using defaults");
-                createConfigBackup(configFile);
             }
-
-            // If we get here, config was invalid - write default
-            writeConfig(configFile, defaultConfig, gson);
-            logger.info("Reset to default server configuration");
-            return defaultConfig;
-
-        } catch (Exception e) {
-            logger.severe("Error handling server config: " + e.getMessage());
-            // Fall back to default config if all else fails
-            return defaultConfig;
+            logger.warning("Error loading config: " + e.getMessage() + ". Using defaults.");
+            ServerConnectionConfig config = new ServerConnectionConfig(
+                "0.0.0.0",
+                54555,
+                54556,
+                "Pokemon Meetup Server",
+                true,
+                100
+            );
+            config.setMotd(DEFAULT_MOTD);
+            config.setIconPath(DEFAULT_ICON);
+            return config;
         }
     }
 
-    private static boolean isValidConfig(ServerConnectionConfig config) {
-        return config != null &&
-            config.getTcpPort() > 0 &&
-            config.getUdpPort() > 0 &&
-            config.getMaxPlayers() > 0 &&
-            config.getServerName() != null &&
-            config.getDataDirectory() != null;
-    }
+    // In ServerLauncher.java - Update shutdown hook
+    private static void addShutdownHook(GameServer server, Server h2Server) {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            logger.info("Shutting down server...");
+            try {
+                // Stop game server first to prevent new changes
+                server.shutdown();
+                logger.info("Game server stopped");
 
-    private static void writeConfig(Path configFile, ServerConnectionConfig config, Gson gson) throws IOException {
-        String jsonConfig = gson.toJson(config);
-        Files.writeString(configFile, jsonConfig);
-    }
+                // Save world data with backup
+                WorldManager worldManager = WorldManager.getInstance(null, true);
+                WorldData currentWorld = worldManager.getCurrentWorld();
+                if (currentWorld != null) {
+                    logger.info("Saving world data before shutdown...");
+                    currentWorld.save(true); // Create backup on shutdown
+                    logger.info("World data saved successfully");
+                } else {
+                    logger.warning("No current world to save");
+                }
 
-    private static void createConfigBackup(Path configFile) {
-        try {
-            Path backupFile = configFile.resolveSibling("server.json.bak." + System.currentTimeMillis());
-            Files.copy(configFile, backupFile);
-            logger.info("Created config backup: " + backupFile);
-        } catch (IOException e) {
-            logger.warning("Failed to create config backup: " + e.getMessage());
-        }
+                // Stop database server last
+                if (h2Server != null) {
+                    h2Server.stop();
+                    logger.info("Database server stopped");
+                }
+
+            } catch (Exception e) {
+                logger.severe("Error during shutdown: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }));
     }
 }

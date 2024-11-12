@@ -8,197 +8,177 @@ import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import io.github.pokemeetup.utils.GameLogger;
 
 public class PokemonAnimations {
+    // Constants for 256x256 sprite sheet with 4x4 grid
+    private static final int SPRITE_SHEET_SIZE = 256;
     private static final int FRAMES_PER_DIRECTION = 4;
-    private static final int FRAME_WIDTH = 64;  // Adjust based on your spritesheet
-    private static final int FRAME_HEIGHT = 64; // Adjust based on your spritesheet
-    private static final float FRAME_DURATION = 0.25f;
+    private static final int FRAME_WIDTH = SPRITE_SHEET_SIZE / FRAMES_PER_DIRECTION;  // 64
+    private static final int FRAME_HEIGHT = SPRITE_SHEET_SIZE / FRAMES_PER_DIRECTION; // 64
+    private static final float FRAME_DURATION = 0.15f;
 
-    private Animation<TextureRegion> walkUpAnimation;
-    private Animation<TextureRegion> walkDownAnimation;
-    private Animation<TextureRegion> walkLeftAnimation;
-    private Animation<TextureRegion> walkRightAnimation;
-    private TextureRegion[] standingFrames;
+    // Animations for each direction
+    private Animation<TextureRegion> walkDownAnimation;  // Row 0
+    private Animation<TextureRegion> walkLeftAnimation;  // Row 1
+    private Animation<TextureRegion> walkRightAnimation; // Row 2
+    private Animation<TextureRegion> walkUpAnimation;    // Row 3
+
+    private final TextureRegion[] standingFrames;
     private float stateTime;
     private TextureRegion defaultFrame;
     private boolean isMoving;
     private String currentDirection;
+    private boolean isInitialized;
 
-    public PokemonAnimations(TextureRegion fullSheet) {
-        if (fullSheet == null) {
-            throw new IllegalArgumentException("Pokemon sprite sheet cannot be null");
+    public PokemonAnimations(TextureRegion spriteSheet) {
+        this.standingFrames = new TextureRegion[4];
+        this.stateTime = 0f;
+
+        if (spriteSheet == null) {
+            GameLogger.error("Sprite sheet is null");
+            createDefaultFrame();
+            return;
         }
 
-        GameLogger.info("Creating animations from sheet: " +
-            fullSheet.getRegionWidth() + "x" + fullSheet.getRegionHeight());
-
         try {
-            // First validate the sprite sheet dimensions
-            if (fullSheet.getRegionWidth() < FRAME_WIDTH * FRAMES_PER_DIRECTION ||
-                fullSheet.getRegionHeight() < FRAME_HEIGHT * 4) {
-                GameLogger.error("Sprite sheet dimensions invalid: " +
-                    fullSheet.getRegionWidth() + "x" + fullSheet.getRegionHeight() +
-                    " (need at least " + (FRAME_WIDTH * FRAMES_PER_DIRECTION) + "x" +
-                    (FRAME_HEIGHT * 4) + ")");
-                createDefaultFrame(fullSheet);
-                return;
+            // Verify sprite sheet dimensions
+            if (spriteSheet.getRegionWidth() != SPRITE_SHEET_SIZE ||
+                spriteSheet.getRegionHeight() != SPRITE_SHEET_SIZE) {
+                GameLogger.error(String.format(
+                    "Invalid sprite sheet dimensions. Expected %dx%d, got %dx%d",
+                    SPRITE_SHEET_SIZE, SPRITE_SHEET_SIZE,
+                    spriteSheet.getRegionWidth(), spriteSheet.getRegionHeight()
+                ));
             }
 
-            // Create frame arrays
-            TextureRegion[][] frames = new TextureRegion[4][FRAMES_PER_DIRECTION];
+            initializeAnimations(spriteSheet);
+            isInitialized = true;
+//            GameLogger.info("Successfully initialized Pokemon animations");
+        } catch (Exception e) {
+            GameLogger.error("Failed to initialize animations: " + e.getMessage());
+            e.printStackTrace();
+            createDefaultFrame();
+        }
+    }
 
-            // Split sprite sheet manually with proper bounds checking
-            for (int row = 0; row < 4; row++) {
-                for (int col = 0; col < FRAMES_PER_DIRECTION; col++) {
-                    int x = fullSheet.getRegionX() + (col * FRAME_WIDTH);
-                    int y = fullSheet.getRegionY() + (row * FRAME_HEIGHT);
+    private void initializeAnimations(TextureRegion spriteSheet) {
+        // Split sprite sheet into frames
+        TextureRegion[][] allFrames = new TextureRegion[4][FRAMES_PER_DIRECTION];
 
-                    if (x + FRAME_WIDTH <= fullSheet.getTexture().getWidth() &&
-                        y + FRAME_HEIGHT <= fullSheet.getTexture().getHeight()) {
+        for (int row = 0; row < 4; row++) {
+            for (int col = 0; col < FRAMES_PER_DIRECTION; col++) {
+                // Calculate frame coordinates
+                int x = col * FRAME_WIDTH;
+                int y = row * FRAME_HEIGHT;
 
-                        frames[row][col] = new TextureRegion(
-                            fullSheet.getTexture(),
-                            x, y,
-                            FRAME_WIDTH, FRAME_HEIGHT
-                        );
 
-//                        GameLogger.info("Created frame at " + x + "," + y);
-                    } else {
-                        GameLogger.error("Frame out of bounds: " + x + "," + y);
-                        frames[row][col] = createDefaultFrame(null);
-                    }
+                allFrames[row][col] = new TextureRegion(
+                    spriteSheet,
+                    x, y,
+                    FRAME_WIDTH, FRAME_HEIGHT
+                );
+
+                // Store first frame of each row as standing frame
+                if (col == 0) {
+                    standingFrames[row] = new TextureRegion(allFrames[row][0]);
                 }
             }
-
-            // Create animations with validation
-            walkDownAnimation = createAnimation(frames[0]);
-            walkLeftAnimation = createAnimation(frames[1]);
-            walkRightAnimation = createAnimation(frames[2]);
-            walkUpAnimation = createAnimation(frames[3]);
-
-            // Set standing frames with validation
-            standingFrames = new TextureRegion[4];
-            standingFrames[0] = validateFrame(frames[3][0]); // Up
-            standingFrames[1] = validateFrame(frames[0][0]); // Down
-            standingFrames[2] = validateFrame(frames[1][0]); // Left
-            standingFrames[3] = validateFrame(frames[2][0]); // Right
-
-            defaultFrame = standingFrames[1]; // Use down standing frame as default
-
-        } catch (Exception e) {
-            GameLogger.error("Error creating animations: " + e.getMessage());
-            createDefaultFrame(fullSheet);
         }
-    }  public void startMoving(String direction) {
-        this.isMoving = true;
-        this.currentDirection = direction;
-        // Don't reset stateTime to keep animations smooth
+
+        // Create animations for each direction
+        walkDownAnimation = new Animation<>(FRAME_DURATION, allFrames[0]);
+        walkLeftAnimation = new Animation<>(FRAME_DURATION, allFrames[1]);
+        walkRightAnimation = new Animation<>(FRAME_DURATION, allFrames[2]);
+        walkUpAnimation = new Animation<>(FRAME_DURATION, allFrames[3]);
+
+        // Set default frame
+        defaultFrame = standingFrames[0];
+
+//        GameLogger.info("Created all animations successfully");
     }
 
-    public void stopMoving() {
-        this.isMoving = false;
-        // Keep current direction for standing frame
-    }
-
-    public boolean isMoving() {
-        return isMoving;
-    }
-
-    public void setDirection(String direction) {
-        if (!direction.equals(this.currentDirection)) {
-            this.currentDirection = direction;
-            // Optional: reset stateTime when changing direction
-            // this.stateTime = 0;
-        }
-    }
-
-
-
-    public TextureRegion getCurrentFrame(String direction, boolean isMoving, float delta) {
-        try {
-            stateTime += delta;
-            this.isMoving = isMoving;
-            this.currentDirection = direction;
-
-            if (!isMoving) {
-                return getStandingFrame(direction);
-            }
-
-            Animation<TextureRegion> currentAnimation = getAnimationForDirection(direction);
-            if (currentAnimation == null) {
-                return defaultFrame;
-            }
-
-            TextureRegion frame = currentAnimation.getKeyFrame(stateTime, true);
-            return frame != null ? frame : defaultFrame;
-
-        } catch (Exception e) {
-            GameLogger.error("Error getting current frame: " + e.getMessage());
-            return defaultFrame;
-        }
-    }
-
-    private TextureRegion validateFrame(TextureRegion frame) {
-        if (frame == null || frame.getTexture() == null) {
-            return defaultFrame != null ? defaultFrame : createDefaultFrame(null);
-        }
-        return frame;
-    }
-
-    private TextureRegion createDefaultFrame(TextureRegion original) {
-        // Create a simple colored square as default frame
+    private void createDefaultFrame() {
         Pixmap pixmap = new Pixmap(FRAME_WIDTH, FRAME_HEIGHT, Pixmap.Format.RGBA8888);
         pixmap.setColor(Color.MAGENTA);
         pixmap.fill();
         Texture texture = new Texture(pixmap);
         pixmap.dispose();
 
-        TextureRegion frame = new TextureRegion(texture);
-        if (defaultFrame == null) {
-            defaultFrame = frame;
+        defaultFrame = new TextureRegion(texture);
+        for (int i = 0; i < 4; i++) {
+            standingFrames[i] = new TextureRegion(defaultFrame);
         }
-        return frame;
     }
 
-    private Animation<TextureRegion> createAnimation(TextureRegion[] frames) {
-        // Validate frames before creating animation
-        TextureRegion[] validFrames = new TextureRegion[frames.length];
-        for (int i = 0; i < frames.length; i++) {
-            validFrames[i] = validateFrame(frames[i]);
+    public TextureRegion getCurrentFrame(String direction, boolean isMoving, float delta) {
+        if (!isInitialized) {
+            return defaultFrame;
         }
-        return new Animation<>(FRAME_DURATION, validFrames);
+
+        this.isMoving = isMoving;
+        this.currentDirection = direction;
+
+        // Only update stateTime if we're moving
+        if (isMoving) {
+            stateTime += delta;
+        }
+
+        TextureRegion frame;
+        if (isMoving) {
+            Animation<TextureRegion> currentAnimation = getAnimationForDirection(direction);
+            frame = currentAnimation.getKeyFrame(stateTime, true);
+        } else {
+            frame = getStandingFrame(direction);
+        }
+
+        // Debug log
+
+        return frame != null ? frame : defaultFrame;
+    }
+
+    private TextureRegion getStandingFrame(String direction) {
+        switch (direction.toLowerCase()) {
+            case "down":
+                return standingFrames[0];
+            case "left":
+                return standingFrames[1];
+            case "right":
+                return standingFrames[2];
+            case "up":
+                return standingFrames[3];
+            default:
+                return standingFrames[0]; // Default to down
+        }
     }
 
     private Animation<TextureRegion> getAnimationForDirection(String direction) {
         switch (direction.toLowerCase()) {
-            case "up":
-                return walkUpAnimation;
             case "down":
                 return walkDownAnimation;
             case "left":
                 return walkLeftAnimation;
             case "right":
                 return walkRightAnimation;
+            case "up":
+                return walkUpAnimation;
             default:
                 return walkDownAnimation;
         }
     }
 
-    private TextureRegion getStandingFrame(String direction) {
-        switch (direction.toLowerCase()) {
-            case "up":
-                return standingFrames[0];
-            case "down":
-                return standingFrames[1];
-            case "left":
-                return standingFrames[2];
-            case "right":
-                return standingFrames[3];
-            default:
-                return standingFrames[1];
+    public void startMoving(String direction) {
+        if (!isMoving || !direction.equals(currentDirection)) {
+            this.isMoving = true;
+            this.currentDirection = direction;
+            // Don't reset stateTime to keep animations smooth
         }
     }
 
+    public void stopMoving() {
+        this.isMoving = false;
+    }
+
     public void update(float delta) {
-        stateTime += delta;
+        if (isMoving) {
+            stateTime += delta;
+        }
     }
 }

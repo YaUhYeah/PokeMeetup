@@ -1,8 +1,11 @@
 package io.github.pokemeetup.system.data;
 
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import com.badlogic.gdx.utils.Json;
 import io.github.pokemeetup.system.gameplay.inventory.Item;
+import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 import io.github.pokemeetup.utils.GameLogger;
+import io.github.pokemeetup.utils.TextureManager;
 
 import java.util.UUID;
 
@@ -20,7 +23,9 @@ public class ItemData {
         this.itemId = itemId;
         this.count = count;
         this.uuid = uuid;
-    }public ItemData(String itemId, int count) {
+    }
+
+    public ItemData(String itemId, int count) {
         this.itemId = itemId;
         this.count = count;
         this.uuid = UUID.randomUUID(); // Always generate a new UUID
@@ -33,7 +38,14 @@ public class ItemData {
         this.uuid = UUID.randomUUID();
     }
 
-
+    private String normalizeItemId(String itemId) {
+        // Convert to lowercase and ensure _item suffix
+        String normalized = itemId.toLowerCase();
+        if (!normalized.endsWith("_item")) {
+            normalized += "_item";
+        }
+        return normalized;
+    }
 
     // Getters and Setters
     public String getItemId() {
@@ -41,11 +53,26 @@ public class ItemData {
     }
 
     public void setItemId(String itemId) {
+        // Verify texture exists
+        String normalizedId = normalizeItemId(itemId);
+        TextureRegion texture = TextureManager.items.findRegion(normalizedId);
+        if (texture == null) {
+            GameLogger.error("No texture found for item: " + normalizedId);
+        }
         this.itemId = itemId;
     }
 
     public int getCount() {
         return count;
+    }
+
+    public void setCount(int newCount) {
+        if (newCount < 0) {
+            GameLogger.error("Attempted to set negative count: " + newCount);
+            this.count = 0;
+            return;
+        }
+        this.count = newCount;
     }
 
     public UUID getUuid() {
@@ -57,6 +84,26 @@ public class ItemData {
 
     public void setUuid(UUID uuid) {
         this.uuid = uuid;
+    }
+
+    public boolean verifyIntegrity() {
+        // Adjust the integrity check as per your game logic
+        // For example, if 'itemId' must not be null or empty
+        if (itemId == null || itemId.trim().isEmpty()) {
+            GameLogger.error("ItemData has null or empty itemId. Treating as valid if other fields are valid.");
+            return false;
+        }
+        if (count <= 0) {
+            GameLogger.error("ItemData has non-positive count. Treating as valid if other fields are valid.");
+            // Decide whether to treat this as invalid or acceptable
+            // return false;
+        }
+        if (uuid == null) {
+            GameLogger.error("ItemData has null UUID. Generating new UUID.");
+            uuid = UUID.randomUUID();
+        }
+        // If other fields are acceptable, return true
+        return true;
     }
 
     // Utility method to check if two items can stack
@@ -80,6 +127,7 @@ public class ItemData {
     public boolean isEmpty() {
         return this.count <= 0;
     }
+
     /**
      * Creates a deep copy of this ItemData with a new UUID.
      *
@@ -89,11 +137,6 @@ public class ItemData {
         return new ItemData(this.itemId, this.count, UUID.randomUUID());
     }
 
-    /**
-     * Creates a deep copy of this ItemData, preserving the UUID.
-     *
-     * @return A new ItemData instance with the same itemId, count, and UUID.
-     */
     public ItemData copy() {
         return new ItemData(this.itemId, this.count, this.uuid);
     }
@@ -106,14 +149,6 @@ public class ItemData {
             ", uuid=" + uuid +
             '}';
     }
-    public void setCount(int newCount) {
-        if (newCount < 0) {
-            GameLogger.error("Attempted to set negative count: " + newCount);
-            this.count = 0;
-            return;
-        }
-        this.count = newCount;
-    }
 
     public void decrementCount(int amount) {
         if (amount < 0) {
@@ -123,10 +158,25 @@ public class ItemData {
         this.count = Math.max(0, this.count - amount);
     }
 
-    // Add this validation method
-    public boolean isValid() {
-        return itemId != null && !itemId.isEmpty() &&
-            count > 0 && count <= Item.MAX_STACK_SIZE &&
-            uuid != null;
+    public void writeJson(Json json) {
+        json.writeObjectStart();
+        json.writeValue("itemId", itemId);
+        json.writeValue("count", count);
+        json.writeValue("uuid", uuid != null ? uuid.toString() : UUID.randomUUID().toString());
+        json.writeObjectEnd();
     }
+
+    public boolean isValid() {
+        if (itemId == null || itemId.trim().isEmpty()) {
+            return false;
+        }
+        if (count <= 0) {
+            return false;
+        }
+        if (uuid == null) {
+            uuid = UUID.randomUUID(); // Auto-generate UUID if missing
+        }
+        return ItemManager.getItem(itemId) != null; // Verify item exists in manager
+    }
+
 }

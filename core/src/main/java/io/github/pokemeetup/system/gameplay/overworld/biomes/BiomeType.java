@@ -6,5 +6,6 @@ public enum BiomeType {
     SNOW,
     HAUNTED,
     DESERT,
-    RAIN_FOREST
+    RAIN_FOREST,
+    BIG_MOUNTAINS
 }

@@ -6,6 +6,7 @@ import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.pokemon.attacks.Move;
+import io.github.pokemeetup.pokemon.data.PokemonDatabase;
 import io.github.pokemeetup.system.battle.BattleCompletionHandler;
 import io.github.pokemeetup.system.gameplay.PokemonAnimations;
 import io.github.pokemeetup.utils.GameLogger;
@@ -17,21 +18,17 @@ import java.util.Random;
 import java.util.UUID;
 
 public class Pokemon {
-    // Add these fields
     private static final int BASE_EXP_REQUIREMENT = 100; // Base exp needed for level 2
     private static Weather currentWeather = Weather.CLEAR;
     private static int weatherTurns = 0;
-    private String name;// Add these enums and fields to Pokemon class
-    // Add these fields to the Pokemon class
+    public String name;
     private Status status = Status.NONE;
     private int sleepTurns = 0;
     private int toxicCounter = 1;
     private boolean flinched = false;
-
-    // Add these methods to Pokemon class
     private int confusedTurns = 0;
     private boolean canMove = true;
-    private int level;
+    public int level;
     private String nature;
     private boolean isShiny;
     private UUID uuid;
@@ -40,11 +37,11 @@ public class Pokemon {
     private int experienceToNextLevel;
     private BattleCompletionHandler completionHandler;
     private boolean battleWon;
-    private Stats stats;
-    private List<Move> moves;
-    private PokemonType primaryType;
-    private PokemonType secondaryType;
-    private float currentHp;
+    public Stats stats;
+    public List<Move> moves;
+    public PokemonType primaryType;
+    public PokemonType secondaryType;
+    public float currentHp;
     private TextureRegion iconSprite;
     private TextureRegion frontSprite;
     private TextureRegion backSprite;
@@ -57,8 +54,7 @@ public class Pokemon {
     private TextureRegion[] iconFrames; // Array to hold both frames
     private int currentIconFrame;       // Index to track the current frame
     private float frameDuration = 0.5f; // Duration each frame is shown in seconds
-    private float frameTimer = 0;       // Timer to handle frame switching
-
+    private float frameTimer = 0;
     public Pokemon(String name, int level) {
         this.uuid = UUID.randomUUID();
         this.name = name;
@@ -82,15 +78,13 @@ public class Pokemon {
         loadOverworld(TextureManager.getPokemonoverworld());
     }
 
-    public static void setWeather(Weather weather, int turns) {
-        currentWeather = weather;
-        weatherTurns = turns;
+    public void heal() {
+        this.currentHp = this.stats.getHp();
+        this.status = Status.NONE;
+        this.toxicCounter = 1;
+        this.flinched = false;
+        this.confusedTurns = 0;
     }
-
-    public static Weather getCurrentWeather() {
-        return currentWeather;
-    }
-
     public static void applyWeatherEffects(Pokemon pokemon) {
         if (weatherTurns > 0) {
             switch (currentWeather) {
@@ -114,28 +108,7 @@ public class Pokemon {
             }
         }
     }
-    public TextureManager.StatusCondition getStatusCondition() {
-        switch (this.status) {
-            case NONE:
-                return TextureManager.StatusCondition.NONE;
-            case PARALYZED:
-                return TextureManager.StatusCondition.PARALYSIS;
-            case POISONED:
-                return TextureManager.StatusCondition.POISON;
-            case BADLY_POISONED:
-                return TextureManager.StatusCondition.TOXIC;
-            case BURNED:
-                return TextureManager.StatusCondition.BURN;
-            case FROZEN:
-                return TextureManager.StatusCondition.FREEZE;
-            case ASLEEP:
-                return TextureManager.StatusCondition.SLEEP;
-            case FAINTED:
-                return TextureManager.StatusCondition.NONE;
-            default:
-                return TextureManager.StatusCondition.NONE;
-        }
-    }
+
     public boolean hasStatus() {
         return status != Status.NONE;
     }
@@ -333,27 +306,6 @@ public class Pokemon {
         // Load overworld sprite sheet
     }
 
-    public void initializeDefaultMoves() {
-        moves.clear();
-        // Add some basic moves
-        moves.add(new Move("Tackle", PokemonType.NORMAL, 40, 100, 35, false,
-            "A physical attack in which the user charges and slams into the target with its whole body."));
-        moves.add(new Move("Growl", PokemonType.NORMAL, 0, 100, 40, false,
-            "The user growls in an endearing way, making opposing Pokemon less wary. This lowers their Attack stats."));
-
-        // Add type-specific moves based on Pokemon's primary type
-        if (primaryType == PokemonType.FIRE) {
-            moves.add(new Move("Ember", PokemonType.FIRE, 40, 100, 25, true,
-                "The target is attacked with small flames. This may also leave the target with a burn."));
-        } else if (primaryType == PokemonType.WATER) {
-            moves.add(new Move("Water Gun", PokemonType.WATER, 40, 100, 25, true,
-                "The target is hit with a shot of water."));
-        } else if (primaryType == PokemonType.GRASS) {
-            moves.add(new Move("Vine Whip", PokemonType.GRASS, 45, 100, 25, false,
-                "The target is struck with slender, whiplike vines."));
-        }
-    }
-
     private void loadOverworld(TextureAtlas atlas) {
         String baseName = name.toUpperCase();
         TextureRegion overworldSheet = atlas.findRegion(baseName + "_overworld");
@@ -362,7 +314,40 @@ public class Pokemon {
         } else {
             GameLogger.error("Failed to load overworld sprite sheet for: " + name);
         }
+    }private void levelUp() {
+        level++;
+        // Recalculate stats on level up
+        calculateStats();
+        // Heal Pokemon on level up (optional)
+        currentHp = stats.getHp();
+        // Check for new moves
+        learnNewMovesAtLevel(level);
     }
+
+    private void learnNewMovesAtLevel(int level) {
+        // Get the list of move entries from the PokemonDatabase
+        List<PokemonDatabase.MoveEntry> moveEntries = PokemonDatabase.getTemplate(name).moves;
+        for (PokemonDatabase.MoveEntry entry : moveEntries) {
+            if (entry.level == level) {
+                // Learn the new move
+                Move newMove = PokemonDatabase.getMoveByName(entry.name);
+                if (newMove != null) {
+                    // Clone the move
+                    Move clonedMove = PokemonDatabase.cloneMove(newMove);
+                    // If already have 4 moves, replace the oldest one or prompt the player
+                    if (moves.size() < 4) {
+                        moves.add(clonedMove);
+                    } else {
+                        // Replace the first move (you can implement move replacement logic as needed)
+                        moves.remove(0);
+                        moves.add(clonedMove);
+                    }
+                    GameLogger.info(name + " learned " + entry.name + "!");
+                }
+            }
+        }
+    }
+
 
     private void loadFront(TextureAtlas atlas) {
         String baseName = name.toUpperCase();
@@ -457,7 +442,7 @@ public class Pokemon {
         if (animations != null) {
             TextureRegion currentFrame = animations.getCurrentFrame(direction, isMoving, Gdx.graphics.getDeltaTime());
             batch.draw(currentFrame, position.x, position.y);
-            GameLogger.info("Rendering Pokémon: " + name + " at position: " + position);
+//            GameLogger.info("Rendering Pokémon: " + name + " at position: " + position);
         }
     }
 
@@ -558,6 +543,18 @@ public class Pokemon {
         return animations;
     }
 
+    public int getToxicCounter() {
+        return toxicCounter;
+    }
+
+    public void incrementToxicCounter() {
+        toxicCounter = Math.min(toxicCounter + 1, 15); // Cap at 15
+    }
+
+    public void resetToxicCounter() {
+        toxicCounter = 1;
+    }
+
     public void setAnimations(PokemonAnimations animations) {
         this.animations = animations;
     }
@@ -566,14 +563,7 @@ public class Pokemon {
         while (currentExperience >= getExperienceForNextLevel()) {
             levelUp();
         }
-    }
 
-    private void levelUp() {
-        level++;
-        // Recalculate stats on level up
-        calculateStats();
-        // Heal Pokemon on level up (optional)
-        currentHp = stats.getHp();
     }
 
     private int getExperienceForNextLevel() {
@@ -581,7 +571,7 @@ public class Pokemon {
         return (int) (BASE_EXP_REQUIREMENT * Math.pow(level, 3) / 5);
     }
 
-    private void calculateStats() {
+    void calculateStats() {
         // Base stats - these should vary by Pokemon species
         int baseHp = 45;
         int baseAtk = 49;
@@ -739,7 +729,6 @@ public class Pokemon {
 
         public Pokemon build() {
             if (pokemon.getMoves().isEmpty()) {
-                pokemon.initializeDefaultMoves();
             }
             return pokemon;
         }

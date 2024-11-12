@@ -4,125 +4,1050 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.Preferences;
 import com.badlogic.gdx.Screen;
+import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.scenes.scene2d.*;
 import com.badlogic.gdx.scenes.scene2d.actions.Actions;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
+import com.badlogic.gdx.scenes.scene2d.utils.ClickListener;
+import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
+import com.badlogic.gdx.utils.Align;
 import com.badlogic.gdx.utils.Array;
+import com.badlogic.gdx.utils.Json;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
+import com.esotericsoftware.kryonet.Client;
+import com.esotericsoftware.kryonet.Connection;
+import com.esotericsoftware.kryonet.Listener;
 import io.github.pokemeetup.CreatureCaptureGame;
-import io.github.pokemeetup.audio.AudioManager;
-import io.github.pokemeetup.managers.DatabaseManager;
 import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.multiplayer.server.config.ServerConfigManager;
 import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
+import io.github.pokemeetup.screens.otherui.ServerListEntry;
 import io.github.pokemeetup.utils.AssetManagerSingleton;
 import io.github.pokemeetup.utils.GameLogger;
+import io.github.pokemeetup.utils.TextureManager;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class LoginScreen implements Screen {
-    private static final float FADE_DURATION = 0.3f;
-    private static final boolean DEBUG_MODE = false; // Toggle for debug mode
-    private static final String[] DEBUG_USERS = {
-        "allidoisgame1:Ferfer44$",
-        "yauhyeah:Derder44$",
-        "etienne:Derder44$"
-    };
-    private final Stage stage;
-    private final Skin skin;
-    private final CreatureCaptureGame game;
+    public static final String SERVERS_PREFS = "ServerPrefs";
+    public static final float MIN_WIDTH = 300f;
+    public static final float MAX_WIDTH = 500f;
+    private static final String DEFAULT_SERVER_ICON = "ui/default-server-icon.png";
+    private static final int MIN_HEIGHT = 600;
+    private static final float LOGIN_TIMEOUT = 15f; // 15 seconds for total login process
+    public final Stage stage;
+    public final Skin skin;
+    public final CreatureCaptureGame game;
     private final Preferences prefs;
+    private final AtomicBoolean isProcessingLoginResponse = new AtomicBoolean(false);
+    public Array<ServerConnectionConfig> servers; // Adding the servers variable
+    public TextField usernameField;
+    public TextField passwordField;
+    public CheckBox rememberMeBox;
+    public Label feedbackLabel;
+    public SelectBox<ServerConnectionConfig> serverSelect;
+    public ServerConnectionConfig selectedServer;
     private float fadeAlpha = 0f;
     private boolean isTransitioning = false;
     private Screen nextScreen = null;
     private Action fadeAction = null;
-    private Array<ServerConnectionConfig> servers; // Adding the servers variable
-    private GameClient gameClient;
-    private TextField usernameField;
-    private TextField passwordField;
-    private CheckBox rememberMeBox;
-    private Label feedbackLabel;
+    private volatile GameClient gameClient;
     private boolean isDisposed = false;
-    private SelectBox<ServerConnectionConfig> serverSelect;
+    private ScrollPane serverListPane;
+    private Table serverListTable;
+    private Array<ServerListEntry> serverEntries;
+    private Table mainTable;
+    private TextButton loginButton;
+    private TextButton registerButton;
+    private TextButton backButton;
+    private ProgressBar connectionProgress;
+    private Label statusLabel;
+    // State management
+    private float connectionTimer;
+    private boolean isConnecting = false;
+    private float connectionTimeout = 10f;
+    private int connectionAttempts = 0;
+    private Label selectedServerInfoLabel;
+    private ScrollPane serverListScrollPane;
 
 
-    public LoginScreen(CreatureCaptureGame game) throws IOException {
+    public LoginScreen(CreatureCaptureGame game) {
         this.game = game;
         this.stage = new Stage(new ScreenViewport());
+        this.skin = new Skin(Gdx.files.internal("atlas/ui-gfx-atlas.json"));
         this.prefs = Gdx.app.getPreferences("LoginPrefs");
-        this.skin = AssetManagerSingleton.getSkin();
         loadServers();
-        setupUI();
-        loadSavedCredentials();
-        // Remove immediate connection
-        // gameClient initialization moves to login button click
 
+        // Create all UI components
+        createUIComponents();
+
+        // Setup listeners after components are created
+        setupListeners();
+
+        // Initialize UI layout
+        initializeUI();
+
+        // Load saved credentials
+        loadSavedCredentials();
+
+        Gdx.input.setInputProcessor(stage);
+    }
+
+    private void handleLoginButtonPressed(ServerConnectionConfig serverConfig) {
+        String username = usernameField.getText();
+        String password = passwordField.getText();
+
+
+        // Instantiate GameClient
+        gameClient = new GameClient(serverConfig, false, serverConfig.getServerIP(), serverConfig.getTcpPort(), serverConfig.getUdpPort(), null);
+
+        // Set the pending credentials
+        gameClient.setPendingCredentials(username, password);
+
+        // Set login response listener
+        gameClient.setLoginResponseListener(response -> {
+            if (response.success) {
+                // Login successful
+                Gdx.app.postRunnable(() -> {
+                    // Create GameScreen and switch to it
+                    GameScreen gameScreen = new GameScreen(game, username, gameClient, response.worldName);
+                    game.setScreen(gameScreen);
+                    // Dispose of the login screen resources if needed
+                    dispose();
+                });
+            } else {
+                // Login failed
+                Gdx.app.postRunnable(() -> {
+                    showError(response.message);
+                });
+            }
+        });
+
+        // Connect to the server
+        gameClient.connect();
+    }
+
+    private void createUIComponents() {
+        // Create main container
+        mainTable = new Table();
+        mainTable.setFillParent(true);
+
+        // Create buttons first
+        TextButton.TextButtonStyle buttonStyle = new TextButton.TextButtonStyle();
+        buttonStyle.up = skin.getDrawable("button");
+        buttonStyle.down = skin.getDrawable("button-pressed");
+        buttonStyle.over = skin.getDrawable("button-over");
+        buttonStyle.font = skin.getFont("default-font");
+
+        loginButton = new TextButton("Login", buttonStyle);
+        registerButton = new TextButton("Register", buttonStyle);
+        backButton = new TextButton("Back", buttonStyle);
+
+        // Create custom text field style
+        TextField.TextFieldStyle textFieldStyle = new TextField.TextFieldStyle(skin.get(TextField.TextFieldStyle.class));
+        textFieldStyle.font = skin.getFont("default-font");
+        textFieldStyle.fontColor = Color.WHITE;
+        textFieldStyle.background = new TextureRegionDrawable(TextureManager.ui.findRegion("textfield"));
+        textFieldStyle.cursor = skin.getDrawable("cursor");
+        textFieldStyle.selection = skin.getDrawable("selection");
+        textFieldStyle.messageFontColor = new Color(0.7f, 0.7f, 0.7f, 1f);
+
+        // Create input fields
+        usernameField = new TextField("", textFieldStyle);
+        usernameField.setMessageText("Enter username");
+
+        passwordField = new TextField("", textFieldStyle);
+        passwordField.setMessageText("Enter password");
+        passwordField.setPasswordMode(true);
+        passwordField.setPasswordCharacter('*');
+
+        // Create checkbox
+        rememberMeBox = new CheckBox(" Remember Me", skin);
+
+        // Create labels
+        feedbackLabel = new Label("", skin);
+        feedbackLabel.setWrap(true);
+
+        statusLabel = new Label("", skin);
+        statusLabel.setWrap(true);
+
+        // Create progress bar
+        ProgressBar.ProgressBarStyle progressStyle = new ProgressBar.ProgressBarStyle();
+        progressStyle.background = skin.getDrawable("progress-bar-bg");
+        progressStyle.knob = skin.getDrawable("progress-bar-knob");
+        progressStyle.knobBefore = skin.getDrawable("progress-bar-bg");
+
+        connectionProgress = new ProgressBar(0, 1, 0.01f, false, progressStyle);
+        connectionProgress.setVisible(false);
+
+        // Create server list
+        serverListScrollPane = createServerList();
+    }
+
+    private ScrollPane createServerList() {
+        serverListTable = new Table();
+        serverListTable.top();
+
+        // Add servers
+        for (ServerConnectionConfig server : servers) {
+            Table serverEntry = createServerEntry(server);
+            serverListTable.add(serverEntry).expandX().fillX().padBottom(2).row();
+        }
+
+        // Create scroll pane with styling
+        ScrollPane.ScrollPaneStyle scrollStyle = new ScrollPane.ScrollPaneStyle();
+        scrollStyle.background = new TextureRegionDrawable(TextureManager.ui.findRegion("textfield"));
+        scrollStyle.vScroll = skin.getDrawable("scrollbar-v");
+        scrollStyle.vScrollKnob = skin.getDrawable("scrollbar-knob-v");
+
+        ScrollPane scrollPane = new ScrollPane(serverListTable, scrollStyle);
+        scrollPane.setScrollingDisabled(true, false);
+        scrollPane.setFadeScrollBars(false);
+        scrollPane.setOverscroll(false, false);
+
+        return scrollPane;
+    }
+
+    private Table createServerEntry(final ServerConnectionConfig server) {
+        Table entry = new Table();
+        entry.setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("info-box-bg")));
+        entry.pad(10);
+
+        // Server icon with error handling
+        Table iconContainer = new Table();
+        try {
+            if (server.getIconPath() != null && !server.getIconPath().isEmpty()) {
+                FileHandle iconFile = Gdx.files.internal(server.getIconPath());
+                if (iconFile.exists()) {
+                    Image icon = new Image(new TextureRegionDrawable(new TextureRegion(new Texture(iconFile))));
+                    iconContainer.add(icon).size(32, 32);
+                } else {
+                    // Use default icon
+                    Image defaultIcon = new Image(TextureManager.ui.findRegion("default-server-icon"));
+                    iconContainer.add(defaultIcon).size(32, 32);
+                }
+            } else {
+                // Use default icon
+                Image defaultIcon = new Image(TextureManager.ui.findRegion("default-server-icon"));
+                iconContainer.add(defaultIcon).size(32, 32);
+            }
+        } catch (Exception e) {
+            GameLogger.error("Failed to load server icon: " + e.getMessage());
+            // Use default icon
+            Image defaultIcon = new Image(TextureManager.ui.findRegion("default-server-icon"));
+            iconContainer.add(defaultIcon).size(32, 32);
+        }
+
+        // Server info
+        Table infoTable = new Table();
+        infoTable.left();
+
+        Label nameLabel = new Label(server.getServerName(), skin);
+        nameLabel.setFontScale(1.1f);
+
+        Label motdLabel = new Label(server.getMotd() != null ? server.getMotd() : "Welcome!", skin);
+        motdLabel.setColor(0.8f, 0.8f, 0.8f, 1f);
+
+        Label addressLabel = new Label(server.getServerIP() + ":" + server.getTcpPort(), skin);
+        addressLabel.setColor(0.7f, 0.7f, 0.7f, 1f);
+
+        infoTable.add(nameLabel).left().row();
+        infoTable.add(motdLabel).left().padTop(2).row();
+        infoTable.add(addressLabel).left().padTop(2);
+
+        entry.add(iconContainer).padRight(10);
+        entry.add(infoTable).expandX().fillX().left();
+
+        // Selection handling
+        entry.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                selectedServer = server;
+                updateServerSelection(entry);
+            }
+
+            @Override
+            public void enter(InputEvent event, float x, float y, int pointer, Actor fromActor) {
+                if (selectedServer != server) {
+                    entry.setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("textfield-active")));
+                }
+            }
+
+            @Override
+            public void exit(InputEvent event, float x, float y, int pointer, Actor toActor) {
+                if (selectedServer != server) {
+                    entry.setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("textfield")));
+                }
+            }
+        });
+
+        return entry;
+    }
+
+    private void updateServerSelection(Table selectedEntry) {
+        // Update visual selection for all entries
+        for (Cell<?> cell : serverListTable.getCells()) {
+            Actor actor = cell.getActor();
+            if (actor instanceof Table) {
+                Table entry = (Table) actor;
+                TextureRegionDrawable background;
+                if (entry == selectedEntry) {
+                    background = new TextureRegionDrawable(TextureManager.ui.findRegion("textfield-active"));
+                    background.setMinWidth(entry.getWidth());
+                    background.setMinHeight(entry.getHeight());
+                    entry.setBackground(background);
+                } else {
+                    background = new TextureRegionDrawable(TextureManager.ui.findRegion("textfield"));
+                    background.setMinWidth(entry.getWidth());
+                    background.setMinHeight(entry.getHeight());
+                    entry.setBackground(background);
+                }
+            }
+        }
+    }
+
+    private void initializeUI() {
+        float screenWidth = Gdx.graphics.getWidth();
+        float contentWidth = Math.min(500, screenWidth * 0.9f);
+
+        // Create dark panel container
+        Table darkPanel = new Table();
+        darkPanel.setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("window")));
+        darkPanel.pad(20);
+
+        // Title
+        Label titleLabel = new Label("PokeMeetup", skin);
+        titleLabel.setFontScale(2f);
+        darkPanel.add(titleLabel).padBottom(30).row();
+
+        // Server selection section
+        Label serverLabel = new Label("Select Server", skin);
+        serverLabel.setFontScale(1.2f);
+        darkPanel.add(serverLabel).left().padBottom(10).row();
+
+        // Server list container
+        darkPanel.add(serverListScrollPane)
+            .width(contentWidth - 40)
+            .height(180)
+            .padBottom(20)
+            .row();
+
+        // Login fields
+        Table fieldsTable = new Table();
+        fieldsTable.defaults().width(contentWidth - 40).padBottom(10);
+
+        // Username field with label
+        Table usernameRow = new Table();
+        Label usernameLabel = new Label("Username:", skin);
+        usernameRow.add(usernameLabel).width(80).right().padRight(10);
+        usernameRow.add(usernameField).expandX().fillX().height(36);
+        fieldsTable.add(usernameRow).row();
+
+        // Password field with label
+        Table passwordRow = new Table();
+        Label passwordLabel = new Label("Password:", skin);
+        passwordRow.add(passwordLabel).width(80).right().padRight(10);
+        passwordRow.add(passwordField).expandX().fillX().height(36);
+        fieldsTable.add(passwordRow).row();
+
+        // Remember me checkbox
+        rememberMeBox = new CheckBox(" Remember Me", skin);
+        fieldsTable.add(rememberMeBox).left().padTop(5).row();
+
+        darkPanel.add(fieldsTable).row();
+
+        // Buttons
+        Table buttonTable = new Table();
+        float buttonWidth = (contentWidth - 60) / 2;
+
+        // Login and Register buttons
+        Table actionButtons = new Table();
+        actionButtons.add(loginButton).width(buttonWidth).padRight(10);
+        actionButtons.add(registerButton).width(buttonWidth);
+        buttonTable.add(actionButtons).padBottom(10).row();
+
+        // Back button
+        buttonTable.add(backButton).width(buttonWidth);
+
+        darkPanel.add(buttonTable).padTop(20).padBottom(10).row();
+
+        // Status elements
+        Table statusTable = new Table();
+        statusTable.add(statusLabel).width(contentWidth - 40).padBottom(5).row();
+        statusTable.add(connectionProgress).width(contentWidth - 40).height(4).padBottom(5).row();
+        statusTable.add(feedbackLabel).width(contentWidth - 40);
+
+        darkPanel.add(statusTable).row();
+
+        // Add to main table
+        mainTable.add(darkPanel);
+        // Select first server by default if available
+
+        stage.addActor(mainTable);
+        if (servers.isEmpty()) {
+            return;
+        }
+        if (servers != null && servers.size > 0) {
+            selectedServer = servers.first();
+            updateServerSelection((Table) serverListTable.getCells().first().getActor());
+        }
+        // Add to stage
+    }
+
+    private TextButton createStyledButton(String text) {
+        TextButton.TextButtonStyle style = new TextButton.TextButtonStyle();
+        style.up = skin.getDrawable("button");
+        style.down = skin.getDrawable("button-pressed");
+        style.over = skin.getDrawable("button-over");
+        style.font = skin.getFont("default-font");
+
+        TextButton button = new TextButton(text, style);
+        button.getLabel().setWrap(true);
+        return button;
+    }
+
+    private TextField createStyledTextField(String placeholder) {
+        TextField.TextFieldStyle style = new TextField.TextFieldStyle(skin.get(TextField.TextFieldStyle.class));
+        style.font = skin.getFont("default-font");
+        style.fontColor = Color.WHITE;
+        style.background = new TextureRegionDrawable(TextureManager.ui.findRegion("textfield"));
+
+        TextField field = new TextField("", style);
+        field.setMessageText(placeholder);
+        return field;
+    }
+
+    private void attemptLogin() {
+        if (isConnecting) {
+            return;
+        }
+
+        String username = usernameField.getText().trim();
+        String password = passwordField.getText().trim();
+
+        if (!validateInput(username, password)) {
+            return;
+        }
+
+        if (selectedServer == null) {
+            showError("Please select a server");
+            return;
+        }
+
+        isConnecting = true;
+        setUIEnabled(false);
+        statusLabel.setText("Connecting to server...");
+        statusLabel.setColor(Color.WHITE);
+        connectionProgress.setVisible(true);
+        feedbackLabel.setText("");
+
+        try {
+            if (gameClient != null) {
+                gameClient.dispose();
+                // Do not set gameClient to null here
+            }
+            GameClientSingleton.resetInstance();
+
+            // Create new client
+            gameClient = new GameClient(
+                selectedServer,
+                false,
+                selectedServer.getServerIP(),
+                selectedServer.getTcpPort(),
+                selectedServer.getUdpPort(),
+                null
+            );
+
+            if (gameClient == null) {
+                throw new Exception("Failed to initialize GameClient.");
+            }
+
+            // Set the pending credentials
+            gameClient.setPendingCredentials(username, password);
+
+            // **Capture gameClient in a final local variable**
+            final GameClient localGameClient = gameClient;
+
+            // Set login response listener
+            localGameClient.setLoginResponseListener(response -> {
+                Gdx.app.postRunnable(() -> {
+                    try {
+                        if (response.success) {
+                            handleSuccessfulLogin(response, username, localGameClient);
+                        } else {
+                            handleLoginFailure(response.message);
+                        }
+                    } catch (Exception e) {
+                        GameLogger.error("Error in login response handler: " + e.getMessage());
+                        handleLoginFailure("Internal error: " + e.getMessage());
+                    } finally {
+                        isProcessingLoginResponse.set(false);
+                        localGameClient.disposeIfNeeded();
+                    }
+                });
+            });
+
+            // Connect to the server
+            localGameClient.connect();
+
+            GameLogger.info("Connection attempt started for: " + username);
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to start login: " + e.getMessage());
+            handleLoginFailure("Connection failed: " + e.getMessage());
+        }
+    }
+
+    private void handleSuccessfulLogin(NetworkProtocol.LoginResponse response, String username, GameClient localGameClient) {
+        if (localGameClient == null) {
+            handleLoginFailure("Internal error: game client is null");
+            return;
+        }
+
+        isConnecting = false;
+        connectionProgress.setVisible(false);
+
+        // Save credentials if checked
+        if (rememberMeBox.isChecked()) {
+            saveCredentials(usernameField.getText(), passwordField.getText(), true);
+        }
+
+        // Create loading screen FIRST
+        LoadingScreen loadingScreen = new LoadingScreen(game, null); // Pass null initially
+
+        // Switch to loading screen before initializing
+        game.setScreen(loadingScreen);
+
+        // Now let GameClient handle initialization with a completion callback
+        localGameClient.setInitializationListener(success -> {
+            if (success) {
+                Gdx.app.postRunnable(() -> {
+                    try {
+                        GameScreen gameScreen = new GameScreen(
+                            game,
+                            response.username,
+                            localGameClient,
+                            response.worldName
+                        );
+
+                        // Update loading screen's target
+                        loadingScreen.setNextScreen(gameScreen);
+
+                        // Now dispose login screen
+                        dispose();
+
+                    } catch (Exception e) {
+                        GameLogger.error("Failed to create game screen: " + e.getMessage());
+                        handleLoginFailure("Failed to initialize game: " + e.getMessage());
+                    }
+                });
+            } else {
+                GameLogger.error("Game initialization failed");
+                handleLoginFailure("Failed to initialize game");
+            }
+        });
+    }
+
+
+    private void handleLoginFailure(String message) {
+        Gdx.app.postRunnable(() -> {
+
+            isConnecting = false;
+            setUIEnabled(true);
+            connectionProgress.setVisible(false);
+            showError(message);
+        });
+    }
+
+    private void handleConnectionError(Exception e) {
+        Gdx.app.postRunnable(() -> {
+            showError("Connection failed: " + e.getMessage());
+            setUIEnabled(true);
+            isConnecting = false;
+            connectionProgress.setVisible(false);
+
+
+        });
+    }
+
+    private void startConnection(String username, String password, ServerConnectionConfig server) {
+        isConnecting = true;
+        connectionTimer = 0;
+        setUIEnabled(false);
+
+        // Update UI feedback
+        statusLabel.setText("Connecting to server...");
+        statusLabel.setColor(Color.WHITE);
+        connectionProgress.setVisible(true);
+        connectionProgress.setValue(0);
+        feedbackLabel.setText("");
+
+        try {
+            GameLogger.info("Starting connection to: " + server.getServerIP() + ":" +
+                server.getTcpPort() + "/" + server.getUdpPort());
+
+            // Reset existing client
+            if (gameClient != null) {
+                gameClient.dispose();
+            }
+            GameClientSingleton.resetInstance();
+
+            // Create new client instance
+            gameClient = GameClientSingleton.getInstance(server);
+            if (gameClient == null) {
+                GameLogger.error("Failed to initialize GameClient.");
+                handleConnectionError(new Exception("Failed to initialize GameClient."));
+                return;
+            }
+
+            // Set up login response listener BEFORE connecting
+            gameClient.setLoginResponseListener(this::handleLoginResponse);
+
+            // Set up initialization listener
+            gameClient.setInitializationListener(success -> {
+                if (success) {
+                    GameLogger.info("Game client initialization successful");
+
+                    // CRITICAL: Create and switch to game screen immediately
+                    Gdx.app.postRunnable(() -> {
+                        try {
+                            GameScreen gameScreen = new GameScreen(
+                                game,
+                                username,
+                                gameClient,
+                                "multiplayer_world"
+                            );
+                            game.setScreen(gameScreen);
+                            dispose(); // Clean up login screen
+                        } catch (Exception e) {
+                            GameLogger.error("Failed to create game screen: " + e.getMessage());
+                            showError("Failed to start game: " + e.getMessage());
+                            setUIEnabled(true);
+                            isConnecting = false;
+                        }
+                    });
+                } else {
+                    GameLogger.error("Game client initialization failed");
+                    showError("Failed to initialize game");
+                    setUIEnabled(true);
+                    isConnecting = false;
+                }
+            });
+
+            // Set credentials and connect
+            gameClient.setPendingCredentials(username, password);
+            gameClient.connect();
+
+            GameLogger.info("Connection attempt started for user: " + username);
+
+        } catch (Exception e) {
+            GameLogger.error("Connection error: " + e.getMessage());
+            handleConnectionError(e);
+        }
+    }
+
+
+    private void updateConnectionStatus(String status, boolean showProgress) {
+        statusLabel.setText(status);
+        connectionProgress.setVisible(showProgress);
+        if (!showProgress) {
+            connectionProgress.setValue(0);
+        }
+    }
+
+    private void setUIEnabled(boolean enabled) {
+        float alpha = enabled ? 1f : 0.6f;
+
+        // Disable/enable input fields
+        usernameField.setDisabled(!enabled);
+        passwordField.setDisabled(!enabled);
+
+        // Disable/enable checkbox
+        rememberMeBox.setDisabled(!enabled);
+
+        // Disable/enable buttons
+        loginButton.setDisabled(!enabled);
+        registerButton.setDisabled(!enabled);
+        backButton.setDisabled(!enabled);
+
+        // Disable/enable server list entries
+        if (serverListTable != null) {
+            for (Cell<?> cell : serverListTable.getCells()) {
+                Actor actor = cell.getActor();
+                if (actor instanceof Table) {
+                    actor.setTouchable(enabled ? Touchable.enabled : Touchable.disabled);
+                    actor.setColor(1, 1, 1, alpha);
+                }
+            }
+        }
+
+        // Update visual feedback
+        usernameField.setColor(1, 1, 1, alpha);
+        passwordField.setColor(1, 1, 1, alpha);
+        loginButton.setColor(1, 1, 1, alpha);
+        registerButton.setColor(1, 1, 1, alpha);
+        backButton.setColor(1, 1, 1, alpha);
+        rememberMeBox.setColor(1, 1, 1, alpha);
+    }
+
+    private void setupListeners() {
+        if (loginButton != null) {
+            loginButton.addListener(new ClickListener() {
+                @Override
+                public void clicked(InputEvent event, float x, float y) {
+                    if (!isConnecting) {
+                        attemptLogin();
+                    } else {
+                        GameLogger.info("Login already in progress");
+                    }
+                }
+            });
+
+        }
+
+        if (registerButton != null) {
+            registerButton.addListener(new ChangeListener() {
+                @Override
+                public void changed(ChangeEvent event, Actor actor) {
+                    if (!isConnecting) {
+                        attemptRegistration();
+                    }
+                }
+            });
+        }
+
+        if (backButton != null) {
+            backButton.addListener(new ChangeListener() {
+                @Override
+                public void changed(ChangeEvent event, Actor actor) {
+                    if (!isConnecting) {
+                        game.setScreen(new ModeSelectionScreen(game));
+                    }
+                }
+            });
+        }
+
+        // Add enter key listener
         stage.addListener(new InputListener() {
             @Override
             public boolean keyDown(InputEvent event, int keycode) {
-                if (keycode == Input.Keys.ESCAPE) {
-                    fadeToScreen(new ModeSelectionScreen(game));
-                    if (gameClient != null) {
-                        gameClient.disconnect();
-                    }
+                if (keycode == Input.Keys.ENTER && !isConnecting) {
+                    attemptLogin();
                     return true;
                 }
                 return false;
             }
         });
-
-        Gdx.input.setInputProcessor(stage);
     }
 
-    private void loadServers() {
+    @Override
+    public void dispose() {
+        isDisposed = true;
+        stage.dispose();
+    }
+
+    @Override
+    public void render(float delta) {
+        // Update connection timeout if connecting
+        if (isConnecting) {
+            connectionTimer += delta;
+            connectionProgress.setValue(connectionTimer / LOGIN_TIMEOUT);
+
+            if (connectionTimer >= LOGIN_TIMEOUT) {
+                handleConnectionTimeout();
+                return;
+            }
+        }
+
+        // Clear screen
+        Gdx.gl.glClearColor(0.1f, 0.1f, 0.1f, 1);
+        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+
+        // Update stage
+        stage.act(delta);
+        stage.draw();
+
+        // Update client if exists
+        if (gameClient != null) {
+            gameClient.tick(delta);
+        }
+    }
+
+    @Override
+    public void resize(int width, int height) {
+        // Enforce minimum dimensions
+        width = (int) Math.max(width, MIN_WIDTH);
+        height = Math.max(height, MIN_HEIGHT);
+
+        GameLogger.info("Resizing login screen to: " + width + "x" + height);
+
+        stage.getViewport().update(width, height, true);
+
+        // Recalculate UI dimensions
+        float contentWidth = Math.min(MAX_WIDTH, width * 0.9f);
+
+        // Update main container size
+        if (mainTable != null) {
+            mainTable.setWidth(contentWidth);
+            mainTable.invalidateHierarchy();
+        }
+
+        // Update server list if it exists
+        if (serverListScrollPane != null) {
+            serverListScrollPane.setWidth(contentWidth - 40);
+            serverListScrollPane.invalidateHierarchy();
+        }
+
+    }
+
+    private void updateStatusLabel(String status, Color color) {
+        statusLabel.setText(status);
+        statusLabel.setColor(color);
+    }
+
+    private void showError(String error) {
+        feedbackLabel.setColor(Color.RED);
+        feedbackLabel.setText(error);
+        GameLogger.error(error);
+
+        // Vibrate screen effect for feedback
+        stage.addAction(Actions.sequence(
+            Actions.moveBy(5f, 0f, 0.05f),
+            Actions.moveBy(-10f, 0f, 0.05f),
+            Actions.moveBy(5f, 0f, 0.05f)
+        ));
+    }
+
+    private void handleConnectionTimeout() {
+        GameLogger.error("Connection timed out after " + LOGIN_TIMEOUT + " seconds");
+        isConnecting = false;
+        connectionTimer = 0;
+        connectionProgress.setVisible(false);
+
+        if (gameClient != null) {
+            gameClient.dispose();
+            gameClient = null;
+        }
+
+        setUIEnabled(true);
+        showError("Connection timed out. Please check your server settings and try again.");
+
+        // Show retry dialog
+        Dialog dialog = new Dialog("Connection Failed", skin) {
+            @Override
+            protected void result(Object obj) {
+                if ((Boolean) obj) {
+                    // Retry with same credentials
+                    String username = usernameField.getText().trim();
+                    String password = passwordField.getText().trim();
+                    startConnection(username, password, selectedServer);
+                }
+            }
+        };
+        dialog.text("Would you like to try connecting again?");
+        dialog.button("Retry", true);
+        dialog.button("Cancel", false);
+        dialog.show(stage);
+    }
+
+
+    private void saveServerConfiguration(ServerConnectionConfig config) {
         try {
-            servers = ServerConfigManager.getInstance().getServers();
+            Preferences serverPrefs = Gdx.app.getPreferences(SERVERS_PREFS);
+            Json json = new Json();
+
+            // Create proper JSON object with all required fields
+            String serverJson = json.toJson(new ServerEntry(
+                config.getServerName(),
+                config.getServerIP(),
+                config.getTcpPort(),
+                config.getUdpPort(),
+                config.getMotd(),
+                config.isDefault(),
+                config.getMaxPlayers(),
+                config.getIconPath() != null ? config.getIconPath() : DEFAULT_SERVER_ICON
+            ));
+
+            // Update or add new server
+            boolean updated = false;
+            Array<String> savedServers = new Array<>();
+            String existingServers = serverPrefs.getString("servers", "");
+
+            if (!existingServers.isEmpty()) {
+                for (String existing : existingServers.split("\\|")) {
+                    try {
+                        ServerEntry entry = json.fromJson(ServerEntry.class, existing);
+                        if (entry.ip.equals(config.getServerIP()) && entry.tcpPort == config.getTcpPort()) {
+                            savedServers.add(serverJson); // Replace with updated config
+                            updated = true;
+                        } else {
+                            savedServers.add(existing); // Keep existing entry
+                        }
+                    } catch (Exception e) {
+                        GameLogger.error("Error parsing existing server: " + e.getMessage());
+                    }
+                }
+            }
+
+            if (!updated) {
+                savedServers.add(serverJson); // Add as new entry
+            }
+
+            // Save back to preferences
+            serverPrefs.putString("servers", String.join("|", savedServers));
+            serverPrefs.putString("lastServer", serverJson);
+            serverPrefs.flush();
+
+            GameLogger.info("Saved server configuration: " + config.getServerName());
+
+            // Refresh the server list UI
+            refreshServerList(serverSelect
+            );
         } catch (Exception e) {
-            GameLogger.info("Error loading servers: " + e.getMessage());
-            servers = new Array<>();
-
+            GameLogger.error("Error saving server configuration: " + e.getMessage());
         }
     }
 
-    private void loadSavedCredentials() {
-        if (prefs.getBoolean("rememberMe", false)) {
-            usernameField.setText(prefs.getString("username", ""));
-            passwordField.setText(prefs.getString("password", ""));
-            rememberMeBox.setChecked(true);
+    private void setupServerList() {
+        serverListTable = new Table();
+        serverListTable.top();
+        serverEntries = new Array<>();
+
+        // Load saved servers
+        Array<ServerConnectionConfig> configs = loadServers();
+
+        // Create server list entries
+        for (ServerConnectionConfig config : configs) {
+            ServerListEntry entry = new ServerListEntry(config, skin);
+            entry.addListener(new ClickListener() {
+                @Override
+                public void clicked(InputEvent event, float x, float y) {
+                    selectedServer = config;
+                    updateSelectedServerInfo();
+                }
+            });
+            serverEntries.add(entry);
+            serverListTable.add(entry).expandX().fillX().pad(5).row();
         }
+
+        // Create ScrollPane
+        serverListPane = new ScrollPane(serverListTable, skin);
+        serverListPane.setScrollingDisabled(true, false);
+        serverListPane.setFadeScrollBars(false);
+        serverListPane.setOverscroll(false, false);
+
+        // Add to main table
+        mainTable.add(serverListPane).width(500).height(300).pad(20).row();
     }
 
+    public Array<ServerConnectionConfig> loadServers() {
+        try {
+            if (servers == null) {
+                servers = new Array<>();
+            }
+            servers.clear();
 
-    // Modified saveCredentials method to ensure preferences are saved immediately:
+            // Always add default server first
+            ServerConnectionConfig defaultServer = ServerConnectionConfig.getInstance();
+            defaultServer.setIconPath(DEFAULT_SERVER_ICON);
+            servers.add(defaultServer);
+
+            // Load saved servers from preferences
+            Preferences serverPrefs = Gdx.app.getPreferences(SERVERS_PREFS);
+            String savedServers = serverPrefs.getString("servers", "");
+
+            if (!savedServers.isEmpty()) {
+                Json json = new Json();
+                for (String serverString : savedServers.split("\\|")) {
+                    try {
+                        if (!serverString.trim().isEmpty()) {
+                            ServerEntry entry = json.fromJson(ServerEntry.class, serverString);
+                            if (entry != null && !isDefaultServer(entry)) {
+                                ServerConnectionConfig config = new ServerConnectionConfig(
+                                    entry.ip,
+                                    entry.tcpPort,
+                                    entry.udpPort,
+                                    entry.name,
+                                    entry.isDefault,
+                                    entry.maxPlayers
+                                );
+                                config.setMotd(entry.motd);
+                                config.setIconPath(entry.iconPath != null ? entry.iconPath : DEFAULT_SERVER_ICON);
+                                servers.add(config);
+                                GameLogger.info("Loaded server: " + config.getServerName());
+                            }
+                        }
+                    } catch (Exception e) {
+                        GameLogger.error("Error loading saved server: " + e.getMessage());
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            GameLogger.error("Error loading servers: " + e.getMessage());
+            // Ensure we at least have the default server
+            if (servers == null || servers.isEmpty()) {
+                servers = new Array<>();
+                ServerConnectionConfig defaultServer = ServerConnectionConfig.getInstance();
+                defaultServer.setIconPath(DEFAULT_SERVER_ICON);
+                servers.add(defaultServer);
+            }
+        }
+        return servers;
+    }
+
+    private boolean isDefaultServer(ServerEntry entry) {
+        return entry.isDefault && "localhost".equals(entry.ip) && entry.tcpPort == 54555;
+    }
+
     private void saveCredentials(String username, String password, boolean remember) {
+        GameLogger.info("Saving credentials for: " + username + ", remember: " + remember);
         prefs.putBoolean("rememberMe", remember);
         if (remember) {
             prefs.putString("username", username);
-            prefs.putString("password", password); // In production, encrypt this
+            prefs.putString("password", password);
+            GameLogger.info("Credentials saved to preferences");
         } else {
             prefs.remove("username");
             prefs.remove("password");
+            GameLogger.info("Credentials removed from preferences");
         }
-        prefs.flush(); // Make sure to call flush() to save immediately
-        GameLogger.info("Credentials saved. Remember me: " + remember);
+        prefs.flush();
+    }
+
+    private void loadSavedCredentials() {
+        GameLogger.info("Loading saved credentials");
+        boolean rememberMe = prefs.getBoolean("rememberMe", false);
+
+        if (rememberMe) {
+            String savedUsername = prefs.getString("username", "");
+            String savedPassword = prefs.getString("password", "");
+
+            GameLogger.info("Found saved credentials for: " + savedUsername +
+                " (Has password: " + !savedPassword.isEmpty() + ")");
+
+            usernameField.setText(savedUsername);
+            passwordField.setText(savedPassword);
+            rememberMeBox.setChecked(true);
+        } else {
+            GameLogger.info("No saved credentials found");
+        }
     }
 
     private void debugLogin(String username, String password) {
         try {
-            // Get default server config
             ServerConnectionConfig config = serverSelect.getItems().first();
-
-            // Initialize client
             gameClient = GameClientSingleton.getInstance(config);
             gameClient.setLocalUsername(username);
-
-            // Connect and login
             gameClient.connectToServer(config);
             gameClient.setLoginResponseListener(response -> {
                 Gdx.app.postRunnable(() -> {
@@ -135,6 +1060,7 @@ public class LoginScreen implements Screen {
                         }
                         fadeToScreen(new GameScreen(game, username, gameClient,
                             CreatureCaptureGame.MULTIPLAYER_WORLD_NAME));
+
                     } else {
                         feedbackLabel.setColor(Color.RED);
                         feedbackLabel.setText("Debug login failed: " + response.message);
@@ -150,200 +1076,94 @@ public class LoginScreen implements Screen {
         }
     }
 
-    private void setupUI() {
-        Table mainTable = new Table();
-        mainTable.setFillParent(true);
 
-        // Title
-        Label titleLabel = new Label("PokeMeetup", skin);
-        titleLabel.setFontScale(2f);
+    void updateSelectedServerInfo() {
+        if (selectedServer == null) {
+            selectedServerInfoLabel.setText("No server selected");
+            return;
+        }
 
-        // Input fields
-        usernameField = new TextField("", skin);
-        usernameField.setMessageText("Username");
+        StringBuilder info = new StringBuilder();
+        info.append("Server: ").append(selectedServer.getServerName()).append("\n");
+        info.append("Address: ").append(selectedServer.getServerIP()).append(":").append(selectedServer.getTcpPort()).append("\n");
+        info.append("Status: Checking...");
 
-        passwordField = new TextField("", skin);
-        passwordField.setMessageText("Password");
-        passwordField.setPasswordMode(true);
-        passwordField.setPasswordCharacter('*');
+        selectedServerInfoLabel.setText(info.toString());
 
-        // Remember me checkbox
-        rememberMeBox = new CheckBox(" Remember Me", skin);
+        // Start a background thread to check server status
+        new Thread(() -> {
+            Client tempClient = null;
+            try {
+                tempClient = new Client(16384, 2048);
+                NetworkProtocol.registerClasses(tempClient.getKryo());
+                tempClient.start();
 
-        // Server selection
-        serverSelect = new SelectBox<>(skin);
-        serverSelect.setItems(ServerConfigManager.getInstance().getServers());
+                final long startTime = System.currentTimeMillis();
+                final Client finalClient = tempClient;
 
-        // Add server button
-        TextButton addServerButton = new TextButton("Add Server", skin);
-        addServerButton.addListener(new ChangeListener() {
-            @Override
-            public void changed(ChangeEvent event, Actor actor) {
-                showAddServerDialog(serverSelect);
-            }
-        });
-
-        // Login/Register buttons
-        TextButton loginButton = new TextButton("Login", skin);
-        TextButton registerButton = new TextButton("Register", skin);
-        TextButton backButton = new TextButton("Back", skin);
-
-        feedbackLabel = new Label("", skin);
-        feedbackLabel.setColor(Color.RED);
-
-        // Layout
-        mainTable.add(titleLabel).padBottom(40).row();
-        mainTable.add(usernameField).width(300).padBottom(20).row();
-        mainTable.add(passwordField).width(300).padBottom(20).row();
-        mainTable.add(rememberMeBox).padBottom(20).row();
-        mainTable.add(serverSelect).width(300).padBottom(10).row();
-        mainTable.add(addServerButton).width(300).padBottom(20).row();
-
-        Table buttonTable = new Table();
-        buttonTable.add(loginButton).width(140).padRight(20);
-        buttonTable.add(registerButton).width(140);
-        mainTable.add(buttonTable).padBottom(20).row();
-
-        mainTable.add(backButton).width(300).padBottom(20).row();
-        mainTable.add(feedbackLabel).row();
-
-        // Add listeners
-        setupButtonListeners(loginButton, registerButton, backButton);
-
-        stage.addActor(mainTable);
-        if (DEBUG_MODE) {
-            Table debugTable = new Table();
-            debugTable.pad(10);
-
-            Label debugLabel = new Label("Debug Logins:", skin);
-            debugTable.add(debugLabel).padBottom(10).row();
-
-            for (String debugUser : DEBUG_USERS) {
-                String[] parts = debugUser.split(":");
-                TextButton debugButton = new TextButton("Login as " + parts[0], skin);
-                debugButton.addListener(new ChangeListener() {
+                tempClient.addListener(new Listener() {
                     @Override
-                    public void changed(ChangeEvent event, Actor actor) {
-                        debugLogin(parts[0], parts[1]);
+                    public void received(Connection connection, Object object) {
+                        if (object instanceof NetworkProtocol.ServerInfoResponse) {
+                            NetworkProtocol.ServerInfoResponse response =
+                                (NetworkProtocol.ServerInfoResponse) object;
+                            long ping = System.currentTimeMillis() - startTime;
+
+                            Gdx.app.postRunnable(() -> {
+                                updateServerInfoLabel(response.serverInfo, ping);
+                            });
+
+                            closeClientSafely(finalClient);
+                        }
                     }
                 });
-                debugTable.add(debugButton).width(200).padBottom(5).row();
-            }
 
-            mainTable.add(debugTable).padTop(20).row();
+                tempClient.connect(5000, selectedServer.getServerIP(),
+                    selectedServer.getTcpPort(), selectedServer.getUdpPort());
+
+                NetworkProtocol.ServerInfoRequest request = new NetworkProtocol.ServerInfoRequest();
+                request.timestamp = System.currentTimeMillis();
+                tempClient.sendTCP(request);
+
+            } catch (Exception e) {
+                final Client finalClient = tempClient;
+                Gdx.app.postRunnable(() -> {
+                    updateServerInfoError(e.getMessage());
+                    closeClientSafely(finalClient);
+                });
+            }
+        }).start();
+    }
+
+    private void updateServerInfoLabel(NetworkProtocol.ServerInfo info, long ping) {
+        StringBuilder infoText = new StringBuilder();
+        infoText.append("Server: ").append(selectedServer.getServerName()).append("\n");
+        infoText.append("Status: Online (").append(ping).append("ms)\n");
+        infoText.append("Players: ").append(info.playerCount).append("/").append(info.maxPlayers).append("\n");
+        if (info.motd != null && !info.motd.isEmpty()) {
+            infoText.append("MOTD: ").append(info.motd);
+        }
+        selectedServerInfoLabel.setText(infoText.toString());
+    }
+
+    private void updateServerInfoError(String error) {
+        StringBuilder infoText = new StringBuilder();
+        infoText.append("Server: ").append(selectedServer.getServerName()).append("\n");
+        infoText.append("Status: Offline\n");
+        infoText.append("Error: ").append(error);
+        selectedServerInfoLabel.setText(infoText.toString());
+    }
+
+    private void closeClientSafely(Client client) {
+        if (client != null) {
+            try {
+                client.close();
+            } catch (Exception e) {
+                GameLogger.error("Error closing temporary client: " + e.getMessage());
+            }
         }
     }
 
-    private void showAddServerDialog(SelectBox selectBox) {
-        final Dialog dialog = new Dialog("Add Custom Server", skin) {
-            private final TextField nameField;
-            private final TextField ipField;
-            private final TextField portField;
-            private final Label errorLabel;
-
-            {
-                // Initialize fields
-                nameField = new TextField("", skin);
-                ipField = new TextField("", skin);
-                portField = new TextField("", skin);
-                errorLabel = new Label("", skin);
-                errorLabel.setColor(Color.RED);
-
-                // Set default values and hints
-                nameField.setMessageText("Server Name");
-                ipField.setMessageText("IP Address");
-                portField.setMessageText("Port Number");
-
-                // Only allow numbers in port field
-                portField.setTextFieldFilter(new TextField.TextFieldFilter.DigitsOnlyFilter());
-
-                // Layout
-                Table contentTable = getContentTable();
-                contentTable.pad(20);
-
-                // Server Name
-                contentTable.add("Server Name:").left().padRight(10);
-                contentTable.add(nameField).expandX().fillX().padBottom(10);
-                contentTable.row();
-
-                // IP Address
-                contentTable.add("IP Address:").left().padRight(10);
-                contentTable.add(ipField).expandX().fillX().padBottom(10);
-                contentTable.row();
-
-                // Port
-                contentTable.add("Port:").left().padRight(10);
-                contentTable.add(portField).expandX().fillX().padBottom(10);
-                contentTable.row();
-
-                // Error label
-                contentTable.add(errorLabel).colspan(2).padTop(10);
-                contentTable.row();
-
-                // Buttons
-                button("Add Server", true);
-                button("Cancel", false);
-
-                // Set stage keyboard focus
-                stage.setKeyboardFocus(nameField);
-            }
-
-            @Override
-            protected void result(Object object) {
-                if ((Boolean) object) {
-                    try {
-                        // Validate inputs
-                        String name = nameField.getText().trim();
-                        String ip = ipField.getText().trim();
-                        String portText = portField.getText().trim();
-
-                        if (name.isEmpty() || ip.isEmpty() || portText.isEmpty()) {
-                            errorLabel.setText("All fields are required");
-                            return;
-                        }
-
-                        int port = Integer.parseInt(portText);
-                        if (port <= 0 || port > 65535) {
-                            errorLabel.setText("Port must be between 1 and 65535");
-                            return;
-                        }
-
-
-                        // Add server
-                        ServerConnectionConfig newServer = new ServerConnectionConfig(
-                            ip, port, port + 1, name, false, 100
-                        );
-
-                        // Add to both local array and manager
-                        servers.add(newServer);
-                        ServerConfigManager.getInstance().addServer(newServer);
-
-                        // Refresh UI
-                        refreshServerList(selectBox);
-
-                        // Show success message
-                        showMessage("Server Added", "Successfully added new server: " + name);
-
-                        hide();
-                    } catch (NumberFormatException e) {
-                        errorLabel.setText("Invalid port number");
-                    } catch (Exception e) {
-                        errorLabel.setText("Error adding server: " + e.getMessage());
-                    }
-                } else {
-                    hide();
-                }
-            }
-        };
-        dialog.show(stage);
-    }
-
-    private void showMessage(String title, String message) {
-        Dialog messageDialog = new Dialog(title, skin, "dialog");
-        messageDialog.text(message);
-        messageDialog.button("OK");
-        messageDialog.show(stage);
-    }
 
     private void refreshServerList(SelectBox<ServerConnectionConfig> serverSelectBox) {
         if (serverSelectBox != null) {
@@ -351,180 +1171,163 @@ public class LoginScreen implements Screen {
         }
     }
 
+    private void handleLoginResponse(NetworkProtocol.LoginResponse response) {
+        if (isDisposed) {
+            GameLogger.error("Login screen already disposed, ignoring login response");
+            return;
+        }
+
+        if (gameClient == null) {
+            GameLogger.error("GameClient is null in handleLoginResponse!");
+            handleLoginFailure("Internal error occurred");
+            return;
+        }
+
+        Gdx.app.postRunnable(() -> {
+            try {
+                if (response.success) {
+                    // Prevent multiple transitions
+                    isConnecting = false;
+                    connectionProgress.setVisible(false);
+
+                    // Save credentials if checked
+                    if (rememberMeBox.isChecked()) {
+                        saveCredentials(usernameField.getText(), passwordField.getText(), true);
+                    }
+
+                    // Create loading screen FIRST
+                    LoadingScreen loadingScreen = new LoadingScreen(game, null); // Pass null initially
+
+                    // Important: Switch to loading screen before initializing
+                    game.setScreen(loadingScreen);
+
+                    // Now let GameClient handle initialization with a completion callback
+                    gameClient.setInitializationListener(success -> {
+                        if (success) {
+                            Gdx.app.postRunnable(() -> {
+                                try {
+                                    GameScreen gameScreen = new GameScreen(
+                                        game,
+                                        response.username,
+                                        gameClient,
+                                        response.worldName
+                                    );
+
+                                    // Update loading screen's target
+                                    loadingScreen.setNextScreen(gameScreen);
+
+                                    // Now dispose login screen
+                                    dispose();
+
+                                } catch (Exception e) {
+                                    GameLogger.error("Failed to create game screen: " + e.getMessage());
+                                    handleLoginFailure("Failed to initialize game: " + e.getMessage());
+                                }
+                            });
+                        } else {
+                            GameLogger.error("Game initialization failed");
+                            handleLoginFailure("Failed to initialize game");
+                        }
+                    });
+
+                } else {
+                    handleLoginFailure(response.message);
+                }
+            } catch (Exception e) {
+                GameLogger.error("Error handling login response: " + e.getMessage());
+                handleLoginFailure("Internal error occurred");
+            }
+        });
+    }
+
+    private void startGameTransition(NetworkProtocol.LoginResponse response) {
+        try {
+            // Set game mode
+            game.setMultiplayerMode(true);
+
+            try {
+                // Initialize world first
+                game.initializeWorld(response.worldName, true);
+
+                // Create game screen
+                GameScreen gameScreen = new GameScreen(
+                    game,
+                    response.username,
+                    gameClient,
+                    response.worldName
+                );
+
+                // Create loading screen with game screen as target
+                LoadingScreen loadingScreen = new LoadingScreen(game, gameScreen);
+
+                // Transition to loading screen
+                game.setScreen(loadingScreen);
+
+                // Clean up login screen
+                dispose();
+
+                GameLogger.info("Started transition to game for user: " + response.username);
+
+            } catch (Exception e) {
+                GameLogger.error("Failed to initialize game: " + e.getMessage());
+                throw new RuntimeException("Failed to initialize game", e);
+            }
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to start game transition: " + e.getMessage());
+            handleLoginFailure("Failed to start game: " + e.getMessage());
+        }
+    }
+
+    private void forceScreenTransition(Screen newScreen) {
+        GameLogger.info("Forcing transition to: " + newScreen.getClass().getSimpleName());
+
+        try {
+            // Set screen immediately
+            game.setScreen(newScreen);
+
+            // Clean up login screen
+            isDisposed = true;
+            dispose();
+
+            GameLogger.info("Forced transition complete");
+        } catch (Exception e) {
+            GameLogger.error("Failed to force screen transition: " + e.getMessage());
+            e.printStackTrace();
+            showError("Failed to switch screens: " + e.getMessage());
+            setUIEnabled(true);
+            isConnecting = false;
+        }
+    }
+
+    private void showErrorMessage(String title, String message) {
+        Dialog dialog = new Dialog(title, skin) {
+            @Override
+            protected void result(Object obj) {
+                feedbackLabel.setColor(Color.RED);
+                feedbackLabel.setText(message);
+            }
+        };
+        dialog.text(message);
+        dialog.button("OK", true);
+        dialog.show(stage);
+    }
+
     private void setupButtonListeners(TextButton loginButton, TextButton registerButton, TextButton backButton) {
         loginButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
-                String username = usernameField.getText().trim();
-                String password = passwordField.getText().trim();
-                boolean remember = rememberMeBox.isChecked();
-
-                // Validate input
-                if (username.isEmpty() || password.isEmpty()) {
-                    feedbackLabel.setColor(Color.RED);
-                    feedbackLabel.setText("Username and password are required.");
-                    return;
-                }
-
-                // Get selected server
-                ServerConnectionConfig selectedConfig = serverSelect.getSelected();
-                if (selectedConfig == null) {
-                    feedbackLabel.setColor(Color.RED);
-                    feedbackLabel.setText("Please select a server.");
-                    return;
-                }
-
-                // Disable UI during login attempt
-                setUIEnabled(false);
-                feedbackLabel.setColor(Color.WHITE);
-                feedbackLabel.setText("Connecting...");
-
-                // Clean up any existing client
-                GameClientSingleton.clearInstance();
-
-                new Thread(() -> {
-                    try {
-                        // Initialize new client
-                        gameClient = GameClientSingleton.getInstance(selectedConfig);
-                        if (gameClient == null) {
-                            throw new RuntimeException("Failed to initialize game client");
-                        }
-
-                        // Set username before connection
-                        gameClient.setLocalUsername(username);
-
-                        // Set up login response listener before connecting
-                        gameClient.setLoginResponseListener(response -> {
-                            Gdx.app.postRunnable(() -> {
-                                handleLoginResponse(response, username, password, remember);
-                            });
-                        });
-
-                        // Connect to server
-                        GameLogger.info("Attempting connection to: " + selectedConfig.getServerIP());
-                        gameClient.connectToServer(selectedConfig);
-
-                        // Wait for connection with timeout
-                        long startTime = System.currentTimeMillis();
-                        long timeout = 5000; // 5 seconds timeout
-
-                        while (!gameClient.isConnected() &&
-                            System.currentTimeMillis() - startTime < timeout) {
-                            Thread.sleep(100);
-                        }
-
-                        if (!gameClient.isConnected()) {
-                            throw new IOException("Connection timed out after 5 seconds");
-                        }
-
-                        // Send login request
-                        GameLogger.info("Connected, sending login request for: " + username);
-                        gameClient.sendLoginRequest(username, password);
-
-                    } catch (Exception e) {
-                        GameLogger.error("Login failed: " + e.getMessage());
-                        Gdx.app.postRunnable(() -> {
-                            feedbackLabel.setColor(Color.RED);
-                            feedbackLabel.setText("Connection failed: " + e.getMessage());
-                            setUIEnabled(true);
-                        });
-
-                        // Clean up on error
-                        if (gameClient != null) {
-                            gameClient.disconnect();
-                            gameClient = null;
-                        }
-                    }
-                }).start();
+                attemptLogin();
             }
         });
-
 
         registerButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
-                String username = usernameField.getText().trim();
-                String password = passwordField.getText().trim();
-
-                GameLogger.info("Registration attempt starting for user: " + username);
-
-                // Basic input validation
-                if (!validateRegistrationInput(username, password)) {
-                    return;
-                }
-
-                // Get selected server config
-                ServerConnectionConfig selectedConfig = serverSelect.getSelected();
-                if (selectedConfig == null) {
-                    feedbackLabel.setColor(Color.RED);
-                    feedbackLabel.setText("Please select a server.");
-                    return;
-                }
-
-                // Disable buttons during registration attempt
-                setUIEnabled(false);
-                feedbackLabel.setColor(Color.WHITE);
-                feedbackLabel.setText("Checking username availability...");
-
-                new Thread(() -> {
-                    try {
-                        // Cleanup existing client if any
-                        if (gameClient != null) {
-                            gameClient.disconnect();
-                        }
-
-                        // Initialize GameClient
-                        gameClient = GameClientSingleton.getInstance(selectedConfig);
-                        if (gameClient == null) {
-                            throw new RuntimeException("Failed to initialize game client");
-                        }
-
-                        // Connect to server
-                        gameClient.connectToServer(selectedConfig);
-
-                        // Wait for connection with timeout
-                        if (!waitForConnection()) {
-                            throw new IOException("Could not connect to server");
-                        }
-
-                        // Set up username check listener
-                        gameClient.setUsernameCheckListener(response -> {
-                            Gdx.app.postRunnable(() -> {
-                                if (response.available) {
-                                    // Username is available, proceed with registration
-                                    proceedWithRegistration(username, password);
-                                } else {
-                                    feedbackLabel.setColor(Color.RED);
-                                    feedbackLabel.setText("Username is already taken. Please choose another.");
-                                    setUIEnabled(true);
-
-                                    // Cleanup after failed check
-                                    gameClient.disconnect();
-                                    gameClient = null;
-                                }
-                            });
-                        });
-
-                        // Send username check request
-                        gameClient.checkUsernameAvailability(username);
-
-                    } catch (Exception e) {
-                        GameLogger.error("Username check error: " + e.getMessage());
-                        Gdx.app.postRunnable(() -> {
-                            feedbackLabel.setColor(Color.RED);
-                            feedbackLabel.setText("Error checking username: " + e.getMessage());
-                            setUIEnabled(true);
-                        });
-
-                        // Cleanup on error
-                        if (gameClient != null) {
-                            gameClient.disconnect();
-                            gameClient = null;
-                        }
-                    }
-                }).start();
+                attemptRegistration();
             }
         });
+
         backButton.addListener(new ChangeListener() {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
@@ -533,122 +1336,169 @@ public class LoginScreen implements Screen {
         });
     }
 
+    private void attemptRegistration() {
+        String username = usernameField.getText().trim();
+        String password = passwordField.getText().trim();
+
+        if (!validateRegistrationInput(username, password)) {
+            return;
+        }
+
+        if (selectedServer == null) {
+            showError("Please select a server");
+            return;
+        }
+
+        // Disable UI during registration
+        isConnecting = true;
+        setUIEnabled(false);
+        statusLabel.setText("Processing registration...");
+        statusLabel.setColor(Color.WHITE);
+        connectionProgress.setVisible(true);
+        connectionTimer = 0;
+
+        try {
+            // Clean up existing client
+            if (gameClient != null) {
+                gameClient.dispose();
+                GameClientSingleton.resetInstance();
+            }
+
+            // Initialize new client
+            gameClient = GameClientSingleton.getInstance(selectedServer);
+
+            // Set up registration response listener
+            gameClient.setRegistrationResponseListener(response -> {
+                Gdx.app.postRunnable(() -> handleRegistrationResponse(response));
+            });
+
+            // Connect and send registration request
+            gameClient.connectToServer(selectedServer);
+            gameClient.sendRegisterRequest(username, password);
+
+        } catch (Exception e) {
+            GameLogger.error("Registration error: " + e.getMessage());
+            handleRegistrationError(e);
+        }
+    }
+
+    private void handleRegistrationResponse(NetworkProtocol.RegisterResponse response) {
+        if (response.success) {
+            // Show success message
+            statusLabel.setText("Registration successful!");
+            statusLabel.setColor(Color.GREEN);
+            feedbackLabel.setColor(Color.GREEN);
+            feedbackLabel.setText("Account created successfully! You can now log in.");
+
+            // Clear password field
+            passwordField.setText("");
+
+            // Reset state
+            isConnecting = false;
+            connectionProgress.setVisible(false);
+            setUIEnabled(true);
+
+            // Show success dialog
+            showSuccessDialog();
+        } else {
+            // Show error
+            showError(response.message != null ? response.message : "Registration failed");
+            setUIEnabled(true);
+            isConnecting = false;
+        }
+
+        // Clean up client
+        if (gameClient != null) {
+            gameClient.dispose();
+            GameClientSingleton.resetInstance();
+        }
+    }
+
+    private void handleRegistrationError(Exception e) {
+        Gdx.app.postRunnable(() -> {
+            showError("Registration failed: " + e.getMessage());
+            setUIEnabled(true);
+            isConnecting = false;
+            connectionProgress.setVisible(false);
+
+            if (gameClient != null) {
+                gameClient.dispose();
+                gameClient = null;
+            }
+        });
+    }
+
+    private void showSuccessDialog() {
+        Dialog dialog = new Dialog("Registration Successful", skin) {
+            @Override
+            protected void result(Object obj) {
+                if ((Boolean) obj) {
+                    // Clear password and update UI
+                    passwordField.setText("");
+                    statusLabel.setText("Ready to login");
+                    statusLabel.setColor(Color.WHITE);
+                    feedbackLabel.setText("");
+                }
+            }
+        };
+
+        dialog.text("Your account has been created successfully!\nYou can now log in with your credentials.");
+        dialog.button("OK", true);
+        dialog.setMovable(false);
+        dialog.setModal(true);
+
+        // Center the dialog
+        dialog.setPosition(
+            (stage.getWidth() - dialog.getWidth()) / 2,
+            (stage.getHeight() - dialog.getHeight()) / 2
+        );
+
+        dialog.show(stage);
+    }
+
+    private void showRetryDialog(String title, String message) {
+        Dialog dialog = new Dialog(title, skin) {
+            @Override
+            protected void result(Object obj) {
+                if ((Boolean) obj) {
+                    attemptRegistration(); // Retry
+                }
+            }
+        };
+        dialog.text(message);
+        dialog.button("Retry", true);
+        dialog.button("Cancel", false);
+        dialog.show(stage);
+    }
+
     private boolean validateRegistrationInput(String username, String password) {
-        // Username validation
         if (username.isEmpty() || password.isEmpty()) {
-            feedbackLabel.setColor(Color.RED);
-            feedbackLabel.setText("Username and password cannot be empty.");
+            showErrorMessage("Invalid Input", "Username and password cannot be empty.");
             return false;
         }
 
         if (username.length() < 3 || username.length() > 20) {
-            feedbackLabel.setColor(Color.RED);
-            feedbackLabel.setText("Username must be between 3 and 20 characters.");
+            showErrorMessage("Invalid Username",
+                "Username must be between 3 and 20 characters.");
             return false;
         }
 
         if (!username.matches("^[a-zA-Z0-9_]+$")) {
-            feedbackLabel.setColor(Color.RED);
-            feedbackLabel.setText("Username can only contain letters, numbers, and underscores.");
+            showErrorMessage("Invalid Username",
+                "Username can only contain letters, numbers, and underscores.");
             return false;
         }
 
-        // Password validation
         String passwordError = validatePassword(password);
         if (passwordError != null) {
-            feedbackLabel.setColor(Color.RED);
-            feedbackLabel.setText(passwordError);
+            showErrorMessage("Invalid Password", passwordError);
             return false;
         }
 
         return true;
     }
 
-    private boolean waitForConnection() {
-        long startTime = System.currentTimeMillis();
-        while (!gameClient.isConnected() &&
-            System.currentTimeMillis() - startTime < 5000) {
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                return false;
-            }
-        }
-        return gameClient.isConnected();
-    }
-
-    private void proceedWithRegistration(String username, String password) {
-        feedbackLabel.setColor(Color.WHITE);
-        feedbackLabel.setText("Creating account...");
-
-        // Set up registration response listener
-        gameClient.setRegistrationResponseListener(response -> {
-            Gdx.app.postRunnable(() -> {
-                if (response.success) {
-                    feedbackLabel.setColor(Color.GREEN);
-                    feedbackLabel.setText("Registration successful! Please log in.");
-                    passwordField.setText(""); // Clear password for security
-                } else {
-                    feedbackLabel.setColor(Color.RED);
-                    feedbackLabel.setText(response.message != null ?
-                        response.message : "Registration failed. Please try again.");
-                }
-                setUIEnabled(true);
-            });
-
-            // Cleanup after registration attempt
-            gameClient.disconnect();
-            gameClient = null;
-        });
-
-        // Send registration request
-        try {
-            gameClient.sendRegisterRequest(username, password);
-        } catch (Exception e) {
-            GameLogger.error("Registration error: " + e.getMessage());
-            Gdx.app.postRunnable(() -> {
-                feedbackLabel.setColor(Color.RED);
-                feedbackLabel.setText("Registration failed: " + e.getMessage());
-                setUIEnabled(true);
-            });
-
-            // Cleanup on error
-            gameClient.disconnect();
-            gameClient = null;
-        }
-    }
-
-    private void handleRegister(String username, String password, Label feedbackLabel) throws Exception {
-        // Access DatabaseManager for local mode
-        if (!isMultiplayerMode()) {
-            DatabaseManager dbManager = game.getDatabaseManager();
-
-            // Register the player using the DatabaseManager
-            if (dbManager.registerPlayer(username, password)) {
-                feedbackLabel.setColor(Color.GREEN);
-                feedbackLabel.setText("Registration successful! Please log in.");
-            } else {
-                feedbackLabel.setColor(Color.RED);
-                feedbackLabel.setText("Registration failed. Username might already exist.");
-            }
-        } else {
-            // Handle multiplayer registration via NetworkProtocol and GameClient
-            gameClient.sendRegisterRequest(username, password);
-        }
-    }
-
-    private boolean isValidUsername(String username) {
-        return username != null &&
-            username.length() >= 3 &&
-            username.length() <= 20 &&
-            username.matches("^[a-zA-Z0-9_]+$");
-    }
-
-    // Update the password validation method to be more detailed
     private String validatePassword(String password) {
-        if (password == null || password.isEmpty()) {
-            return "Password cannot be empty.";
-        }
         if (password.length() < 8) {
             return "Password must be at least 8 characters long.";
         }
@@ -664,142 +1514,40 @@ public class LoginScreen implements Screen {
         if (!password.matches(".*[!@#$%^&*()\\[\\]{}_+=\\-.,].*")) {
             return "Password must contain at least one special character.";
         }
-        if (password.contains(" ")) {
-            return "Password cannot contain spaces.";
-        }
-        return null; // Password is valid
-    }
-
-    private boolean isMultiplayerMode() {
-        return game.isMultiplayerMode();  // This will now check multiplayer mode flag
+        return null;
     }
 
 
-    private void handleLogin(Label feedbackLabel, ServerConnectionConfig selectedConfig, Button loginButton, Button registerButton, TextField usernameField, TextField passwordField) {
-        String username = usernameField.getText().trim();
-        String password = passwordField.getText().trim();
-
-        if (!validateInput(username, password)) {
-            return;
-        }
-
-        setUIEnabled(false);
-        feedbackLabel.setColor(Color.WHITE);
-        feedbackLabel.setText("Connecting...");
-
-        // Execute login in background
-        new Thread(() -> {
-            try {
-                if (gameClient == null) {
-                    gameClient = GameClientSingleton.getInstance(selectedConfig);
+    private void showErrorDialog(String title, String message) {
+        Dialog dialog = new Dialog(title, skin) {
+            @Override
+            protected void result(Object obj) {
+                if ((Boolean) obj) {
+                    attemptRegistration();
                 }
-                boolean connected = connectToServer(selectedConfig, feedbackLabel, loginButton, registerButton, usernameField, passwordField);
-                if (!connected) return;
-
-                gameClient.setLoginResponseListener(response -> {
-                    Gdx.app.postRunnable(() -> {
-                        handleLoginResponse(response, username, password,true);
-                    });
-                });
-
-                gameClient.sendLoginRequest(username, password);
-
-            } catch (Exception e) {
-                Gdx.app.postRunnable(() -> {
-                    feedbackLabel.setColor(Color.RED);
-                    feedbackLabel.setText("Connection error: " + "e.getMessage()");
-                    setUIEnabled(true);
-                });
             }
-        }).start();
+        };
+
+        Table contentTable = dialog.getContentTable();
+        contentTable.pad(20);
+
+        Label messageLabel = new Label(message, skin);
+        messageLabel.setWrap(true);
+        contentTable.add(messageLabel).width(300f).row();
+
+        dialog.button("Retry", true);
+        dialog.button("Cancel", false);
+        dialog.show(stage);
     }
 
-    private boolean connectToServer(ServerConnectionConfig config, Label feedbackLabel, Button loginButton, Button registerButton, TextField usernameField, TextField passwordField) {
-        try {
-            synchronized (this) {
-                if (gameClient != null && gameClient.isConnected()) {
-                    return true;
-                }
-
-                gameClient = GameClientSingleton.getInstance(config);
-
-                // Wait for connection
-                long startTime = System.currentTimeMillis();
-                while (!gameClient.isConnected() &&
-                    System.currentTimeMillis() - startTime < 5000) {
-                    Thread.sleep(100);
-                }
-
-                if (!gameClient.isConnected()) {
-                    Gdx.app.postRunnable(() -> {
-                        feedbackLabel.setColor(Color.RED);
-                        feedbackLabel.setText("Could not connect to server. Please try again.");
-                    });
-                    return false;
-                }
-
-                return true;
-            }
-        } catch (Exception e) {
-            //            GameLogger.info(STR."Connection error: {}\{e.getMessage()}");
-            Gdx.app.postRunnable(() -> {
-                feedbackLabel.setColor(Color.RED);
-                feedbackLabel.setText("Connection error: " + "e.getMessage()}");
-            });
-            return false;
+    private void updateConnectionStatus(float progress) {
+        if (progress < 0.3f) {
+            updateStatusLabel("Connecting to server...", Color.WHITE);
+        } else if (progress < 0.6f) {
+            updateStatusLabel("Authenticating...", Color.WHITE);
+        } else if (progress < 0.9f) {
+            updateStatusLabel("Loading game data...", Color.WHITE);
         }
-    }
-
-
-    private void handleLoginResponse(NetworkProtocol.LoginResponse response,
-                                     String username, String password, boolean remember) {
-        try {
-            if (response.success) {
-                // Save credentials if requested
-                if (remember) {
-                    saveCredentials(username, password, true);
-                    GameLogger.info("Credentials saved. Remember me: " + remember);
-                }
-
-                // Initialize world
-                game.setMultiplayerMode(true);
-                game.initializeMultiplayerWorld(
-                    response.worldName,
-                    response.worldSeed,
-                    response.worldData
-                );
-
-                // Transition to game screen
-                fadeToScreen(new GameScreen(game, username, gameClient, response.worldName));
-            } else {
-                feedbackLabel.setColor(Color.RED);
-                feedbackLabel.setText(response.message);
-                passwordField.setText("");
-                setUIEnabled(true);
-
-                // Clean up on failed login
-                gameClient.disconnect();
-                gameClient = null;
-            }
-        } catch (Exception e) {
-            GameLogger.error("Error handling login response: " + e.getMessage());
-            feedbackLabel.setColor(Color.RED);
-            feedbackLabel.setText("Error: " + e.getMessage());
-            setUIEnabled(true);
-
-            // Clean up on error
-            if (gameClient != null) {
-                gameClient.disconnect();
-                gameClient = null;
-            }
-        }
-    }
-
-    private void setUIEnabled(boolean enabled) {
-        usernameField.setDisabled(!enabled);
-        passwordField.setDisabled(!enabled);
-        rememberMeBox.setDisabled(!enabled);
-        serverSelect.setDisabled(!enabled);
     }
 
     private boolean validateInput(String username, String password) {
@@ -811,62 +1559,16 @@ public class LoginScreen implements Screen {
     }
 
     private void fadeToScreen(Screen next) {
-        if (isTransitioning) return;
-
-        isTransitioning = true;
-        nextScreen = next;
-
-        // Create fade out action
-        fadeAction = Actions.sequence(
-            Actions.alpha(1), // Ensure we start fully visible
-            Actions.fadeOut(FADE_DURATION), // Fade out over duration
-            Actions.run(() -> {
-                game.setScreen(nextScreen);
-                dispose();
-            })
-        );
-
-        // Add the fade action to the stage
-        stage.addAction(fadeAction);
+        game.setScreen(next);
+        dispose();
     }
 
     @Override
-    public void render(float delta) {
-        // Clear screen
-        Gdx.gl.glClearColor(0.1f, 0.1f, 0.1f, 1);
-        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
-
-        stage.act(delta);
-        stage.draw();
-
-        if (isTransitioning) {
-            Gdx.gl.glEnable(GL20.GL_BLEND);
-            ShapeRenderer renderer = new ShapeRenderer();
-            renderer.begin(ShapeRenderer.ShapeType.Filled);
-            renderer.setColor(0, 0, 0, fadeAlpha);
-            renderer.rect(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
-            renderer.end();
-            Gdx.gl.glDisable(GL20.GL_BLEND);
-        }
-    }
-
-    @Override
-    public void dispose() {
-        if (!isDisposed) {
-            stage.dispose();
-            isDisposed = true;
-        }
+    public void hide() {
     }
 
     @Override
     public void show() {
-    }
-
-
-    @Override
-    public void resize(int width, int height) {
-        // Update the viewport on resize
-        stage.getViewport().update(width, height, true);
     }
 
     @Override
@@ -879,9 +1581,35 @@ public class LoginScreen implements Screen {
         // Implement if needed
     }
 
-    @Override
-    public void hide() {
-        // Implement if needed
+    private ServerConnectionConfig getSelectedServerConfig() {
+        return selectedServer != null ? selectedServer : ServerConfigManager.getDefaultServerConfig();
+    }
+
+    // Updated ServerEntry class with icon support
+    private static class ServerEntry {
+        public String name;
+        public String ip;
+        public int tcpPort;
+        public int udpPort;
+        public String motd;
+        public boolean isDefault;
+        public int maxPlayers;
+        public String iconPath;
+
+        public ServerEntry() {
+        }
+
+        public ServerEntry(String name, String ip, int tcpPort, int udpPort,
+                           String motd, boolean isDefault, int maxPlayers, String iconPath) {
+            this.name = name;
+            this.ip = ip;
+            this.tcpPort = tcpPort;
+            this.udpPort = udpPort;
+            this.motd = motd;
+            this.isDefault = isDefault;
+            this.maxPlayers = maxPlayers;
+            this.iconPath = iconPath;
+        }
     }
 
 

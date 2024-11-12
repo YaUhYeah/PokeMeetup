@@ -7,7 +7,15 @@ java {
   targetCompatibility = JavaVersion.VERSION_1_8
 }
 
+jar {
+  manifest {
+    attributes 'Implementation-Title': 'Pokemon Meetup Core',
+      'Implementation-Version': project.version
+  }
 
+  from sourceSets.main.output
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
 dependencies {
   api "com.badlogicgames.ashley:ashley:$ashleyVersion"
   api "com.badlogicgames.gdx-controllers:gdx-controllers-core:$gdxControllersVersion"

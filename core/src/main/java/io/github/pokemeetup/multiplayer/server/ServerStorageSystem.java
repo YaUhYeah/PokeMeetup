@@ -1,65 +1,117 @@
 package io.github.pokemeetup.multiplayer.server;
 
-import com.badlogic.gdx.Application;
-import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.utils.Json;
+import com.badlogic.gdx.utils.JsonWriter;
 import io.github.pokemeetup.system.data.PlayerData;
 import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.utils.GameLogger;
+import io.github.pokemeetup.utils.storage.GameFileSystem;
+import io.github.pokemeetup.utils.storage.JsonConfig;
 
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ServerStorageSystem {
+    private static final String SERVER_BASE_DIR = "server/";
+    private static final String SERVER_WORLD_DIR = SERVER_BASE_DIR + "worlds/";
+    private static final String SERVER_PLAYER_DIR = SERVER_BASE_DIR + "players/";
     private final String baseDir;
     private final Json json;
     private final Map<String, WorldData> worldCache;
     private final Map<String, PlayerData> playerCache;
+    private final GameFileSystem fs;
 
     public ServerStorageSystem() {
-        // Use local storage for Android
-        boolean isAndroid = (Gdx.app != null && Gdx.app.getType() == Application.ApplicationType.Android);
-        this.baseDir = isAndroid ? "" : "server/data/";
-        this.json = new Json();
+        this.baseDir = SERVER_BASE_DIR; // Use the constant for consistency;
+        this.json = JsonConfig.getInstance();
+        this.json.setOutputType(JsonWriter.OutputType.json);
         this.worldCache = new ConcurrentHashMap<>();
         this.playerCache = new ConcurrentHashMap<>();
+        this.fs = GameFileSystem.getInstance();
         initializeDirectories();
     }
 
     private void initializeDirectories() {
         try {
-            FileHandle worldsDir = Gdx.files.local(baseDir + "worlds");
-            FileHandle playersDir = Gdx.files.local(baseDir + "players");
+            // Create all required directories
+            fs.createDirectory(SERVER_BASE_DIR);
+            fs.createDirectory(SERVER_WORLD_DIR);
+            fs.createDirectory(SERVER_PLAYER_DIR);
+            fs.createDirectory(SERVER_WORLD_DIR + "backups/");
 
-            if (!worldsDir.exists()) {
-                worldsDir.mkdirs();
-            }
-            if (!playersDir.exists()) {
-                playersDir.mkdirs();
-            }
-            GameLogger.info("Storage directories initialized");
+            GameLogger.info("Server storage directories initialized");
         } catch (Exception e) {
-            GameLogger.error("Failed to create storage directories: " + e.getMessage());
+            GameLogger.error("Failed to create server storage directories: " + e.getMessage());
+            throw new RuntimeException("Server storage initialization failed", e);
         }
     }
 
-    public void saveWorld(WorldData world) {
-        if (world == null || world.getName() == null) {
-            return;
+    public synchronized WorldData loadWorld(String name) {
+        // Check cache first
+        WorldData cached = worldCache.get(name);
+        if (cached != null) {
+            return cached;
         }
 
         try {
-            FileHandle file = Gdx.files.local(baseDir + "worlds/" + world.getName() + ".json");
-            String jsonData = json.prettyPrint(world);
-            file.writeString(jsonData, false);
-            worldCache.put(world.getName(), world);
-            GameLogger.info("Saved world: " + world.getName());
+            String worldPath = SERVER_WORLD_DIR + name + "/world.json";
+            if (!fs.exists(worldPath)) {
+                GameLogger.info("World file not found: " + name);
+                return null;
+            }
+
+            String content = fs.readString(worldPath);
+            WorldData world = json.fromJson(WorldData.class, content);
+
+            if (world != null) {
+                worldCache.put(name, world);
+                GameLogger.info("Loaded world from server storage: " + name);
+            }
+
+            return world;
         } catch (Exception e) {
-            GameLogger.error("Failed to save world: " + world.getName());
+            GameLogger.error("Failed to load world: " + name + " - " + e.getMessage());
+            return null;
         }
     }
+
+    public synchronized void saveWorld(WorldData world) {
+        if (world == null) return;
+
+        try {
+            String worldPath = SERVER_WORLD_DIR + world.getName() + "/";
+            fs.createDirectory(worldPath);
+
+            // Create backup first
+            createWorldBackup(world);
+
+            // Save using temporary file
+            String tempPath = worldPath + "world.json.temp";
+            String finalPath = worldPath + "world.json";
+
+            String jsonData = json.prettyPrint(world);
+            fs.writeString(tempPath, jsonData);
+
+            // If temporary file was written successfully, move it to the actual file
+            if (fs.exists(finalPath)) {
+                fs.deleteFile(finalPath);
+            }
+            fs.moveFile(tempPath, finalPath);
+
+            // Update cache
+            worldCache.put(world.getName(), world);
+
+            GameLogger.info("Saved world to server storage: " + world.getName());
+        } catch (Exception e) {
+            GameLogger.error("Failed to save world: " + world.getName() + " - " + e.getMessage());
+            throw new RuntimeException("World save failed", e);
+        }
+    }
+
 
     public void savePlayerData(String username, PlayerData playerData) {
         if (username == null || playerData == null) {
@@ -67,9 +119,9 @@ public class ServerStorageSystem {
         }
 
         try {
-            FileHandle file = Gdx.files.local(baseDir + "players/" + username + ".json");
+            String path = SERVER_PLAYER_DIR + username + ".json";
             String jsonData = json.prettyPrint(playerData);
-            file.writeString(jsonData, false);
+            fs.writeString(path, jsonData);
             playerCache.put(username, playerData);
             GameLogger.info("Saved player data for: " + username);
         } catch (Exception e) {
@@ -77,25 +129,20 @@ public class ServerStorageSystem {
         }
     }
 
-    public WorldData loadWorld(String worldName) {
-        if (worldCache.containsKey(worldName)) {
-            return worldCache.get(worldName);
-        }
+    public Map<String, WorldData> getAllWorlds() {
+        String[] worldDirs = fs.list(SERVER_WORLD_DIR);
+        Map<String, WorldData> worlds = new HashMap<>();
 
-        try {
-            FileHandle file = Gdx.files.local(baseDir + "worlds/" + worldName + ".json");
-            if (!file.exists()) {
-                return null;
+        if (worldDirs != null) {
+            for (String dir : worldDirs) {
+                WorldData world = loadWorld(dir);
+                if (world != null) {
+                    worlds.put(world.getName(), world);
+                }
             }
-
-            String jsonData = file.readString();
-            WorldData world = json.fromJson(WorldData.class, jsonData);
-            worldCache.put(worldName, world);
-            return world;
-        } catch (Exception e) {
-            GameLogger.error("Failed to load world: " + worldName);
-            return null;
         }
+
+        return worlds;
     }
 
     public PlayerData loadPlayerData(String username) {
@@ -104,12 +151,12 @@ public class ServerStorageSystem {
         }
 
         try {
-            FileHandle file = Gdx.files.local(baseDir + "players/" + username + ".json");
-            if (!file.exists()) {
+            String path = SERVER_PLAYER_DIR + username + ".json";
+            if (!fs.exists(path)) {
                 return null;
             }
 
-            String jsonData = file.readString();
+            String jsonData = fs.readString(path);
             PlayerData playerData = json.fromJson(PlayerData.class, jsonData);
             playerCache.put(username, playerData);
             return playerData;
@@ -119,36 +166,34 @@ public class ServerStorageSystem {
         }
     }
 
-    public void deleteWorld(String worldName) {
+    private void createWorldBackup(WorldData world) {
         try {
-            FileHandle file = Gdx.files.local(baseDir + "worlds/" + worldName + ".json");
-            if (file.exists()) {
-                file.delete();
+            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+            String backupDir = SERVER_WORLD_DIR + world.getName() + "/backups/";
+            if (!fs.exists(backupDir)) {
+                fs.createDirectory(backupDir);
             }
-            worldCache.remove(worldName);
-            GameLogger.info("Deleted world: " + worldName);
+
+            String backupPath = backupDir + "world_" + timestamp + ".json";
+
+            String jsonData = json.prettyPrint(world);
+            fs.writeString(backupPath, jsonData);
+
+            GameLogger.info("Created backup of world: " + world.getName());
         } catch (Exception e) {
-            GameLogger.error("Failed to delete world: " + worldName);
+            GameLogger.error("Failed to create world backup: " + e.getMessage());
         }
     }
 
-    public Map<String, WorldData> getAllWorlds() {
-        Map<String, WorldData> worlds = new HashMap<>();
-        try {
-            FileHandle worldsDir = Gdx.files.local(baseDir + "worlds");
-            if (worldsDir.exists()) {
-                for (FileHandle file : worldsDir.list(".json")) {
-                    String worldName = file.nameWithoutExtension();
-                    WorldData world = loadWorld(worldName);
-                    if (world != null) {
-                        worlds.put(worldName, world);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            GameLogger.error("Failed to load worlds");
+
+
+    public void deleteWorld(String name) {
+        String worldPath = SERVER_WORLD_DIR + name;
+        if (fs.exists(worldPath)) {
+            fs.deleteDirectory(worldPath);
+            worldCache.remove(name);
+            GameLogger.info("Deleted world from server storage: " + name);
         }
-        return worlds;
     }
 
     public void shutdown() {

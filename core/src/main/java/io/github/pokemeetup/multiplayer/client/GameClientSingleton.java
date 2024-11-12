@@ -1,5 +1,7 @@
 package io.github.pokemeetup.multiplayer.client;
 
+import io.github.pokemeetup.CreatureCaptureGame;
+import io.github.pokemeetup.multiplayer.server.config.ServerConfigManager;
 import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
 import io.github.pokemeetup.utils.GameLogger;
 
@@ -8,10 +10,16 @@ import java.io.IOException;
 public class GameClientSingleton {
     private static final Object lock = new Object();
     private static GameClient instance;
-
+    public static void resetInstance() {
+        if (instance != null) {
+            instance.dispose();
+            instance = null;
+        }
+    }
     public static GameClient getInstance(ServerConnectionConfig config) {
         if (config == null) {
-            throw new IllegalArgumentException("ServerConnectionConfig cannot be null");
+            // Try to get default config instead of throwing exception
+            config = ServerConfigManager.getDefaultServerConfig();
         }
 
         synchronized (lock) {
@@ -19,31 +27,28 @@ public class GameClientSingleton {
                 validateConfig(config);
 
                 if (instance != null) {
-                    instance.disconnect();
+                    instance.dispose();
                     instance = null;
                 }
 
                 instance = new GameClient(config, false,
                     config.getServerIP(),
                     config.getTcpPort(),
-                    config.getUdpPort());
-
-                // Explicitly connect after creation
-                instance.connect();
+                    config.getUdpPort(),
+                    new CreatureCaptureGame());
 
                 return instance;
 
             } catch (Exception e) {
                 GameLogger.error("Failed to initialize GameClient: " + e.getMessage());
                 if (instance != null) {
-                    instance.disconnect();
+                    instance.dispose();
                     instance = null;
                 }
                 throw new RuntimeException("Failed to initialize GameClient: " + e.getMessage(), e);
             }
         }
     }
-
 
     private static void validateConfig(ServerConnectionConfig config) {
             if (config.getServerIP() == null || config.getServerIP().isEmpty()) {
@@ -61,12 +66,12 @@ public class GameClientSingleton {
             synchronized (lock) {
                 try {
                     if (instance != null) {
-                        instance.disconnect();
+                        instance.dispose();
                         instance = null;
                     }
 
                     ServerConnectionConfig singlePlayerConfig = ServerConnectionConfig.getDefault();
-                    instance = new GameClient(singlePlayerConfig, true, "localhost", 0, 0);
+                    instance = new GameClient(singlePlayerConfig, true, "localhost", 0, 0, new CreatureCaptureGame());
                     return instance;
 
                 } catch (Exception e) {
@@ -80,7 +85,7 @@ public class GameClientSingleton {
             synchronized (lock) {
                 if (instance != null) {
                     try {
-                        instance.disconnect();
+                        instance.dispose();
                     } catch (Exception e) {
                         GameLogger.error("Error disconnecting GameClient: " + e.getMessage());
                     }

@@ -11,6 +11,8 @@ import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import io.github.pokemeetup.CreatureCaptureGame;
 import io.github.pokemeetup.blocks.PlaceableBlock;
+import io.github.pokemeetup.multiplayer.client.GameClient;
+import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.pokemon.PokemonParty;
 import io.github.pokemeetup.pokemon.WildPokemon;
@@ -44,7 +46,7 @@ public class Player {
     private static final float COLLISION_BOX_WIDTH_RATIO = 0.6f; // Make hitbox 60% of frame width
     private static final float COLLISION_BOX_HEIGHT_RATIO = 0.4f; // Make hitbox 40% of frame height
     private static final float COLLISION_BOX_Y_OFFSET = 8f; // Offset from bottom of sprite
-    private static final float TILE_TRANSITION_TIME = 0.25f; // Time to move one tile
+    private static final float TILE_TRANSITION_TIME = 0.2f; // Time to move one tile
     private static final float COLLISION_BOX_WIDTH = 20f;  // Smaller than FRAME_WIDTH
     private static final float COLLISION_BOX_HEIGHT = 16f; // Smaller than FRAME_HEIGHT
     private static final float RUN_SPEED_MULTIPLIER = 1.75f; // More noticeable run
@@ -54,10 +56,14 @@ public class Player {
     private static final float COLLISION_BUFFER = 4f; // Increased for better collision detection
     private static final float ACCELERATION = 800f; // Pixels per second squared
     private static final float MAX_SPEED = 200f;    // Maximum speed
-    private final PlayerAnimations animations;
-    private final String username;
+    private static final long VALIDATION_INTERVAL = 1000; // ms
+    private static final float DIAGONAL_MOVE_TIME = 0.15f; // Time window for diagonal input
+    private static final float INPUT_BUFFER_TIME = 0.1f; // Time to buffer next move
     // Locks for Thread Safety
     private final Object movementLock = new Object();
+    private final Object resourceLock = new Object();
+    private PlayerAnimations animations;
+    private String username;
     private PokemonSpawnManager spawnManager;
     // Game and World References
     private World world;
@@ -99,29 +105,71 @@ public class Player {
     private int targetTileX, targetTileY;
     // Collision and Rendering
     private Rectangle boundingBox;
-    private boolean isMovingFlag = false;
-    private boolean isRunningFlag = false;
     private BitmapFont font;
     // Player Datax
     private PlayerData playerData;
-    /**
-     * Loads player data from the saved state.
-     *
-     * @param savedData The saved player data.
-     */
     private float movementProgress;
     private String queuedDirection;
     private boolean isInterpolating;
     private BuildModeUI buildModeUI;
+    private GameClient gameClient;
+    private boolean resourcesInitialized = false;
+    private long lastValidationTime = 0;
+    private String lastDirection = "down";
+    private volatile boolean disposed = false;
+    // Add these fields
+    private float diagonalMoveTimer = 0f;
+
     // Constructor with default username
     public Player(int startTileX, int startTileY, World world) {
         this(startTileX, startTileY, world, "Player");
         this.playerData = new PlayerData("Player");
     }
-    public Player(String username) {
-        this(0, 0, null, username); // Default position and null world
 
-        this.playerData = new PlayerData("Player");
+
+
+
+    public Player(String username, World world) {
+        this(0, 0, world, username); // Pass the world object correctly
+        GameLogger.info("Creating new player: " + username);
+        this.animations = new PlayerAnimations();
+        this.world = world;
+        this.position = new Vector2(0, 0);
+        this.targetPosition = new Vector2(0, 0);
+        this.renderPosition = new Vector2(0, 0);
+        this.lastPosition = new Vector2(0, 0);
+        this.currentPosition = new Vector2(0, 0);
+        this.startPosition = new Vector2(0, 0);
+
+        // Initialize collision boxes
+        float boxWidth = FRAME_WIDTH * COLLISION_BOX_WIDTH_RATIO;
+        float boxHeight = FRAME_HEIGHT * COLLISION_BOX_HEIGHT_RATIO;
+        this.collisionBox = new Rectangle(0, 0, boxWidth, boxHeight);
+        this.nextPositionBox = new Rectangle(0, 0, boxWidth, boxHeight);
+
+        // Initialize components
+        this.direction = "down";
+        this.inventory = new Inventory();
+        this.buildInventory = new Inventory();
+        this.pokemonParty = new PokemonParty();
+        this.ownedPokemon = new HashMap<>();
+        this.playerData = new PlayerData(username);
+
+        initFont();
+        initializeBuildInventory();
+
+        Gdx.app.postRunnable(this::initializeGraphics);
+        GameLogger.info("Player initialized: " + username + " at (0,0)");
+    }
+    private void initializeGraphics() {
+        this.animations = new PlayerAnimations();
+        initFont();
+    }
+
+    private void initFont() {
+        this.font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
+        font.getData().setScale(0.8f);
+        font.setColor(Color.WHITE);
     }
     public Player(int startTileX, int startTileY, World world, String username) {
         this.world = world;
@@ -154,150 +202,58 @@ public class Player {
         this.renderPosition = new Vector2(x, y);
         this.lastPosition = new Vector2(x, y);
 
-        GameLogger.info(String.format("Player '%s' initialized at tile (%d, %d).", username, tileX, tileY));
     }
 
-    public void updateFromPlayerData(PlayerData data) {
-        if (data == null) {
-            GameLogger.error("Cannot update player from null PlayerData");
+    public void initializeInWorld(World world) {
+        if (world == null) {
+            GameLogger.error("Cannot initialize player in null world");
             return;
         }
 
-        try {
-            // Update basic position and movement info
-            updatePositionFromData(data);
-            updateMovementFromData(data);
+        this.world = world;
 
-            // Update inventory
-            updateInventoryFromData(data);
+        // Only initialize spawn manager reference, don't reset state
+        this.spawnManager = world.getPokemonSpawnManager();
 
-            // Update Pokemon party
-            updatePokemonFromData(data);
+        // Update collision boxes without resetting position
+        updateCollisionBoxes();
 
-            GameLogger.info("Successfully updated player " + username + " from PlayerData");
-        } catch (Exception e) {
-            GameLogger.error("Error updating player from data: " + e.getMessage());
-            e.printStackTrace();
-        }
+        GameLogger.info("Player initialized in world: " + username);
     }
-
-    // Helper method to update position
-    private void updatePositionFromData(PlayerData data) {
-        synchronized (movementLock) {
-            // Convert tile coordinates to pixel coordinates
-            float newX = data.getX() * World.TILE_SIZE;
-            float newY = data.getY() * World.TILE_SIZE;
-
-            // Update all position-related fields
-            this.x = newX;
-            this.y = newY;
-            this.tileX = (int) data.getX();
-            this.tileY = (int) data.getY();
-            this.position.set(newX, newY);
-            this.renderPosition.set(newX, newY);
-            this.targetPosition.set(newX, newY);
-            this.startPosition.set(newX, newY);
-
-            // Update collision boxes
-            updateCollisionBoxes();
-
-            GameLogger.info("Updated position to: " + newX + "," + newY);
+    public void updateFromPlayerData(PlayerData data) {
+        if (data == null) {
+            GameLogger.error("Cannot update from null PlayerData");
+            return;
         }
-    }
 
-    // Helper method to update movement state
-    private void updateMovementFromData(PlayerData data) {
-        this.direction = data.getDirection() != null ? data.getDirection() : "down";
+        // Update position
+        this.x = data.getX();
+        this.y = data.getY();
+        this.direction = data.getDirection();
         this.isMoving = data.isMoving();
         this.isRunning = data.isWantsToRun();
 
-        GameLogger.info("Updated movement state - Direction: " + direction +
-            ", Moving: " + isMoving + ", Running: " + isRunning);
-    }
-
-    // Helper method to update inventory
-    private void updateInventoryFromData(PlayerData data) {
-        if (data.getInventoryItems() != null) {
-            this.inventory.clear();
-            for (ItemData item : data.getInventoryItems()) {
-                if (item != null) {
-                    this.inventory.addItem(item);
-                }
+        // Update Pokemon party
+        if (data.getPartyPokemon() != null && !data.getPartyPokemon().isEmpty()) {
+            if (this.pokemonParty == null) {
+                this.pokemonParty = new PokemonParty();
             }
-            GameLogger.info("Updated inventory with " + data.getInventoryItems().size() + " items");
-        }
-    }
 
-    // Helper method to update Pokemon
-    private void updatePokemonFromData(PlayerData data) {
-        if (data.getPartyPokemon() != null) {
-            // Clear current party
-            this.pokemonParty.clearParty();
-
-            // Add each Pokemon from the data
             for (PokemonData pokemonData : data.getPartyPokemon()) {
-                if (pokemonData != null) {
-                    Pokemon pokemon = pokemonData.toPokemon();
-                    if (pokemon != null) {
-                        this.pokemonParty.addPokemon(pokemon);
-                        this.ownedPokemon.put(pokemon.getUuid(), pokemon);
-                    }
+                Pokemon pokemon = pokemonData.toPokemon();
+                if (pokemon != null) {
+                    this.pokemonParty.addPokemon(pokemon);
                 }
             }
-
-            GameLogger.info("Updated Pokemon party with " +
-                data.getPartyPokemon().size() + " Pokemon");
+            GameLogger.info("Loaded " + this.pokemonParty.getSize() + " Pokemon from save data");
         }
-    }
-
-    // Helper method to sync current state back to PlayerData
-    public void syncToPlayerData() {
-        if (playerData == null) {
-            playerData = new PlayerData(username);
-        }
-
-        // Update position (convert from pixels to tiles)
-        playerData.setX(getTileX());
-        playerData.setY(getTileY());
-
-        // Update movement state
-        playerData.setDirection(direction);
-        playerData.setMoving(isMoving);
-        playerData.setWantsToRun(isRunning);
 
         // Update inventory
-        playerData.setInventoryItems(inventory.getAllItems());
-
-        // Update Pokemon
-        List<PokemonData> partyData = new ArrayList<>();
-        for (Pokemon pokemon : pokemonParty.getParty()) {
-            partyData.add(PokemonData.fromPokemon(pokemon));
+        if (data.getInventoryItems() != null) {
+            InventoryConverter.applyInventoryDataToPlayer(data, this);
         }
-        playerData.setPartyPokemon(partyData);
-
-        GameLogger.info("Synced current state to PlayerData for " + username);
     }
 
-    public int getChunkX() {
-        int tileX = getTileX();
-        int chunkSize = World.CHUNK_SIZE;
-        // Handle negative coordinates correctly
-        int chunkX = (tileX >= 0) ? (tileX / chunkSize) : ((tileX + 1) / chunkSize - 1);
-        return chunkX;
-    }
-
-    public int getChunkY() {
-        int tileY = getTileY();
-        int chunkSize = World.CHUNK_SIZE;
-        int chunkY = (tileY >= 0) ? (tileY / chunkSize) : ((tileY + 1) / chunkSize - 1);
-        return chunkY;
-    }
-
-    public void setBuildModeUI(BuildModeUI buildModeUI) {
-        this.buildModeUI = buildModeUI;
-    }
-
-    // Add helper method to initialize build inventory
     private void initializeBuildInventory() {
         // Add default blocks to build inventory
         for (PlaceableBlock.BlockType blockType : PlaceableBlock.BlockType.values()) {
@@ -306,10 +262,6 @@ public class Player {
         }
     }
 
-    // Main Constructor
-
-    // Modify the initialization method
-// Update initialization method to be clear about coordinate systems
     private void initializePosition(int startTileX, int startTileY) {
         // Store tile coordinates
         this.tileX = startTileX;
@@ -331,8 +283,6 @@ public class Player {
         // Set initial target tiles (no movement yet)
         this.targetTileX = tileX;
         this.targetTileY = tileY;
-
-        GameLogger.info(String.format("Player initialized at tile (%d, %d) [pixel pos: %.2f, %.2f]", tileX, tileY, x, y));
     }
 
     private void validateAndFixPosition(int tileX, int tileY) {
@@ -355,10 +305,8 @@ public class Player {
         this.targetPosition.set(x, y);
         this.startPosition.set(x, y);
 
-        GameLogger.info(String.format("Position validated and set to tile (%d, %d), pixel (%f, %f)", tileX, tileY, x, y));
     }
 
-    // Add these helper methods for coordinate conversion
     private float tileToPixelX(int tileX) {
         return tileX * World.TILE_SIZE;
     }
@@ -391,7 +339,7 @@ public class Player {
         this.isRunning = savedData.isWantsToRun();
 
         // Apply inventory data
-        InventoryConverter.applyInventoryDataToPlayer(savedData, this);
+
 
         GameLogger.info(String.format("Loaded player state at tile (%d, %d)", tileX, tileY));
     }
@@ -400,7 +348,7 @@ public class Player {
         if (world != null && world.getWorldData() != null) {
             PlayerData savedData = world.getWorldData().getPlayerData(username);
             if (savedData != null) {
-                loadFromSavedData(savedData);
+                playerData.applyToPlayer(this);
                 GameLogger.info("Loaded saved state for player: " + username);
             } else {
                 this.playerData = new PlayerData(username);
@@ -409,55 +357,6 @@ public class Player {
         }
     }
 
-    private void loadPokemonData(PlayerData savedData) {
-        if (savedData.getPartyPokemon() != null) {
-            for (PokemonData pokemonData : savedData.getPartyPokemon()) {
-                Pokemon pokemon = pokemonData.toPokemon();
-                if (pokemon != null) {
-                    addPokemonToParty(pokemon);
-                }
-            }
-        }
-
-        if (savedData.getStoredPokemon() != null) {
-            for (PokemonData pokemonData : savedData.getStoredPokemon()) {
-                Pokemon pokemon = pokemonData.toPokemon();
-                if (pokemon != null) {
-                    addPokemonToStorage(pokemon);
-                }
-            }
-        }
-    }
-
-    /**
-     * Initializes the player's position and related variables.
-     */
-    private void initPosition(int startTileX, int startTileY) {
-        synchronized (movementLock) {
-            this.tileX = startTileX;
-            this.tileY = startTileY;
-            this.x = startTileX * TILE_SIZE;
-            this.y = startTileY * TILE_SIZE;
-            this.targetTileX = startTileX;
-            this.targetTileY = startTileY;
-            this.position.set(startTileX * TILE_SIZE, startTileY * TILE_SIZE);
-            this.targetPosition.set(position);
-            updateBoundingBox();
-        }
-    }
-
-    /**
-     * Initializes the font used for rendering the username.
-     */
-    private void initFont() {
-        this.font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
-        font.getData().setScale(0.8f);
-        font.setColor(Color.WHITE);
-    }
-
-    /**
-     * Loads the player's saved state from persistent storage.
-     */
     private void loadSavedState() {
         this.playerData = new PlayerData(username);
         if (world.getWorldData() != null) {
@@ -485,78 +384,25 @@ public class Player {
         this.y = y;
     }
 
-    private boolean isValidMove(int newTileX, int newTileY) {
-        // Check world bounds
-        if (newTileX < MIN_TILE_BOUND || newTileX > MAX_TILE_BOUND || newTileY < MIN_TILE_BOUND || newTileY > MAX_TILE_BOUND) {
-            return false;
+    public void update(float deltaTime) {
+        if (!resourcesInitialized || disposed || animations == null || animations.isDisposed()) {
+            initializeResources();
         }
 
-        // Check if move is only one tile at a time
-        int dx = Math.abs(newTileX - tileX);
-        int dy = Math.abs(newTileY - tileY);
-        if (dx > 1 || dy > 1) {
-            return false;
-        }
-
-        return world.isPassable(newTileX, newTileY);
-    }
-
-    private boolean canMoveToPosition(int targetX, int targetY) {
-        // World boundary check
-        if (targetX < MIN_TILE_BOUND || targetX > MAX_TILE_BOUND || targetY < MIN_TILE_BOUND || targetY > MAX_TILE_BOUND) {
-            return false;
-        }
-
-        // World tile passability check
-        if (!world.isPassable(targetX, targetY)) {
-            return false;
-        }
-
-        // Get nearby objects for collision checking
-        float pixelX = targetX * World.TILE_SIZE;
-        float pixelY = targetY * World.TILE_SIZE;
-
-        List<WorldObject> nearbyObjects = world.getObjectManager().getObjectsNearPosition(pixelX, pixelY);
-
-        // Check collisions with objects using the nextPositionBox
-        for (WorldObject obj : nearbyObjects) {
-            if (obj.getType() == WorldObject.ObjectType.TREE || obj.getType() == WorldObject.ObjectType.HAUNTED_TREE || obj.getType() == WorldObject.ObjectType.SNOW_TREE) {
-
-                Rectangle objBounds = obj.getBoundingBox();
-                // Use smaller collision area for trees
-                objBounds.x += 4f;
-                objBounds.width -= 8f;
-                objBounds.height -= 4f; // Reduce height collision slightly
-
-                if (nextPositionBox.overlaps(objBounds)) {
-                    return false;
-                }
-            } else if (obj.getType() == WorldObject.ObjectType.POKEBALL) {
-                Rectangle objBounds = obj.getBoundingBox();
-                // Smaller collision for pokeballs
-                objBounds.x += 8f;
-                objBounds.y += 8f;
-                objBounds.width -= 16f;
-                objBounds.height -= 16f;
-
-                if (nextPositionBox.overlaps(objBounds)) {
-                    return false;
+        synchronized (movementLock) {
+            // Update timers
+            if (diagonalMoveTimer > 0) {
+                diagonalMoveTimer -= deltaTime;
+            }
+            if (inputBufferTimer > 0) {
+                inputBufferTimer -= deltaTime;
+                if (inputBufferTimer <= 0 && bufferedDirection != null) {
+                    move(bufferedDirection);
+                    bufferedDirection = null;
                 }
             }
-        }
 
-        return true;
-    }
-
-    private void updateNextPositionBox(float nextX, float nextY) {
-        float boxWidth = nextPositionBox.width;
-        float boxHeight = nextPositionBox.height;
-
-        nextPositionBox.setPosition(nextX + (FRAME_WIDTH - boxWidth) / 2, nextY + COLLISION_BUFFER);
-    }  // Update Player.java update method:
-
-    public void update(float deltaTime) {
-        synchronized (movementLock) {
+            // Handle movement
             if (isMoving) {
                 float speed = isRunning ? RUN_SPEED_MULTIPLIER : 1.0f;
                 movementProgress += (deltaTime / TILE_TRANSITION_TIME) * speed;
@@ -574,52 +420,19 @@ public class Player {
         }
     }
 
-    private void updateMovementVector(String direction) {
-        movementVector.setZero();
-        switch (direction) {
-            case "up":
-                movementVector.y = 1;
-                break;
-            case "down":
-                movementVector.y = -1;
-                break;
-            case "left":
-                movementVector.x = -1;
-                break;
-            case "right":
-                movementVector.x = 1;
-                break;
-        }
-    }
-
-    // Modify the move method for more responsive controls
 
     private void updatePosition(float progress) {
         float smoothProgress = smoothstep(progress);
 
+
         x = MathUtils.lerp(startPosition.x, targetPosition.x, smoothProgress);
         y = MathUtils.lerp(startPosition.y, targetPosition.y, smoothProgress);
 
-        renderPosition.set(x, y);
         position.set(x, y);
+        renderPosition.set(x, y);
+
 
         updateCollisionBoxes();
-    }
-
-    public PlayerData getCurrentState() {
-        PlayerData state = new PlayerData(username);
-
-        // Convert current pixel position to tile coordinates
-        int currentTileX = (int) Math.floor(x / World.TILE_SIZE);
-        int currentTileY = (int) Math.floor(y / World.TILE_SIZE);
-
-        state.setX(currentTileX);
-        state.setY(currentTileY);
-        state.setDirection(direction);
-        state.setMoving(false); // Don't save movement state
-        state.setWantsToRun(isRunning);
-
-        return state;
     }
 
     private void updateCollisionBoxes() {
@@ -629,56 +442,30 @@ public class Player {
         nextPositionBox.setPosition(targetPosition.x + (FRAME_WIDTH - nextPositionBox.width) / 2f, targetPosition.y + COLLISION_BUFFER);
     }
 
-    private void updateCollisionBox() {
-        collisionBox.setPosition(x + (FRAME_WIDTH - COLLISION_BOX_WIDTH) / 2, y + COLLISION_BOX_Y_OFFSET);
-    }
-
-    private void completeMovement() {
-        x = targetPosition.x;
-        y = targetPosition.y;
-        tileX = targetTileX;
-        tileY = targetTileY;
-        position.set(x, y);
-        renderPosition.set(x, y);
-
-        isMoving = false;
-
-        // Process queued movement
-        if (queuedDirection != null) {
-            String nextDirection = queuedDirection;
-            queuedDirection = null;
-            move(nextDirection);
-        }
-    }
-
     private float smoothstep(float x) {
         x = MathUtils.clamp(x, 0f, 1f);
         return x * x * (3 - 2 * x);
     }
 
-    /**
-     * Completes the current movement, aligning the player with the grid and processing queued movements.
-     */
-
-    private void handleCollision(String direction) {
-        // Set the facing direction
-        this.direction = direction;
-        this.isMoving = false;
-    }
-
     public void move(String newDirection) {
         synchronized (movementLock) {
             if (isMoving) {
-                // Do not queue the movement; ignore input if already moving
+//                GameLogger.error("Already moving, buffering direction: " + newDirection);
+                if (movementProgress > 0.7f) {
+                    bufferedDirection = newDirection;
+                    inputBufferTimer = INPUT_BUFFER_TIME;
+                }
                 return;
             }
 
-            // Update facing direction
-            direction = newDirection;
+            direction = newDirection;   // Add null check and error logging
+            if (world == null) {
+                GameLogger.error("Cannot move - world is null! Player: " + username);
+                return;
+            }
 
-            // Calculate new target position
-            int newTileX = tileX;
-            int newTileY = tileY;
+            int newTileX = getTileX();
+            int newTileY = getTileY();
 
             switch (newDirection) {
                 case "up":
@@ -697,35 +484,54 @@ public class Player {
                     return;
             }
 
-            // Check if movement is possible
-            if (world.isPassable(newTileX, newTileY)) {
-                // Set target position
+            if (world != null && world.isPassable(newTileX, newTileY)) {
+                // Start movement
                 targetTileX = newTileX;
                 targetTileY = newTileY;
                 targetPosition.set(tileToPixelX(newTileX), tileToPixelY(newTileY));
-
-                // Store starting position
                 startPosition.set(x, y);
-
+                lastPosition.set(x, y);  // Store last position
                 isMoving = true;
                 movementProgress = 0f;
+
+
             }
-
         }
+    }
 
+    private void completeMovement() {
+        x = targetPosition.x;
+        y = targetPosition.y;
+        tileX = targetTileX;
+        tileY = targetTileY;
+        position.set(x, y);
+        renderPosition.set(x, y);
+
+        isMoving = false;
+        movementProgress = 0f;
+
+        // Handle buffered input
+        if (bufferedDirection != null) {
+            String nextDirection = bufferedDirection;
+            bufferedDirection = null;
+            move(nextDirection);
+        }
     }
 
     public void render(SpriteBatch batch) {
-        if (currentFrame != null) {
-            batch.draw(currentFrame, renderPosition.x, renderPosition.y, FRAME_WIDTH, FRAME_HEIGHT);
-        }
+        synchronized (resourceLock) {
+            if (!resourcesInitialized || disposed || animations == null || animations.isDisposed()) {
+                initializeResources();
+            }
+            if (currentFrame != null) {
+                batch.draw(currentFrame, renderPosition.x, renderPosition.y, FRAME_WIDTH, FRAME_HEIGHT);
+            }
 
-        if (username != null && !username.isEmpty() && font != null && !username.equals("Player") && !username.equals("ThumbnailPlayer")) {
-            font.draw(batch, username, renderPosition.x + (FRAME_WIDTH / 2f), renderPosition.y + FRAME_HEIGHT + 15);
+            if (username != null && !username.isEmpty() && font != null && !username.equals("Player") && !username.equals("ThumbnailPlayer")) {
+                font.draw(batch, username, renderPosition.x - (float) FRAME_WIDTH / 2, renderPosition.y + FRAME_HEIGHT + 15);
+            }
         }
     }
-
-    // Enhanced smooth stepping function for better movement
 
     public int getTileX() {
         return pixelToTileX(x);
@@ -734,96 +540,21 @@ public class Player {
     public int getTileY() {
         return pixelToTileY(y);
     }
+    private final Object inventoryLock = new Object();
 
     public void setTileY(int tileY) {
         this.tileY = tileY;
     }
 
-    public float getPixelX() {
-        return x;
-    }
 
-    public float getPixelY() {
-        return y;
-    }
-
-    /**
-     * Linearly interpolates between two values.
-     *
-     * @param start Start value.
-     * @param end   End value.
-     * @param t     Interpolation factor between 0 and 1.
-     * @return Interpolated value.
-     */
-    private float lerp(float start, float end, float t) {
-        return start + (end - start) * t;
-    }
-
-    /**
-     * Updates the player's bounding box for collision detection or other purposes.
-     */
-    private void updateBoundingBox() {
-        boundingBox.setPosition(position.x + COLLISION_BUFFER / 2, position.y + COLLISION_BUFFER / 2);
-    }
-
-    /**
-     * Checks for collisions with world objects at the target bounds.
-     *
-     * @param targetBounds The bounding box of the target position.
-     * @return True if a collision is detected, false otherwise.
-     */
-    private boolean checkObjectCollisions(Rectangle targetBounds) {
-        List<WorldObject> nearbyObjects = world.getObjectManager().getObjectsNearPosition(targetBounds.x, targetBounds.y);
-        for (WorldObject obj : nearbyObjects) {
-            if (obj.getBoundingBox().overlaps(targetBounds)) {
-                GameLogger.info("Collision detected with object at (" + obj.getPixelX() + ", " + obj.getPixelY() + ")");
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Checks if movement to the target tile is possible.
-     */
-    private boolean canMoveToTile(int targetX, int targetY) {
-        // World bounds check
-        if (targetX < 0 || targetY < 0 || targetX >= World.WORLD_SIZE || targetY >= World.WORLD_SIZE) {
-            return false;
-        }
-
-        // Create target bounds for collision checking
-        Rectangle targetBounds = new Rectangle(targetX * TILE_SIZE + COLLISION_BUFFER, targetY * TILE_SIZE + COLLISION_BUFFER, FRAME_WIDTH - (COLLISION_BUFFER * 2), FRAME_HEIGHT - (COLLISION_BUFFER * 2));
-
-        // Check world collision
-        if (!world.isPassable(targetX, targetY)) {
-            return false;
-        }
-
-        // Check object collisions
-        return !checkObjectCollisions(targetBounds);
-    }
-
-    /**
-     * Attempts to place a block at the specified tile coordinates.
-     *
-     * @param tileX X-coordinate of the tile.
-     * @param tileY Y-coordinate of the tile.
-     * @param world The game world.
-     */
-// Add to Player.java
     public void tryPlaceBlock(int tileX, int tileY, World world) {
         if (!buildMode) {
             return;
         }
-
-        // Get the currently selected item from build inventory
         ItemData selectedItem = buildInventory.getItemAt(buildModeUI.getSelectedSlot());
         if (selectedItem == null) {
             return;
         }
-
-        // Convert item to block type
         PlaceableBlock.BlockType blockType = null;
         for (PlaceableBlock.BlockType type : PlaceableBlock.BlockType.values()) {
             if (type.getId().equals(selectedItem.getItemId())) {
@@ -835,44 +566,13 @@ public class Player {
         if (blockType == null) {
             return;
         }
-
-        // Check if the block can be placed
         if (world.getBlockManager().placeBlock(blockType, tileX, tileY, world)) {
-            // Consume one block if placement was successful
             buildModeUI.consumeBlock();
             GameLogger.info("Placed " + blockType.getId() + " at " + tileX + "," + tileY);
         }
+
     }
 
-    /**
-     * Retrieves the block type from the given item.
-     *
-     * @param item The item to convert.
-     * @return The corresponding block type, or null if none matches.
-     */
-    private PlaceableBlock.BlockType getBlockTypeFromItem(Item item) {
-        switch (item.getName()) {
-            case "CraftingTable":
-                return PlaceableBlock.BlockType.CRAFTING_TABLE;
-            // Add more block types as needed
-            default:
-                return null;
-        }
-    }
-
-    /**
-     * Determines if the player can move to the specified tile.
-     *
-     * @param targetX X-coordinate of the target tile.
-     * @param targetY Y-coordinate of the target tile.
-     * @return True if movement is possible, false otherwise.
-     */
-
-    /**
-     * Selects a block item from the build inventory.
-     *
-     * @param slot The inventory slot to select.
-     */
     public void selectBlockItem(int slot) {
         if (!buildMode) return;
 
@@ -885,26 +585,14 @@ public class Player {
         }
     }
 
-    /**
-     * Attempts to pick up an item based on its position.
-     *
-     * @param itemX X-coordinate of the item.
-     * @param itemY Y-coordinate of the item.
-     * @return True if the player can pick up the item, false otherwise.
-     */
     public boolean canPickupItem(float itemX, float itemY) {
-        // Calculate centers of player and item
         float playerCenterX = x + (FRAME_WIDTH / 2f);
         float playerCenterY = y + (FRAME_HEIGHT / 2f);
         float itemCenterX = itemX + (TILE_SIZE / 2f);
         float itemCenterY = itemY + (TILE_SIZE / 2f);
-
-        // Calculate distances
         float dx = itemCenterX - playerCenterX;
         float dy = itemCenterY - playerCenterY;
         float distance = (float) Math.sqrt(dx * dx + dy * dy);
-
-        // Check if item is in front of player based on facing direction
         boolean inCorrectDirection = false;
         switch (direction) {
             case "up":
@@ -928,63 +616,87 @@ public class Player {
         return canPickup;
     }
 
-    /**
-     * Checks if the item's position matches the player's current direction.
-     *
-     * @param itemX X-coordinate of the item.
-     * @param itemY Y-coordinate of the item.
-     * @return True if the direction matches, false otherwise.
-     */
-    private boolean directionMatchesPosition(float itemX, float itemY) {
-        switch (direction) {
-            case "up":
-                return itemY > y;
-            case "down":
-                return itemY < y;
-            case "left":
-                return itemX < x;
-            case "right":
-                return itemX > x;
-            default:
-                return false;
-        }
-    }
-
-    /**
-     * Updates the PlayerData object with the current state of the player.
-     */
     public void updatePlayerData() {
         playerData.setX(x);
         playerData.setY(y);
         playerData.setDirection(direction);
         playerData.setMoving(isMoving);
         playerData.setWantsToRun(isRunning);
-        // Add any additional fields as necessary
+        playerData.setInventoryItems(inventory.getAllItems());
     }
 
-    /**
-     * Disposes of resources used by the player.
-     */
-    public void dispose() {
-        if (font != null) font.dispose();
-        animations.dispose();
-        if (currentFrame != null && currentFrame.getTexture() != null) {
-            currentFrame.getTexture().dispose();
+
+    public void initializeResources() {
+        synchronized (resourceLock) {
+            try {
+                if (resourcesInitialized && !disposed && animations != null && !animations.isDisposed()) {
+                    return;
+                }
+
+                GameLogger.info("Initializing player resources");
+
+                // Create new animations only if needed
+                if (animations == null || animations.isDisposed()) {
+                    animations = new PlayerAnimations();
+                    GameLogger.info("Created new PlayerAnimations");
+                }
+
+                // Always get a fresh frame
+                currentFrame = animations.getStandingFrame("down");
+                if (currentFrame == null) {
+                    throw new RuntimeException("Failed to get initial frame");
+                }
+
+                resourcesInitialized = true;
+                disposed = false;
+                GameLogger.info("Player resources initialized successfully");
+
+            } catch (Exception e) {
+                GameLogger.error("Failed to initialize player resources: " + e.getMessage());
+                resourcesInitialized = false;
+                disposed = true;
+                throw new RuntimeException("Resource initialization failed", e);
+            }
         }
     }
 
-    /**
-     * Creates a placeholder texture frame in case animation frames are missing.
-     *
-     * @return A TextureRegion representing the placeholder frame.
-     */
-    private TextureRegion createPlaceholderFrame() {
-        Pixmap pixmap = new Pixmap(FRAME_WIDTH, FRAME_HEIGHT, Pixmap.Format.RGBA8888);
-        pixmap.setColor(Color.MAGENTA);  // Visible color for missing frames
-        pixmap.fill();
-        Texture placeholderTexture = new Texture(pixmap);
-        pixmap.dispose();
-        return new TextureRegion(placeholderTexture);
+
+    public void validateResources() {
+        long currentTime = System.currentTimeMillis();
+        if (currentTime - lastValidationTime > VALIDATION_INTERVAL) {
+            synchronized (resourceLock) {
+                if (!resourcesInitialized || disposed || animations == null || animations.isDisposed()) {
+                    initializeResources();
+                }
+                lastValidationTime = currentTime;
+            }
+        }
+    }
+
+    public void dispose() {
+        synchronized (resourceLock) {
+            if (disposed) {
+                return;
+            }
+
+            try {
+                GameLogger.info("Disposing player resources");
+
+                if (animations != null) {
+                    animations.dispose();
+                    animations = null;
+                }
+
+                currentFrame = null;
+                resourcesInitialized = false;
+                disposed = true;
+
+                GameLogger.info("Player resources disposed successfully");
+
+            } catch (Exception e) {
+                GameLogger.error("Error disposing player resources: " + e.getMessage());
+            }
+        }
     }
 
     public Vector2 getPosition() {
@@ -999,8 +711,6 @@ public class Player {
         this.direction = direction;
     }
 
-    // Getters and Setters
-
     public boolean isMoving() {
         return isMoving;
     }
@@ -1013,30 +723,19 @@ public class Player {
         return isRunning;
     }
 
-    /**
-     * Sets whether the player is running (speed multiplier).
-     *
-     * @param running True to enable running, false to disable.
-     */
     public void setRunning(boolean running) {
         this.isRunning = running;
-    }
-
-    public void setRunningFlag(boolean running) {
-        isRunningFlag = running;
     }
 
     public boolean isBuildMode() {
         return buildMode;
     }
 
-    // Update setBuildMode method to handle UI
     public void setBuildMode(boolean buildMode) {
         this.buildMode = buildMode;
         if (buildModeUI != null) {
             if (buildMode) {
                 buildModeUI.show();
-                // Initialize build inventory if needed
                 if (buildInventory.isEmpty()) {
                     initializeBuildInventory();
                 }
@@ -1044,22 +743,40 @@ public class Player {
                 buildModeUI.hide();
             }
         }
+    }   public Inventory getInventory() {
+        synchronized (inventoryLock) {
+            if (inventory == null) {
+                GameLogger.error("Player inventory is null - creating new");
+                inventory = new Inventory();
+            }
+            return inventory;
+        }
+    }    public void setInventory(Inventory inv) {
+        synchronized (inventoryLock) {
+            if (inv == null) {
+                GameLogger.error("Attempt to set null inventory");
+                return;
+            }
+
+            // Copy items from old inventory if it exists
+            if (this.inventory != null) {
+                List<ItemData> oldItems = this.inventory.getAllItems();
+                for (ItemData item : oldItems) {
+                    if (item != null) {
+                        inv.addItem(item.copy());
+                    }
+                }
+            }
+
+            this.inventory = inv;
+            GameLogger.info("Set player inventory with " +
+                inv.getAllItems().stream().filter(Objects::nonNull).count() + " items");
+        }
     }
 
-    public Inventory getInventory() {
-        return inventory;
-    }
-
-    public void setInventory(Inventory inventory) {
-        this.inventory = inventory;
-    }
 
     public Inventory getBuildInventory() {
         return buildInventory;
-    }
-
-    public void setBuildInventory(Inventory buildInventory) {
-        this.buildInventory = buildInventory;
     }
 
     public PokemonParty getPokemonParty() {
@@ -1074,11 +791,15 @@ public class Player {
         return username;
     }
 
-    public World getWorld() {
-        return world;
+    public void setUsername(String username) {
+        this.username = username;
     }
 
     // Pokemon Management
+
+    public World getWorld() {
+        return world;
+    }
 
     public void setWorld(World world) {
         synchronized (movementLock) {
@@ -1086,39 +807,12 @@ public class Player {
         }
     }
 
-    public PokemonSpawnManager getSpawnManager() {
-        return spawnManager;
+    public void setGameClient(GameClient gameClient) {
+        this.gameClient = gameClient;
     }
 
     public PlayerData getPlayerData() {
         return playerData;
     }
 
-    /**
-     * Adds a Pokémon to the player's party.
-     *
-     * @param pokemon The Pokémon to add.
-     */
-    public void addPokemonToParty(Pokemon pokemon) {
-        if (pokemonParty.addPokemon(pokemon)) {
-            ownedPokemon.put(pokemon.getUuid(), pokemon);
-        }
-    }
-
-    public void setMoveTimer(float moveTimer) {
-        this.moveTimer = moveTimer;
-    }
-
-    public void setMovingFlag(boolean movingFlag) {
-        isMovingFlag = movingFlag;
-    }
-
-    /**
-     * Adds a Pokémon to the player's storage.
-     *
-     * @param pokemon The Pokémon to add.
-     */
-    public void addPokemonToStorage(Pokemon pokemon) {
-        ownedPokemon.put(pokemon.getUuid(), pokemon);
-    }
 }

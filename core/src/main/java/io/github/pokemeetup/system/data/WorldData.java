@@ -3,28 +3,27 @@ package io.github.pokemeetup.system.data;
 
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Json;
-import io.github.pokemeetup.blocks.PlaceableBlock;
 import io.github.pokemeetup.pokemon.WildPokemon;
 import io.github.pokemeetup.system.gameplay.overworld.Chunk;
 import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
+import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.storage.BlockSaveData;
+import io.github.pokemeetup.utils.storage.JsonConfig;
 
 import java.io.Serializable;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 public class WorldData {// In WorldData.java
 
-    private final Map<Vector2, PlaceableBlock> placedBlocks = new ConcurrentHashMap<>();
-    private final Object saveLock = new Object();
     private final Object timeLock = new Object();
-    // Update toJson() method to include new fields
-    // Add this field to track Pokemon
+    private final Object saveLock = new Object();
     private final Map<UUID, WildPokemon> wildPokemonMap = new ConcurrentHashMap<>();
+    private double worldTimeInMinutes = 480.0; // 8:00 AM default
+    private long playedTime = 0L;
+    private float dayLength = 10.0f;
     private PokemonData pokemonData;  // Keep existing field
-    private float dayLength = 10; // Real minutes per in-game day
     private String name;
     private HashMap<String, PlayerData> players; // Use HashMap instead of Map
     private long lastPlayed;
@@ -37,9 +36,7 @@ public class WorldData {// In WorldData.java
     private long worldSeed;
     private int spawnX, spawnY;
     private String username; // New field for username
-    private double worldTimeInMinutes = 480.0; // Start at 8:00 AM by default
-    private long playedTime = 0L; // New field to track total played time in milliseconds
-
+    // Ensure that this constructor initializes all necessary fields
     public WorldData(String name) {
         this();
         if (name == null || name.trim().isEmpty()) {
@@ -47,13 +44,15 @@ public class WorldData {// In WorldData.java
         }
         this.name = name.trim();
     }
-
+    // The default constructor should initialize collections
     public WorldData() {
         this.players = new HashMap<>();
         this.pokemonData = new PokemonData();
         this.lastPlayed = System.currentTimeMillis();
+        // Initialize other collections if needed
+        this.chunks = new HashMap<>();
+        this.chunkObjects = new HashMap<>();
     }
-
     public WorldData(String name, long lastPlayed, WorldConfig config) {
         this();
         this.name = name;
@@ -61,24 +60,6 @@ public class WorldData {// In WorldData.java
         this.lastPlayed = lastPlayed;
         this.config = config;
     }
-
-//    public void addWildPokemonData(WildPokemon pokemon) {
-//        if (pokemonData == null) {
-//            pokemonData = new PokemonData();
-//        }
-//        WildPokemonData data = new WildPokemonData();
-//        data.setName(pokemon.getName());
-//        data.setLevel(pokemon.getLevel());
-//        data.setPosition(new Vector2(pokemon.getX(), pokemon.getY()));
-//        data.setDirection(pokemon.getDirection());
-//        data.setMoving(pokemon.isMoving());
-//        data.setSpawnTime(pokemon.getSpawnTime());
-//        // Set other fields as necessary
-//
-//        pokemonData.addWildPokemon(pokemon.getUuid(), data);
-//        setDirty(true);
-//    }
-
     // New constructor to include username
     public WorldData(String name, long lastPlayed, WorldConfig config, String username) {
         this(name, lastPlayed, config);
@@ -87,7 +68,7 @@ public class WorldData {// In WorldData.java
 
     public static WorldData fromJson(String jsonStr) {
         try {
-            Json json = new Json();
+            Json json = JsonConfig.getInstance();
             return json.fromJson(WorldData.class, jsonStr);
         } catch (Exception e) {
             GameLogger.error("Failed to parse WorldData from JSON: " + e.getMessage());
@@ -95,66 +76,149 @@ public class WorldData {// In WorldData.java
         }
     }
 
-    public void updateFromServerData(WorldData serverData) {
-        // Ensure that serverData is not null to prevent NullPointerExceptions
-        if (serverData == null) {
-            GameLogger.error("Received null serverData in updateFromServerData");
-            return;
+    public double getWorldTimeInMinutes() {
+        synchronized (timeLock) {
+            return worldTimeInMinutes;
+        }
+    }
+
+    public void setWorldTimeInMinutes(double time) {
+        synchronized (timeLock) {
+            this.worldTimeInMinutes = time;
+            GameLogger.info("Set world time to: " + time);
+        }
+    }
+
+    public long getPlayedTime() {
+        synchronized (timeLock) {
+            return playedTime;
+        }
+    }
+
+    public void setPlayedTime(long time) {
+        synchronized (timeLock) {
+            this.playedTime = time;
+            GameLogger.info("Set played time to: " + time);
+        }
+    }
+
+    public void validateAndRepair() {
+        synchronized (timeLock) {
+            // Validate time values
+            if (worldTimeInMinutes < 0 || worldTimeInMinutes >= 24 * 60) {
+                GameLogger.error("Repairing invalid world time: " + worldTimeInMinutes);
+                worldTimeInMinutes = 480.0; // 8:00 AM
+            }
+
+            if (dayLength <= 0) {
+                GameLogger.error("Repairing invalid day length: " + dayLength);
+                dayLength = 10.0f;
+            }
+
+            if (playedTime < 0) {
+                GameLogger.error("Repairing invalid played time: " + playedTime);
+                playedTime = 0;
+            }
         }
 
-        // Synchronize on saveLock to ensure thread safety during updates
+        // Validate players data
+        if (players != null) {
+            for (Map.Entry<String, PlayerData> entry : players.entrySet()) {
+                PlayerData playerData = entry.getValue();
+                if (playerData.getInventoryItems() == null) {
+                    playerData.setInventoryItems(new ArrayList<>());
+                }
+
+                // Validate each inventory item
+                for (int i = 0; i < playerData.getInventoryItems().size(); i++) {
+                    ItemData item = playerData.getInventoryItems().get(i);
+                    if (item != null && item.getUuid() == null) {
+                        item.setUuid(UUID.randomUUID());
+                        GameLogger.info("Generated new UUID for item: " + item.getItemId());
+                    }
+                }
+            }
+        }
+    }
+
+    public void validateAndRepairWorld() {
+        if (this.pokemonData == null) {
+            this.pokemonData = new PokemonData();
+            setDirty(true);
+        }
+
+        // Validate Pokemon in player data
+        if (players != null) {
+            for (PlayerData player : players.values()) {
+                if (player.getPartyPokemon() != null) {
+                    List<PokemonData> validPokemon = new ArrayList<>();
+                    for (PokemonData pokemon : player.getPartyPokemon()) {
+                        if (pokemon != null ) {
+                            validPokemon.add(pokemon);
+                            setDirty(true);
+                        }
+                    }
+                    if (!validPokemon.isEmpty()) {
+                        player.setPartyPokemon(validPokemon);
+                    }
+                }
+            }
+        }
+    }
+
+    public void save() {
         synchronized (saveLock) {
-            // Update core fields
-            this.name = serverData.getName();
-            this.worldSeed = serverData.getConfig().getSeed();
-            this.spawnX = serverData.getSpawnX();
-            this.spawnY = serverData.getSpawnY();
-            this.dayLength = serverData.getDayLength();
-            this.worldTimeInMinutes = serverData.getWorldTimeInMinutes();
-            this.playedTime = serverData.getPlayedTime();
+            try {
+                // Log time values before save
+                GameLogger.info("Saving world data - Time: " + worldTimeInMinutes +
+                    " Played Time: " + playedTime +
+                    " Day Length: " + dayLength);
 
-            // Update configuration if necessary
-            if (serverData.getConfig() != null) {
-                this.config = serverData.getConfig();
+                // Mark as dirty to ensure save
+                setDirty(true);
+
+                // Use WorldManager to handle the actual save
+                WorldManager worldManager = WorldManager.getInstance(null, true);
+                worldManager.saveWorld(this);
+
+                GameLogger.info("Successfully saved world: " + name);
+
+            } catch (Exception e) {
+                GameLogger.error("Failed to save world: " + name + " - " + e.getMessage());
+                e.printStackTrace();
             }
+        }
+    }
 
-            // Update placedBlocks
-            if (serverData.getPlacedBlocks() != null) {
-                this.placedBlocks.clear();
-                this.placedBlocks.putAll(serverData.getPlacedBlocks());
+    public void save(boolean createBackup) {
+        synchronized (saveLock) {
+            try {
+                validateAndRepairWorld();
+                if (createBackup) {
+                    // Create timestamp for backup
+                    String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+                    String backupName = name + "_backup_" + timestamp;
+
+                    // Create backup WorldData
+                    WorldData backup = new WorldData(backupName);
+                    backup.setConfig(this.config);
+                    backup.setWorldTimeInMinutes(this.worldTimeInMinutes);
+                    backup.setPlayedTime(this.playedTime);
+                    backup.setDayLength(this.dayLength);
+                    backup.setPlayersMap(new HashMap<>(this.players));
+
+                    // Save backup
+                    WorldManager.getInstance(null, true).saveWorld(backup);
+                    GameLogger.info("Created backup of world: " + name);
+                }
+
+                // Save main world
+                save();
+
+            } catch (Exception e) {
+                GameLogger.error("Failed to save world with backup: " + name + " - " + e.getMessage());
+                e.printStackTrace();
             }
-
-            // Update chunks
-            if (serverData.getChunks() != null) {
-                this.chunks.clear();
-                this.chunks.putAll(serverData.getChunks());
-            }
-
-            // Update chunkObjects
-            if (serverData.getChunkObjects() != null) {
-                this.chunkObjects.clear();
-                this.chunkObjects.putAll(serverData.getChunkObjects());
-            }
-
-            // Update players
-            if (serverData.getPlayersMap() != null) {
-                this.players.clear();
-                this.players.putAll(serverData.getPlayersMap());
-            }
-
-            // Update pokemonData
-            if (serverData.getPokemonData() != null) {
-                this.pokemonData = serverData.getPokemonData();
-            }
-
-            // Update blockData if necessary
-            if (serverData.getBlockData() != null) {
-                this.blockData = serverData.getBlockData();
-            }
-
-            setDirty(false);
-
-            GameLogger.info("WorldData updated from server data successfully.");
         }
     }
 
@@ -181,62 +245,6 @@ public class WorldData {// In WorldData.java
         return serializedChunks;
     }
 
-    private Map<Vector2, List<WorldObjectData>> serializeChunkObjects() {
-        Map<Vector2, List<WorldObjectData>> serializedObjects = new HashMap<>();
-        for (Map.Entry<Vector2, List<WorldObject>> entry : chunkObjects.entrySet()) {
-            List<WorldObjectData> objectDataList = entry.getValue().stream()
-                .map(worldObject -> {
-                    WorldObjectData data = new WorldObjectData();
-                    data.type = worldObject.getType().name(); // Assuming getType() returns an enum
-                    data.x = worldObject.getPixelX();
-                    data.y = worldObject.getPixelY();
-                    data.id = worldObject.getId(); // Assuming getId() exists
-                    // Map other necessary fields...
-                    return data;
-                })
-                .collect(Collectors.toList());
-            serializedObjects.put(entry.getKey(), objectDataList);
-        }
-        return serializedObjects;
-    }
-
-    // In WorldData.java
-    public Map<String, Object> getSerializableData() {
-        Map<String, Object> data = new HashMap<>();
-        data.put("name", name);
-        data.put("seed", config.getSeed());
-        data.put("timeInMinutes", worldTimeInMinutes);
-        data.put("playedTime", playedTime);
-        data.put("chunks", serializeChunks());
-        data.put("chunkObjects", serializeChunkObjects());
-        data.put("spawnX", spawnX);
-        data.put("spawnY", spawnY);
-        data.put("pokemon", serializePokemon());
-        return data;
-    }
-
-    private Map<String, Object> serializePokemon() {
-        Map<String, Object> serializedPokemonData = new HashMap<>();
-        for (Map.Entry<UUID, PokemonData.WildPokemonData> entry : this.pokemonData.getWildPokemon().entrySet()) {
-            serializedPokemonData.put(entry.getKey().toString(), entry.getValue());
-        }
-        return serializedPokemonData;
-    }
-
-    public WorldData serializeForNetwork() {
-        WorldData data = new WorldData(this.name); // Assuming `name` is a field in `World`
-        data.setWorldSeed(this.config.getSeed());
-        data.setWorldTimeInMinutes(this.getWorldTimeInMinutes());
-        data.setPlayedTime(this.getPlayedTime());
-        // Serialize other necessary fields and chunks
-        return data;
-    }
-
-    // Add utility method to get chunk objects for a position
-    public List<WorldObject> getChunkObjects(Vector2 position) {
-        return chunkObjects.getOrDefault(position, new ArrayList<>());
-    }
-
     public Object getTimeLock() {
         return timeLock;
     }
@@ -257,95 +265,27 @@ public class WorldData {// In WorldData.java
         this.spawnY = y;
     }
 
-    public Map<Vector2, Chunk> getChunks() {
-        return chunks;
-    }
-
-    public Map<Vector2, List<WorldObject>> getChunkObjects() {
-        return chunkObjects;
-    }
-
     public void updateTime(float deltaTime) {
         synchronized (timeLock) {
-            // Update played time (convert delta to milliseconds)
             long deltaMillis = (long) (deltaTime * 1000);
             playedTime += deltaMillis;
-
-            // Calculate game minutes per real second
             double gameMinutesPerSecond = (24 * 60.0) / (dayLength * 60.0);
-            // Calculate time to add this frame
             double timeToAdd = deltaTime * gameMinutesPerSecond;
 
-            // Update world time
             worldTimeInMinutes = (worldTimeInMinutes + timeToAdd) % (24 * 60);
 
-            // Log time updates periodically
-            if (playedTime % 1000 < deltaMillis) { // Log roughly every second
-                GameLogger.info(String.format(
-                    "Time Update - World: %.2f, Played: %d, Day Length: %.1f",
-                    worldTimeInMinutes, playedTime, dayLength
-                ));
-            }
-        }
-    }
 
-    // Make getters thread-safe
-    public double getWorldTimeInMinutes() {
-        synchronized (timeLock) {
-            return worldTimeInMinutes;
-        }
-    }
-
-    public void setWorldTimeInMinutes(double time) {
-        synchronized (saveLock) {
-            this.worldTimeInMinutes = time;
-            setDirty(true);
-        }
-    }
-
-    public long getPlayedTime() {
-        synchronized (timeLock) {
-            return playedTime;
-        }
-    }
-
-    public void setPlayedTime(long playedTime) {
-        synchronized (saveLock) {
-            this.playedTime = playedTime;
-            setDirty(true);
         }
     }
 
     public float getDayLength() {
-        synchronized (timeLock) {
-            return dayLength;
-        }
+        return dayLength;
     }
 
-    public void setDayLength(float length) {
-        synchronized (saveLock) {
-            this.dayLength = length;
-            setDirty(true);
-        }
+    public void setDayLength(float dayLength) {
+        this.dayLength = dayLength;
     }
 
-    // Serialize time data
-    public void writeTimeValues(Json json) {
-        synchronized (timeLock) {
-            json.writeValue("worldTimeInMinutes", Double.valueOf(worldTimeInMinutes));
-            json.writeValue("playedTime", Long.valueOf(playedTime));
-            json.writeValue("dayLength", Float.valueOf(dayLength));
-
-            GameLogger.info("Serializing time values - " +
-                "World Time: " + worldTimeInMinutes +
-                " Played Time: " + playedTime +
-                " Day Length: " + dayLength);
-        }
-    }
-
-    public Map<Vector2, PlaceableBlock> getPlacedBlocks() {
-        return placedBlocks;
-    }
     // In PokemonData.java
 
     public Object getSaveLock() {
@@ -390,7 +330,7 @@ public class WorldData {// In WorldData.java
     public PlayerData getPlayerData(String username) {
         synchronized (saveLock) {
             PlayerData data = players.get(username);
-            return data != null ? data.copy() : null; // Return copy to prevent external modification
+            return data != null ? data.copy() : null;
         }
     }
 
@@ -510,12 +450,6 @@ public class WorldData {// In WorldData.java
         }
     }
 
-    /**
-     * Converts this WorldData instance to a JSON string.
-     *
-     * @return JSON string representation of this WorldData
-     * @throws RuntimeException if serialization fails
-     */
     public void toJson(Json json) {
         synchronized (timeLock) {
             try {
@@ -604,9 +538,6 @@ public class WorldData {// In WorldData.java
         }
     }
 
-    // Add getters/setters
-
-    // Add serialization-friendly data classes
     public static class ChunkData implements Serializable {
         public int[][] tileData;
 

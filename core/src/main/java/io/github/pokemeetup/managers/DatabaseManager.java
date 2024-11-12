@@ -4,31 +4,24 @@ import at.favre.lib.crypto.bcrypt.BCrypt;
 import io.github.pokemeetup.utils.GameLogger;
 
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.*;
-import java.util.Base64;
 
 import static io.github.pokemeetup.utils.PasswordUtils.hashPassword;
 
 public class DatabaseManager {
-    private static final String DB_PATH = "real"; // Relative to H2 server's baseDir ./data
+    private static final String DB_PATH = "real";
     public static final String DB_USER = "sa";
     public static final String DB_PASS = "";
-    private static final String DB_URL = "jdbc:h2:./database/pokemeetup";
-    private static final String DB_PASSWORD = "";
-    private static final int BASE_PORT = 9101; // Align with ServerLauncher
+    private static final int BASE_PORT = 9101;
     private Connection connection;
-    private Connection getConnection() throws SQLException {
-        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
-    }
+
+
     public DatabaseManager() {
         try {
             connectToDatabase();
-            initializeTables();
+            initializeDatabase();
         } catch (SQLException e) {
             GameLogger.info("Database initialization error: " + e.getMessage());
-            e.printStackTrace();
             throw new RuntimeException("Failed to initialize database", e);
         }
     }
@@ -52,27 +45,12 @@ public class DatabaseManager {
     }
 
     private void connectToDatabase() throws SQLException {
-        String url = String.format("jdbc:h2:tcp://localhost:%d/%s",
-            BASE_PORT,
-            DB_PATH
-        );
-
+        @SuppressWarnings("DefaultLocale")
+        String url = String.format("jdbc:h2:tcp://localhost:%d/%s", BASE_PORT, DB_PATH);
         connection = DriverManager.getConnection(url, DB_USER, DB_PASS);
         GameLogger.info("Connected to database on port " + BASE_PORT);
     }
 
-    private void initializeTables() throws SQLException {
-        String createTableSQL = "CREATE TABLE IF NOT EXISTS players ("
-            + "username VARCHAR(255) PRIMARY KEY,"
-            + "password_hash VARCHAR(255),"
-            + "x INT,"
-            + "y INT"
-            + ");";
-        try (Statement stmt = connection.createStatement()) {
-            stmt.execute(createTableSQL);
-            GameLogger.info("Players table initialized successfully.");
-        }
-    }
 
     public void dispose() {
         try {
@@ -81,11 +59,17 @@ public class DatabaseManager {
                 GameLogger.info("Database connection closed");
             }
         } catch (SQLException e) {
-            GameLogger.info("Error closing database connection: " + e.getMessage());
+            GameLogger.error("Error closing database connection: " + e.getMessage());
         }
     }
 
-    // Add reconnection logic
+    private Connection getConnection() throws SQLException {
+        if (connection == null || connection.isClosed()) {
+            connectToDatabase();
+        }
+        return connection;
+    }
+
     private void ensureConnection() {
         try {
             if (connection == null || connection.isClosed()) {
@@ -94,48 +78,44 @@ public class DatabaseManager {
             }
         } catch (SQLException e) {
             GameLogger.info("Error checking connection: " + e.getMessage());
-            e.printStackTrace();
         }
     }
-
-
     public boolean registerPlayer(String username, String password) {
-        String sql = "INSERT INTO PLAYERS (USERNAME, PASSWORD, CREATED_AT) VALUES (?, ?, CURRENT_TIMESTAMP())";
+        if (doesUsernameExist(username)) {
+            GameLogger.info("Username already exists: " + username);
+            return false;
+        }
+        String sql = "INSERT INTO PLAYERS (username, password_hash, x_pos, y_pos) VALUES (?, ?, 0, 0)";
         try (Connection conn = getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
-            // Hash password before storing
             String hashedPassword = hashPassword(password);
-
             stmt.setString(1, username);
             stmt.setString(2, hashedPassword);
 
             int result = stmt.executeUpdate();
+            GameLogger.info("Player registration " + (result > 0 ? "successful" : "failed") +
+                " for username: " + username);
             return result > 0;
         } catch (SQLException e) {
             GameLogger.error("Database error registering player: " + e.getMessage());
             throw new RuntimeException("Database error registering player", e);
         }
     }
+    private void initializeDatabase() {
+        String createPlayersTable =
+            "CREATE TABLE IF NOT EXISTS PLAYERS (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY, " +
+                "username VARCHAR(255) NOT NULL UNIQUE, " +
+                "password_hash VARCHAR(255) NOT NULL, " +
+                "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(), " +
+                "last_login TIMESTAMP, " +
+                "status VARCHAR(20) DEFAULT 'OFFLINE', " +
+                "x_pos INT DEFAULT 0, " +
+                "y_pos INT DEFAULT 0" +
+                ")";
 
-    private String hashPassword(String password) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(password.getBytes(StandardCharsets.UTF_8));
-            return Base64.getEncoder().encodeToString(hash);
-        } catch (NoSuchAlgorithmException e) {
-            GameLogger.error("Error hashing password: " + e.getMessage());
-            throw new RuntimeException("Error hashing password", e);
-        }
-    }
-
-
-
-    public void initializeDatabase() {
-        String createPlayersTable = " CREATE TABLE IF NOT EXISTS PLAYERS (ID BIGINT AUTO_INCREMENT PRIMARY KEY,USERNAME VARCHAR (20) NOT NULL UNIQUE, PASSWORD VARCHAR(255) NOT NULL, CREATED_AT TIMESTAMP NOT NULL, LAST_LOGIN TIMESTAMP STATUS VARCHAR (20) DEFAULT 'OFFLINE', CONSTRAINT UK_USERNAME UNIQUE (USERNAME)";
-
-        try (Connection conn = getConnection();
-             Statement stmt = conn.createStatement()) {
+        try (Statement stmt = connection.createStatement()) {
             stmt.execute(createPlayersTable);
             GameLogger.info("Database tables initialized successfully");
         } catch (SQLException e) {
@@ -146,32 +126,31 @@ public class DatabaseManager {
 
     public void updatePlayerCoordinates(String username, int x, int y) {
         ensureConnection();
-        String updateSQL = "UPDATE players SET x = ?, y = ? WHERE username = ?";
+        String updateSQL = "UPDATE PLAYERS SET x_pos = ?, y_pos = ? WHERE username = ?";
         try (PreparedStatement pstmt = connection.prepareStatement(updateSQL)) {
             pstmt.setInt(1, x);
             pstmt.setInt(2, y);
             pstmt.setString(3, username);
-            int rowsUpdated = pstmt.executeUpdate();
-            GameLogger.info("Stored coordinates for " + username + ": (" + x + ", " + y + ")");
+            GameLogger.info("Updated coordinates for " + username + ": (" + x + ", " + y + ")");
         } catch (SQLException e) {
-            GameLogger.info("Error updating coordinates for username: " + username);
-            e.printStackTrace();
+            GameLogger.error("Error updating coordinates: " + e.getMessage());
+            throw new RuntimeException("Failed to update player coordinates", e);
         }
     }
 
     private boolean doesUsernameExist(String username) {
-        String sql = "SELECT 1 FROM players WHERE username = ?";
-        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+        String sql = "SELECT 1 FROM PLAYERS WHERE username = ?";
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
             stmt.setString(1, username);
             ResultSet rs = stmt.executeQuery();
             boolean exists = rs.next();
-            rs.close();
-            GameLogger.info("Username '" + username + "' exists: " + exists);
+            GameLogger.info("Username check: '" + username + "' exists: " + exists);
             return exists;
         } catch (SQLException e) {
-            GameLogger.info("Error checking if username exists: " + username);
-            e.printStackTrace();
-            return false;
+            GameLogger.error("Error checking if username exists: " + e.getMessage());
+            throw new RuntimeException("Database error checking username", e);
         }
     }
 
@@ -183,52 +162,87 @@ public class DatabaseManager {
             }
         } catch (SQLException e) {
             GameLogger.info("Error closing database connection: " + e.getMessage());
-            e.printStackTrace();
         }
     }
 
     public boolean authenticatePlayer(String username, String password) {
-        String query = "SELECT password_hash FROM players WHERE username = ?";
-        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+        // Updated to use password_hash column name
+        String query = "SELECT password_hash FROM PLAYERS WHERE username = ?";
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+
             stmt.setString(1, username);
             ResultSet rs = stmt.executeQuery();
+
             if (rs.next()) {
                 String storedHash = rs.getString("password_hash");
-                rs.close();
-                boolean verified = BCrypt.verifyer().verify(password.toCharArray(), storedHash).verified;
-                GameLogger.info("Authentication for username '" + username + "': " + verified);
+                boolean verified = BCrypt.verifyer().verify(
+                    password.getBytes(StandardCharsets.UTF_8),
+                    storedHash.getBytes(StandardCharsets.UTF_8)
+                ).verified;
+
+                if (verified) {
+                    updateLastLogin(username);
+                    GameLogger.info("Authentication successful for username: " + username);
+                } else {
+                    GameLogger.info("Authentication failed - invalid password for username: " + username);
+                }
+
                 return verified;
+            }
+            GameLogger.info("Authentication failed - username not found: " + username);
+            return false;
+        } catch (SQLException e) {
+            GameLogger.error("Database error during authentication: " + e.getMessage());
+            return false;
+        }
+    }  public String getPasswordHash(String username) {
+        String query = "SELECT password_hash FROM PLAYERS WHERE username = ?";
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+
+            stmt.setString(1, username);
+            ResultSet rs = stmt.executeQuery();
+
+            if (rs.next()) {
+                String storedHash = rs.getString("password_hash");
+                GameLogger.info("Retrieved password hash for username: " + username);
+                return storedHash;
             } else {
-                GameLogger.info("Authentication failed: Username '" + username + "' does not exist.");
-                rs.close();
-                return false;
+                GameLogger.info("No password hash found for username: " + username);
+                return null;
             }
         } catch (SQLException e) {
-            GameLogger.info("Authentication failed due to SQL error for username: " + username);
-            e.printStackTrace();
-            return false;
+            GameLogger.error("Database error retrieving password hash: " + e.getMessage());
+            return null;
+        }
+    }
+    private void updateLastLogin(String username) {
+        String sql = "UPDATE PLAYERS SET LAST_LOGIN = CURRENT_TIMESTAMP(), STATUS = 'ONLINE' WHERE USERNAME = ?";
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, username);
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            GameLogger.error("Error updating last login time: " + e.getMessage());
         }
     }
 
+
     public int[] getPlayerCoordinates(String username) {
-        String sql = "SELECT x, y FROM players WHERE username = ?";
-        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+        String sql = "SELECT x_pos, y_pos FROM PLAYERS WHERE username = ?";
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
             stmt.setString(1, username);
             ResultSet rs = stmt.executeQuery();
             if (rs.next()) {
-                int x = rs.getInt("x");
-                int y = rs.getInt("y");
-                rs.close();
-                // GameLogger.info("Retrieved coordinates for " + username + ": (" + x + ", " + y + ")");
-                return new int[]{x, y};
-            } else {
-                // GameLogger.info("No coordinates found for " + username + ", using default");
-                return new int[]{0, 0}; // Default spawn position
+                return new int[]{rs.getInt("x_pos"), rs.getInt("y_pos")};
             }
+            return new int[]{0, 0};
         } catch (SQLException e) {
-            GameLogger.info("Error retrieving coordinates for username: " + username);
-            e.printStackTrace();
-            return new int[]{0, 0}; // Default spawn position
+            GameLogger.error("Error retrieving coordinates: " + e.getMessage());
+            return new int[]{0, 0};
         }
     }
 }

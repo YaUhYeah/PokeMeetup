@@ -8,84 +8,31 @@ import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
-import io.github.pokemeetup.system.Player;
-import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
-import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.TextureManager;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
 
 import static com.badlogic.gdx.math.MathUtils.random;
 
 public class WorldObject {
     private static final float POKEBALL_DESPAWN_TIME = 300f;
+    public ObjectType type;  // Remove static
     private float pixelX;  // Remove static
     private float pixelY;  // Remove static
     private TextureRegion texture;
-    public ObjectType type;  // Remove static
     private String id;
     private boolean isDirty;
-
-    public void setPixelX(float pixelX) {
-        this.pixelX = pixelX;
-    }
-
-    public void setPixelY(float pixelY) {
-        this.pixelY = pixelY;
-    }
-
-    public void setTexture(TextureRegion texture) {
-        this.texture = texture;
-    }
-
-    public void setType(ObjectType type) {
-        this.type = type;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public void setDirty(boolean dirty) {
-        isDirty = dirty;
-    }
-
-    public boolean isCollidable() {
-        return isCollidable;
-    }
-
-    public void setCollidable(boolean collidable) {
-        isCollidable = collidable;
-    }
-
-    public float getSpawnTime() {
-        return spawnTime;
-    }
-
-    public void setSpawnTime(float spawnTime) {
-        this.spawnTime = spawnTime;
-    }
-
-    public void setRenderOrder(float renderOrder) {
-        this.renderOrder = renderOrder;
-    }
-
-    public void setTileX(int tileX) {
-        this.tileX = tileX;
-    }
-
-    public void setTileY(int tileY) {
-        this.tileY = tileY;
-    }
-
     private boolean isCollidable;
     private float spawnTime;
     private float renderOrder;
     private int tileX, tileY;
+    private WorldObject attachedTo; // New field to track what object (e.g. tree) a vine is attached to
+
 
     public WorldObject(int tileX, int tileY, TextureRegion texture, ObjectType type) {
         this.id = UUID.randomUUID().toString();
@@ -94,19 +41,20 @@ public class WorldObject {
         this.pixelX = tileX * World.TILE_SIZE;
         this.pixelY = tileY * World.TILE_SIZE;
         this.texture = texture;
+        this.attachedTo = null; // Initialize the new field
         this.type = type;
         this.isCollidable = type.isCollidable;
         this.spawnTime = type.isPermanent ? 0 : System.currentTimeMillis() / 1000f;
         this.renderOrder = type == ObjectType.TREE ? pixelY + World.TILE_SIZE : pixelY;
         this.isDirty = true;
-    }    // Add network-related methods
+    }
 
     public String getId() {
         return id;
     }
 
-    public boolean isDirty() {
-        return isDirty;
+    public void setId(String id) {
+        this.id = id;
     }
 
     public Map<String, Object> getSerializableData() {
@@ -129,25 +77,19 @@ public class WorldObject {
         isDirty = false;
     }
 
-    public void clearDirty() {
-        isDirty = false;
-    }
-
-    public void markDirty() {
-        isDirty = true;
-    }
-
     public ObjectType getType() {
         return type;
     }
 
+    public void setType(ObjectType type) {
+        this.type = type;
+    }
 
     public boolean isExpired() {
         if (type.isPermanent) return false;
         float currentTime = System.currentTimeMillis() / 1000f;
         return currentTime - spawnTime > POKEBALL_DESPAWN_TIME;
     }
-
 
     public boolean isUnderTree(float playerX, float playerY, float playerWidth, float playerHeight) {
         if (type != ObjectType.TREE && type != ObjectType.SNOW_TREE && type != ObjectType.HAUNTED_TREE) {
@@ -172,51 +114,8 @@ public class WorldObject {
         return treeTop.overlaps(playerBounds);
     }
 
-    public float getRenderOrder() {
-        return renderOrder;
-    }
-
-    public boolean intersects(float playerX, float playerY, float playerWidth, float playerHeight) {
-        if (!isCollidable) return false;
-
-        if (type == ObjectType.TREE) {
-            // For trees: 2 tiles wide, bottom and middle tiles are collidable
-            float treeBaseX = pixelX - World.TILE_SIZE; // Center the 2-tile width
-            float topTileY = pixelY + (World.TILE_SIZE * 2); // Start of top tile
-
-            // Only collide if in bottom two tiles (NOT in top tile) AND within horizontal bounds
-            boolean inBottomOrMiddleTiles = playerY + playerHeight <= topTileY;
-
-            return inBottomOrMiddleTiles &&
-                playerX < treeBaseX + (World.TILE_SIZE * 2) && // Full 2-tile width
-                playerX + playerWidth > treeBaseX &&
-                playerY + playerHeight > pixelY; // Above base of tree
-        }
-
-        // For pokeballs and other objects
-        return playerX < pixelX + World.TILE_SIZE &&
-            playerX + playerWidth > pixelX &&
-            playerY < pixelY + World.TILE_SIZE &&
-            playerY + playerHeight > pixelY;
-    }
-
-    public void render(SpriteBatch batch) {
-        if (type == ObjectType.TREE) {
-            // Center the 2-tile wide tree
-            float renderX = pixelX ; // Center by shifting left 1 tile
-            batch.draw(texture, renderX, pixelY,
-                World.TILE_SIZE * 2, // 2 tiles wide
-                World.TILE_SIZE * 3); // 3 tiles high
-        } else if (type == ObjectType.POKEBALL) {
-            batch.draw(texture, pixelX, pixelY, World.TILE_SIZE, World.TILE_SIZE);
-        }
-    }
-
-    private static final float TREE_BASE_WIDTH_RATIO = 0.5f;  // 50% of full width for collision
-    private static final float TREE_BASE_HEIGHT_RATIO = 0.3f; // 30% of full height for collision
-
     public Rectangle getBoundingBox() {
-        if (type == ObjectType.TREE || type == ObjectType.SNOW_TREE || type == ObjectType.HAUNTED_TREE) {
+        if (type == ObjectType.TREE || type == ObjectType.SNOW_TREE || type == ObjectType.HAUNTED_TREE || type == ObjectType.RAIN_TREE) {
             // Tree collision box: 2x2 tiles at the base only
             float treeBaseX = pixelX - World.TILE_SIZE; // Center the 2-tile width base
             float treeBaseY = pixelY; // Bottom of tree
@@ -238,10 +137,6 @@ public class WorldObject {
         }
     }
 
-    public boolean intersects(Rectangle bounds) {
-        return getBoundingBox().overlaps(bounds);
-    }
-
     public float getPixelX() {
         return pixelX;
     }
@@ -254,46 +149,153 @@ public class WorldObject {
         return texture;
     }
 
+    public void setTexture(TextureRegion texture) {
+        this.texture = texture;
+    }
+
+    public WorldObject getAttachedTo() {
+        return attachedTo;
+    }
+
+    public void setAttachedTo(WorldObject object) {
+        this.attachedTo = object;
+    }
+
     public int getTileX() {
         return tileX;
+    }
+
+    public void setTileX(int tileX) {
+        this.tileX = tileX;
     }
 
     public int getTileY() {
         return tileY;
     }
 
-    public boolean canBePickedUpBy(Player player) {
-        if (type != ObjectType.POKEBALL) return false;
-
-        return player.canPickupItem(pixelX, pixelY);
+    public void setTileY(int tileY) {
+        this.tileY = tileY;
     }
 
+    // Add these methods to WorldObject class
+    public Rectangle getCollisionBox() {
+        if (!type.isCollidable) {
+            return null; // No collision for non-collidable objects
+        }
+
+        if (type == ObjectType.TREE || type == ObjectType.SNOW_TREE ||
+            type == ObjectType.HAUNTED_TREE || type ==ObjectType.RAIN_TREE) {
+            // Trees have 2x2 collision at base only
+            return new Rectangle(
+                pixelX - World.TILE_SIZE, // Center the 2-tile base
+                pixelY,
+                World.TILE_SIZE * 2,
+                World.TILE_SIZE * 2
+            );
+        }
+
+        // Standard collision box
+        return new Rectangle(
+            pixelX,
+            pixelY,
+            type.widthInTiles * World.TILE_SIZE,
+            type.heightInTiles * World.TILE_SIZE
+        );
+    }
+
+    public void render(SpriteBatch batch) {
+        if (type.renderType == ObjectType.RenderLayer.LAYERED) {
+            // Objects like trees that need layered rendering
+            renderLayered(batch);
+        } else if (type == ObjectType.VINES && attachedTo != null) {
+            // Special rendering for vines attached to trees
+            renderVine(batch);
+        } else {
+            // Standard rendering
+            float width = type.widthInTiles * World.TILE_SIZE;
+            float height = type.heightInTiles * World.TILE_SIZE;
+            batch.draw(texture, pixelX, pixelY, width, height);
+        }
+    }
+
+    private void renderVine(SpriteBatch batch) {
+        if (attachedTo != null && (attachedTo.type == ObjectType.TREE ||
+            attachedTo.type == ObjectType.SNOW_TREE ||
+            attachedTo.type == ObjectType.HAUNTED_TREE ||
+            attachedTo.type == ObjectType.RAIN_TREE)) {
+
+            // Position vine at the top of the tree's canopy
+            float vineX = attachedTo.pixelX - World.TILE_SIZE; // Center on tree
+            float vineY = attachedTo.pixelY + (World.TILE_SIZE * 2); // Place at tree top
+
+            batch.draw(texture,
+                vineX + World.TILE_SIZE / 2, // Center on tree
+                vineY,
+                World.TILE_SIZE,
+                World.TILE_SIZE * 2);
+        }
+    }
+
+    private void renderLayered(SpriteBatch batch) {
+        switch (type) {
+            case TREE:
+            case SNOW_TREE:
+            case HAUNTED_TREE:
+            case RAIN_TREE:
+                float baseX = pixelX - World.TILE_SIZE;
+                batch.draw(texture, baseX, pixelY,
+                    World.TILE_SIZE * 2,
+                    World.TILE_SIZE * 3);
+                break;
+        }
+    }
+
+    // Add this to your WorldObject class
     public enum ObjectType {
-        TREE(true, true, 2, 3),      // 2 tiles wide, 3 tiles tall
-        POKEBALL(false, true, 1, 1), // 1x1 tile
+        // Static objects
+        TREE(true, true, 2, 3, RenderLayer.LAYERED),      // 2 tiles wide, 3 tiles tall, needs layered rendering
+        SNOW_TREE(true, true, 2, 3, RenderLayer.LAYERED),
+        HAUNTED_TREE(true, true, 2, 3, RenderLayer.LAYERED),
 
-        SNOW_TREE(true, true, 2, 3),
-        HAUNTED_TREE(true, true, 2, 3), CACTUS(true, true, 1, 2);
-        final boolean isPermanent;
-        final boolean isCollidable;
-        final int widthInTiles;
-        final int heightInTiles;
+        // Environmental objects
+        CACTUS(true, true, 1, 2, RenderLayer.FULL),
+        DEAD_TREE(true, true, 1, 2, RenderLayer.FULL),
+        SMALL_HAUNTED_TREE(true, true, 1, 2, RenderLayer.FULL),
+        BUSH(true, true, 3, 1, RenderLayer.FULL),
+        VINES(true, false, 1, 2, RenderLayer.FULL),
+        SNOW_BALL(true, true, 1, 1, RenderLayer.FULL),
+        RAIN_TREE(true, true, 2, 3, RenderLayer.LAYERED),
+        SUNFLOWER(true, false, 1, 2, RenderLayer.FULL),   // No collision
 
-        ObjectType(boolean isPermanent, boolean isCollidable, int widthInTiles, int heightInTiles) {
+        // Collectible objects
+        POKEBALL(false, true, 1, 1, RenderLayer.FULL);   // No collision, temporary
+
+        public final boolean isPermanent;    // Permanent or temporary object
+        public final boolean isCollidable;   // Has collision or not
+        public final int widthInTiles;       // Width in tiles
+        public final int heightInTiles;      // Height in tiles
+        public final RenderLayer renderType; // How to render this object
+
+        ObjectType(boolean isPermanent, boolean isCollidable,
+                   int widthInTiles, int heightInTiles, RenderLayer renderType) {
             this.isPermanent = isPermanent;
             this.isCollidable = isCollidable;
             this.widthInTiles = widthInTiles;
             this.heightInTiles = heightInTiles;
+            this.renderType = renderType;
+        }
+
+        public enum RenderLayer {
+            FULL,     // Render entire object at once
+            LAYERED   // Render in layers (e.g. tree base then top)
         }
     }
 
     public static class WorldObjectManager {
-        private static final float POKEBALL_SPAWN_CHANCE = 1f;
+        private static final float POKEBALL_SPAWN_CHANCE = 0.3f; // Reduced for better balance
         private static final int MAX_POKEBALLS_PER_CHUNK = 2;
-        private static final float TREE_SPAWN_CHANCE = 0.15f; // Increased chance
-        private static final float POKEBALL_SPAWN_INTERVAL = 10f; // Try spawning every 10 seconds
-        private static final int MIN_TREE_SPACING = 4; // Increased for larger trees
-
+        private static final int MIN_OBJECT_SPACING = 2; // Base spacing for small objects
+        private static final int MIN_TREE_SPACING = 4;   // Larger spacing for trees
         private final GameClient gameClient;
         private final Map<Vector2, List<WorldObject>> objectsByChunk = new ConcurrentHashMap<>();
         private final TextureAtlas atlas;
@@ -306,12 +308,77 @@ public class WorldObject {
             this.gameClient = gameClient;
             this.atlas = TextureManager.tiles;
             this.objectTextures = new HashMap<>();
-            objectTextures.put(WorldObject.ObjectType.TREE, atlas.findRegion("tree"));
-            objectTextures.put(WorldObject.ObjectType.SNOW_TREE, atlas.findRegion("snow_tree"));
-            objectTextures.put(WorldObject.ObjectType.HAUNTED_TREE, atlas.findRegion("haunted_tree"));
-            objectTextures.put(WorldObject.ObjectType.POKEBALL, atlas.findRegion("pokeball"));
+            objectTextures.put(ObjectType.TREE, atlas.findRegion("tree"));
+            objectTextures.put(ObjectType.SNOW_TREE, atlas.findRegion("snow_tree"));
+            objectTextures.put(ObjectType.HAUNTED_TREE, atlas.findRegion("haunted_tree"));
+            objectTextures.put(ObjectType.POKEBALL, atlas.findRegion("pokeball"));
             objectTextures.put(ObjectType.CACTUS, atlas.findRegion("desert_cactus"));
+            objectTextures.put(ObjectType.BUSH, atlas.findRegion("bush"));
+            objectTextures.put(ObjectType.SUNFLOWER, atlas.findRegion("sunflower"));
+            objectTextures.put(ObjectType.VINES, atlas.findRegion("vines"));
+            objectTextures.put(ObjectType.DEAD_TREE, atlas.findRegion("dead_tree"));
+            objectTextures.put(ObjectType.SMALL_HAUNTED_TREE, atlas.findRegion("small_haunted_tree"));
+            objectTextures.put(ObjectType.SNOW_BALL, atlas.findRegion("snowball"));
+            objectTextures.put(ObjectType.RAIN_TREE, atlas.findRegion("rain_tree"));
         }
+
+        private void tryPlaceVine(Chunk chunk, Vector2 chunkPos, List<WorldObject> objects, Random random) {
+            // Find all trees in the current chunk
+            List<WorldObject> trees = objects.stream()
+                .filter(obj -> obj.getType() == ObjectType.TREE ||
+                    obj.getType() == ObjectType.SNOW_TREE ||
+                    obj.getType() == ObjectType.HAUNTED_TREE ||
+                    obj.getType() == ObjectType.RAIN_TREE)
+                .collect(Collectors.toList());
+
+            // Chance for each tree to spawn a vine
+            float vineSpawnChance = 0.3f; // 30% chance per tree
+
+            for (WorldObject tree : trees) {
+                if (random.nextFloat() < vineSpawnChance) {
+                    // Create vine at tree's position
+                    TextureRegion vineTexture = objectTextures.get(ObjectType.VINES);
+                    if (vineTexture != null) {
+                        WorldObject vine = new WorldObject(
+                            tree.getTileX(),
+                            tree.getTileY(),
+                            vineTexture,
+                            ObjectType.VINES
+                        );
+                        vine.setAttachedTo(tree);
+                        objects.add(vine);
+                    }
+                }
+            }
+        }
+
+        public void generateObjectsForChunk(Vector2 chunkPos, Chunk chunk, Biome biome) {
+            List<WorldObject> objects = objectsByChunk.computeIfAbsent(chunkPos,
+                k -> new CopyOnWriteArrayList<>());
+            Random random = new Random((long) (worldSeed + chunkPos.x * 31 + chunkPos.y * 17));
+
+            // First generate all non-vine objects
+            List<String> spawnableObjects = biome.getSpawnableObjects().stream()
+                .filter(obj -> obj != ObjectType.VINES)
+                .map(Enum::name)
+                .collect(Collectors.toList());
+
+            // Handle object clusters
+            generateObjectClusters(chunk, chunkPos, objects, biome, random);
+
+            // Handle individual objects
+            for (int x = 0; x < Chunk.CHUNK_SIZE; x++) {
+                for (int y = 0; y < Chunk.CHUNK_SIZE; y++) {
+                    tryPlaceObject(chunk, x, y, objects, biome, chunkPos, random, spawnableObjects);
+                }
+            }
+
+            // After all other objects are placed, try to place vines on trees
+            if (biome.getSpawnableObjects().contains(ObjectType.VINES)) {
+                tryPlaceVine(chunk, chunkPos, objects, random);
+            }
+        }
+
 
         public void renderTreeBase(SpriteBatch batch, WorldObject tree) {
             // Position to center the tree on 2 tiles width
@@ -330,6 +397,46 @@ public class WorldObject {
 
             // Render the base as 2 tiles wide and 2 tiles tall
             batch.draw(baseRegion, renderX, renderY, World.TILE_SIZE * 2, World.TILE_SIZE * 2);
+        }
+
+
+        public void renderObject(SpriteBatch batch, WorldObject object) {
+            TextureRegion objectTexture = object.getTexture();
+            float renderX = object.getPixelX();
+            float renderY = object.getPixelY();
+
+            switch (object.getType()) {
+                case SUNFLOWER:
+                case VINES:
+                case DEAD_TREE:
+                case SMALL_HAUNTED_TREE:
+                    // Sunflower is 32x64 in your atlas (1x2 tiles)
+                    batch.draw(objectTexture,
+                        renderX, renderY,            // Position
+                        World.TILE_SIZE,             // Width (1 tile)
+                        World.TILE_SIZE * 2);        // Height (2 tiles)
+                    break;
+                case BUSH:
+                    batch.draw(objectTexture,
+                        renderX, renderY,            // Position
+                        World.TILE_SIZE * 3,             // Width (3 tile)
+                        World.TILE_SIZE * 2);        // Height (1 tile)
+                    break;
+                case CACTUS:
+                    // Desert cactus is 16x32 in your atlas (needs scaling up to 1x2 tiles)
+                    batch.draw(objectTexture,
+                        renderX, renderY,            // Position
+                        World.TILE_SIZE,             // Width (1 tile)
+                        World.TILE_SIZE * 2);        // Height (2 tiles)
+                    break;
+
+                default:
+                    // Default 1x1 rendering for other objects
+                    batch.draw(objectTexture,
+                        renderX, renderY,
+                        World.TILE_SIZE,
+                        World.TILE_SIZE);
+            }
         }
 
         public void renderTreeTop(SpriteBatch batch, WorldObject tree) {
@@ -383,28 +490,17 @@ public class WorldObject {
 
         public List<WorldObject> getObjectsForChunk(Vector2 chunkPos) {
             List<WorldObject> objects = objectsByChunk.get(chunkPos);
-            if (objects != null) {
-//                GameLogger.info("Found " + objects.size() + " objects in chunk " + chunkPos.x + "," + chunkPos.y);
-            }
             return objects != null ? objects : Collections.emptyList();
         }
 
-        // In WorldObject.WorldObjectManager class
-        public void addObjectToChunk(Vector2 chunkPos, WorldObject object) {
-            // Calculate actual chunk position based on object's pixel coordinates
+        public void addObjectToChunk(WorldObject object) {
             int actualChunkX = (int) Math.floor(object.getPixelX() / (Chunk.CHUNK_SIZE * World.TILE_SIZE));
             int actualChunkY = (int) Math.floor(object.getPixelY() / (Chunk.CHUNK_SIZE * World.TILE_SIZE));
             Vector2 actualChunkPos = new Vector2(actualChunkX, actualChunkY);
 
-            // Log chunk assignment
-//            GameLogger.info("Adding object to chunk: " + actualChunkPos.x + "," + actualChunkPos.y +
-//                " at position: " + object.getPixelX() + "," + object.getPixelY());
-
             List<WorldObject> objects = objectsByChunk.computeIfAbsent(actualChunkPos, k -> new CopyOnWriteArrayList<>());
             objects.add(object);
 
-            // Log the number of objects in chunk
-//            GameLogger.info("Chunk now has " + objects.size() + " objects");
         }
 
         public void removeObjectFromChunk(Vector2 chunkPos, String objectId) {
@@ -415,45 +511,7 @@ public class WorldObject {
                 // Implement sendObjectRemove if not already done
                 sendObjectRemove(objectId);
             }
-        }public void renderTree(SpriteBatch batch, WorldObject tree) {
-            // Base position centered on two tiles
-            float baseX = tree.getPixelX() - World.TILE_SIZE; // Shift left by 1 tile to center
-            float baseY = tree.getPixelY(); // Tree base Y position
-
-            TextureRegion treeRegion = tree.getTexture();
-            int totalWidth = treeRegion.getRegionWidth();
-            int totalHeight = treeRegion.getRegionHeight();
-
-            // Split into base (2/3 height) and top (1/3 height)
-            int baseHeight = (int) (totalHeight * 2 / 3f);
-            int topHeight = totalHeight - baseHeight;
-
-            // Draw the base (2 tiles wide x 2 tiles high)
-            TextureRegion baseRegion = new TextureRegion(treeRegion, 0, totalHeight - baseHeight, totalWidth, baseHeight);
-            batch.draw(baseRegion, baseX, baseY, World.TILE_SIZE * 2, World.TILE_SIZE * 2);
-
-            // Draw the top (2 tiles wide x 1 tile high) 2 tiles above the base
-            TextureRegion topRegion = new TextureRegion(treeRegion, 0, 0, totalWidth, topHeight);
-            batch.draw(topRegion, baseX, baseY + World.TILE_SIZE * 2, World.TILE_SIZE * 2, World.TILE_SIZE);
         }
-
-        public Rectangle getTreeBoundingBox(WorldObject tree) {
-            // Base position centered on two tiles
-            float baseX = tree.getPixelX() - (World.TILE_SIZE / 2f); // Center on two tiles
-            float baseY = tree.getPixelY();
-
-            // Set bounding box only for the trunk (base of the tree)
-            float trunkWidth = World.TILE_SIZE; // Trunk spans 1 tile in width
-            float trunkHeight = World.TILE_SIZE; // Collision height for the trunk only
-
-            return new Rectangle(baseX, baseY, trunkWidth, trunkHeight);
-        }
-
-        public void handleNetworkUpdate(NetworkProtocol.WorldObjectUpdate update) {
-            Vector2 chunkPos = calculateChunkPos(update);
-            operationQueue.add(new UpdateOperation(chunkPos, update));
-        }
-
 
         public void update(Map<Vector2, Chunk> loadedChunks) {
             // Process all pending operations first
@@ -558,7 +616,6 @@ public class WorldObject {
         }
 
         private void spawnPokeball(Vector2 chunkPos, List<WorldObject> objects, Chunk chunk) {
-            // Try several times to find a valid spawn location
             for (int attempts = 0; attempts < 10; attempts++) {
                 int localX = random.nextInt(Chunk.CHUNK_SIZE);
                 int localY = random.nextInt(Chunk.CHUNK_SIZE);
@@ -570,7 +627,6 @@ public class WorldObject {
                     int worldTileX = (int) (chunkPos.x * Chunk.CHUNK_SIZE) + localX;
                     int worldTileY = (int) (chunkPos.y * Chunk.CHUNK_SIZE) + localY;
 
-                    // Check if location is clear of other objects
                     boolean locationClear = true;
                     for (WorldObject obj : objects) {
                         if (Math.abs(obj.getTileX() - worldTileX) < 2 &&
@@ -599,28 +655,6 @@ public class WorldObject {
                 }
             }
         }
-
-
-
-        private Vector2 calculateChunkPos(NetworkProtocol.WorldObjectUpdate update) {
-            int tileX = (int) update.data.get("tileX");
-            int tileY = (int) update.data.get("tileY");
-            int chunkX = Math.floorDiv(tileX, Chunk.CHUNK_SIZE);
-            int chunkY = Math.floorDiv(tileY, Chunk.CHUNK_SIZE);
-            return new Vector2(chunkX, chunkY);
-        }
-
-        private WorldObject createObjectFromUpdate(NetworkProtocol.WorldObjectUpdate update) {
-            ObjectType type = ObjectType.valueOf((String) update.data.get("type"));
-            TextureRegion texture = objectTextures.get(type);
-            return new WorldObject(
-                (int) update.data.get("tileX"),
-                (int) update.data.get("tileY"),
-                texture,
-                type
-            );
-        }
-
 
         private void sendObjectSpawn(WorldObject object) {
             if (gameClient == null || gameClient.isSinglePlayer()) return;
@@ -656,24 +690,313 @@ public class WorldObject {
             return new WorldObject(tileX, tileY, texture, type);
         }
 
-        public void generateObjectsForChunk(Vector2 chunkPos, Chunk chunk, Biome biome) {
-            List<WorldObject> objects = objectsByChunk.computeIfAbsent(chunkPos, k -> new CopyOnWriteArrayList<>());
-            Random random = new Random((long) (worldSeed + chunkPos.x * 31 + chunkPos.y * 17)); // Better seed mixing
+        private void tryPlaceObject(Chunk chunk, int x, int y, List<WorldObject> objects,
+                                    Biome biome, Vector2 chunkPos, Random random, List<String> spawnableObjects) {
+            if (!spawnableObjects.isEmpty() && canPlaceObject(chunk, x, y, objects, biome)) {
+                String objectType = spawnableObjects.get(random.nextInt(spawnableObjects.size()));
+                WorldObject.ObjectType type = WorldObject.ObjectType.valueOf(objectType);
 
-            WorldObject.ObjectType treeType = determineTreeType(biome);
-            float baseSpawnChance = getSpawnChance(biome);
+                // Check spawn chance before placing
+                if (biome.shouldSpawnObject(type, random)) {
+                    placeObject(chunk, x, y, objects, biome, chunkPos, random, objectType);
+                }
+            }
+        }
 
-            // Try multiple passes for tree placement
-            for (int attempts = 0; attempts < 3; attempts++) { // Multiple attempts per chunk
-                for (int x = 0; x < Chunk.CHUNK_SIZE; x++) {
-                    for (int y = 0; y < Chunk.CHUNK_SIZE; y++) {
-                        if (shouldSpawnObjectAt(chunk, x, y, biome, random) &&
-                            random.nextFloat() < baseSpawnChance) {
-                            tryPlaceTree(chunk, x, y, objects, biome, chunkPos, treeType);
+
+        private void generateObjectClusters(Chunk chunk, Vector2 chunkPos, List<WorldObject> objects,
+                                            Biome biome, Random random) {
+            int clusterAttempts = Math.max(1, (int) (Chunk.CHUNK_SIZE * 5f));
+
+            for (int i = 0; i < clusterAttempts; i++) {
+                if (random.nextFloat() < 0.3f) { // Cluster formation chance
+                    int centerX = random.nextInt(Chunk.CHUNK_SIZE);
+                    int centerY = random.nextInt(Chunk.CHUNK_SIZE);
+                    int clusterSize = random.nextInt(3) + 2; // 2-4 objects per cluster
+
+                    // Select a random object type for the cluster
+                    List<WorldObject.ObjectType> spawnableObjects = biome.getSpawnableObjects();
+                    if (!spawnableObjects.isEmpty()) {
+                        WorldObject.ObjectType selectedType = spawnableObjects.get(
+                            random.nextInt(spawnableObjects.size()));
+
+                        // Check spawn chance for the cluster
+                        if (biome.shouldSpawnObject(selectedType, random)) {
+                            generateCluster(chunk, chunkPos, objects, biome, random,
+                                centerX, centerY, clusterSize);
                         }
                     }
                 }
             }
+        }
+
+        private void placeObject(Chunk chunk, int x, int y, List<WorldObject> objects,
+                                 ObjectType objectType, Vector2 chunkPos, boolean[][] occupiedTiles) {
+            // Convert to world coordinates
+            int worldTileX = (int) (chunkPos.x * Chunk.CHUNK_SIZE + x);
+            int worldTileY = (int) (chunkPos.y * Chunk.CHUNK_SIZE + y);
+
+            TextureRegion texture = objectTextures.get(objectType);
+            if (texture != null) {
+                WorldObject object = new WorldObject(worldTileX, worldTileY, texture, objectType);
+                objects.add(object);
+
+                // Mark tiles as occupied based on object size
+                int occupyWidth = objectType.widthInTiles;
+                int occupyHeight = objectType.heightInTiles;
+
+                for (int dx = 0; dx < occupyWidth && (x + dx) < Chunk.CHUNK_SIZE; dx++) {
+                    for (int dy = 0; dy < occupyHeight && (y + dy) < Chunk.CHUNK_SIZE; dy++) {
+                        if (x + dx >= 0 && x + dx < Chunk.CHUNK_SIZE &&
+                            y + dy >= 0 && y + dy < Chunk.CHUNK_SIZE) {
+                            occupiedTiles[x + dx][y + dy] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        private ObjectType selectLargeObjectType(Biome biome, Random random) {
+            List<ObjectType> validTypes = biome.getSpawnableObjects().stream()
+                .filter(type -> type == ObjectType.TREE ||
+                    type == ObjectType.SNOW_TREE ||
+                    type == ObjectType.HAUNTED_TREE)
+                .collect(Collectors.toList());
+
+            return validTypes.isEmpty() ? null : validTypes.get(random.nextInt(validTypes.size()));
+        }
+
+        private ObjectType selectSmallObjectType(Biome biome, Random random) {
+            List<ObjectType> validTypes = biome.getSpawnableObjects().stream()
+                .filter(type -> type != ObjectType.TREE &&
+                    type != ObjectType.SNOW_TREE &&
+                    type != ObjectType.HAUNTED_TREE)
+                .collect(Collectors.toList());
+
+            return validTypes.isEmpty() ? null : validTypes.get(random.nextInt(validTypes.size()));
+        }
+
+        private boolean canPlaceSmallObject(Chunk chunk, int x, int y, boolean[][] occupiedTiles, Biome biome) {
+            // Check immediate surrounding tiles
+            int spacing = MIN_OBJECT_SPACING;
+
+            // Check if out of bounds
+            if (x < spacing || y < spacing ||
+                x >= Chunk.CHUNK_SIZE - spacing ||
+                y >= Chunk.CHUNK_SIZE - spacing) {
+                return false;
+            }
+
+            // Check surrounding area
+            for (int dx = -spacing; dx <= spacing; dx++) {
+                for (int dy = -spacing; dy <= spacing; dy++) {
+                    int checkX = x + dx;
+                    int checkY = y + dy;
+
+                    if (checkX < 0 || checkX >= Chunk.CHUNK_SIZE ||
+                        checkY < 0 || checkY >= Chunk.CHUNK_SIZE) {
+                        continue;
+                    }
+
+                    if (occupiedTiles[checkX][checkY]) {
+                        return false;
+                    }
+                }
+            }
+
+            // Check tile type
+            int tileType = chunk.getTileType(x, y);
+            return biome.getAllowedTileTypes().contains(tileType);
+        }
+
+        private void placeSmallObjects(Chunk chunk, Vector2 chunkPos, List<WorldObject> objects,
+                                       Biome biome, Random random, boolean[][] occupiedTiles) {
+            for (int x = 0; x < Chunk.CHUNK_SIZE; x++) {
+                for (int y = 0; y < Chunk.CHUNK_SIZE; y++) {
+                    if (!occupiedTiles[x][y] && random.nextFloat() < 0.1f) { // 10% chance per tile
+                        ObjectType objectType = selectSmallObjectType(biome, random);
+                        if (objectType != null && canPlaceSmallObject(chunk, x, y, occupiedTiles, biome)) {
+                            placeObject(chunk, x, y, objects, objectType, chunkPos, occupiedTiles);
+                        }
+                    }
+                }
+            }
+        }
+
+        private boolean canPlaceLargeObject(Chunk chunk, int x, int y, boolean[][] occupiedTiles, Biome biome) {
+            // Check a 3x3 area for trees (including spacing)
+            int spacing = MIN_TREE_SPACING;
+
+            // Check if out of bounds
+            if (x < spacing || y < spacing ||
+                x >= Chunk.CHUNK_SIZE - spacing ||
+                y >= Chunk.CHUNK_SIZE - spacing) {
+                return false;
+            }
+
+            // Check surrounding area
+            for (int dx = -spacing; dx <= spacing; dx++) {
+                for (int dy = -spacing; dy <= spacing; dy++) {
+                    int checkX = x + dx;
+                    int checkY = y + dy;
+
+                    // Skip if outside chunk bounds
+                    if (checkX < 0 || checkX >= Chunk.CHUNK_SIZE ||
+                        checkY < 0 || checkY >= Chunk.CHUNK_SIZE) {
+                        continue;
+                    }
+
+                    // Check if tile is already occupied
+                    if (occupiedTiles[checkX][checkY]) {
+                        return false;
+                    }
+
+                    // Check if tile type is valid for object placement
+                    int tileType = chunk.getTileType(checkX, checkY);
+                    if (!biome.getAllowedTileTypes().contains(tileType)) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private void generateCluster(Chunk chunk, Vector2 chunkPos, List<WorldObject> objects,
+                                     Biome biome, Random random, int centerX, int centerY, int clusterSize) {
+            // Define cluster spread radius
+            int spreadRadius = 3;
+
+            // Keep track of placed object positions to avoid overlaps
+            Set<Point> occupiedPositions = new HashSet<>();
+
+            // Try to place objects around the center point
+            for (int i = 0; i < clusterSize; i++) {
+                // Try several times to find a valid position
+                for (int attempts = 0; attempts < 10; attempts++) {
+                    // Calculate random offset from center
+                    int offsetX = random.nextInt(spreadRadius * 2) - spreadRadius;
+                    int offsetY = random.nextInt(spreadRadius * 2) - spreadRadius;
+
+                    int newX = centerX + offsetX;
+                    int newY = centerY + offsetY;
+
+                    // Check if position is within chunk bounds
+                    if (newX >= 0 && newX < Chunk.CHUNK_SIZE &&
+                        newY >= 0 && newY < Chunk.CHUNK_SIZE) {
+
+                        Point position = new Point(newX, newY);
+
+                        // Check if position is not occupied and placement is valid
+                        if (!occupiedPositions.contains(position) &&
+                            canPlaceObjectAt(chunk, newX, newY, biome)) {
+
+                            // Convert to world coordinates
+                            int worldTileX = (int) (chunkPos.x * Chunk.CHUNK_SIZE + newX);
+                            int worldTileY = (int) (chunkPos.y * Chunk.CHUNK_SIZE + newY);
+
+                            // Create and add the object
+                            WorldObject.ObjectType objType = biome.getSpawnableObjects().get(
+                                random.nextInt(biome.getSpawnableObjects().size())
+                            );
+
+                            TextureRegion texture = TextureManager.getTextureForObjectType(objType);
+                            if (texture != null) {
+                                WorldObject object = new WorldObject(worldTileX, worldTileY, texture, objType);
+                                objects.add(object);
+                                occupiedPositions.add(position);
+                                break; // Successfully placed object, move to next one
+                            }
+                        }
+                    }
+                }
+            }
+        }// Helper class for position tracking
+
+        private boolean canPlaceObjectAt(Chunk chunk, int localX, int localY, Biome biome) {
+            // Get tile type at position
+            int tileType = chunk.getTileType(localX, localY);
+
+            // Check if tile type is allowed for object placement
+            if (!biome.getAllowedTileTypes().contains(tileType)) {
+                return false;
+            }
+
+            // Check surrounding tiles for minimum spacing
+            int spacing = 1;
+            for (int dx = -spacing; dx <= spacing; dx++) {
+                for (int dy = -spacing; dy <= spacing; dy++) {
+                    int checkX = localX + dx;
+                    int checkY = localY + dy;
+
+                    // Skip if outside chunk bounds
+                    if (checkX < 0 || checkX >= Chunk.CHUNK_SIZE ||
+                        checkY < 0 || checkY >= Chunk.CHUNK_SIZE) {
+                        continue;
+                    }
+
+                    // Check tile type of surrounding tiles
+                    int surroundingTile = chunk.getTileType(checkX, checkY);
+                    if (!biome.getAllowedTileTypes().contains(surroundingTile)) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private void placeObject(Chunk chunk, int x, int y, List<WorldObject> objects,
+                                 Biome biome, Vector2 chunkPos, Random random, String objectType) {
+            int worldTileX = (int) ((chunkPos.x * Chunk.CHUNK_SIZE) + x);
+            int worldTileY = (int) ((chunkPos.y * Chunk.CHUNK_SIZE) + y);
+
+            WorldObject.ObjectType type = WorldObject.ObjectType.valueOf(objectType);
+            TextureRegion texture = objectTextures.get(type);
+
+            if (texture != null) {
+                float scale = 0.8f + random.nextFloat() * 0.4f; // Random scale 0.8-1.2
+                WorldObject object = new WorldObject(worldTileX, worldTileY, texture, type);
+                // Add variation in rotation for non-tree objects
+                if (type != ObjectType.TREE && type != ObjectType.SNOW_TREE
+                    && type != ObjectType.HAUNTED_TREE) {
+                    // Add rotation variation logic here if needed
+                }
+                objects.add(object);
+            }
+        }
+
+        private boolean canPlaceObject(Chunk chunk, int x, int y, List<WorldObject> objects, Biome biome) {
+            // Check if tile type is allowed for object placement
+            int tileType = chunk.getTileType(x, y);
+            if (!biome.getAllowedTileTypes().contains(tileType)) {
+                return false;
+            }
+
+            // Check spacing between objects
+            int minSpacing = 2; // Default spacing
+            if (objects != null) {
+                int worldX = (int) (chunk.getChunkX() * Chunk.CHUNK_SIZE + x);
+                int worldY = (int) (chunk.getChunkY() * Chunk.CHUNK_SIZE + y);
+
+                for (WorldObject obj : objects) {
+                    int dx = Math.abs(obj.getTileX() - worldX);
+                    int dy = Math.abs(obj.getTileY() - worldY);
+
+                    // Adjust spacing based on object type
+                    if (obj.getType() == ObjectType.TREE ||
+                        obj.getType() == ObjectType.SNOW_TREE ||
+                        obj.getType() == ObjectType.HAUNTED_TREE) {
+                        minSpacing = MIN_TREE_SPACING;
+                    }
+
+                    if (dx < minSpacing && dy < minSpacing) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
         }
 
         private void tryPlaceTree(Chunk chunk, int x, int y, List<WorldObject> objects,
@@ -690,99 +1013,30 @@ public class WorldObject {
             }
         }
 
-        // Determine tree type based on biome type
-        private WorldObject.ObjectType determineTreeType(Biome biome) {
-            switch (biome.getType()) {
-                case SNOW:
-                    return WorldObject.ObjectType.SNOW_TREE;
-                case DESERT:
-                    return ObjectType.CACTUS;
-                case HAUNTED:
-                    return WorldObject.ObjectType.HAUNTED_TREE;
-                default:
-                    return WorldObject.ObjectType.TREE;
-            }
-        }
-
-        // Get the base spawn chance based on biome type
-
         private float getSpawnChance(Biome biome) {
             switch (biome.getType()) {
                 case SNOW:
-                    return 0.2f;      // More trees in snow
+                    return 0.2f;
                 case HAUNTED:
-                    return 0.5f;      // High density in haunted
+                    return 0.5f;
                 case FOREST:
-                    return 0.8f;      // Very high density in forest
+                    return 0.8f;
                 case PLAINS:
-                    return 0.1f;      // Low density in plains
+                    return 0.1f;
                 default:
                     return 0.15f;
             }
         }
 
-        // Determine if an object should spawn at a given location based on the biome and tile type
         private boolean shouldSpawnObjectAt(Chunk chunk, int localX, int localY, Biome biome, Random random) {
             int tileType = chunk.getTileType(localX, localY);
-
-            // Check if the tile type is allowed for spawning in the current biome
             if (!biome.getAllowedTileTypes().contains(tileType)) {
                 return false;
             }
-
-            // Get the adjusted spawn chance for this specific tile type
             float spawnChance = biome.getSpawnChanceForTileType(tileType);
             return random.nextFloat() < spawnChance;
         }
-        public void createObjectFromData(WorldData.WorldObjectData data) {
-            if (data == null) {
-                GameLogger.error("Cannot create object from null data");
-                return;
-            }
 
-            try {
-                // Convert world object type from string
-                WorldObject.ObjectType objectType = WorldObject.ObjectType.valueOf(data.type);
-
-                // Get appropriate texture for the object type
-                TextureRegion texture = TextureManager.getTextureForObjectType(objectType);
-
-                if (texture == null) {
-                    GameLogger.error("No texture found for object type: " + objectType);
-                    return;
-                }
-
-                // Convert pixel coordinates to tile coordinates
-                int tileX = (int) Math.floor(data.x / World.TILE_SIZE);
-                int tileY = (int) Math.floor(data.y / World.TILE_SIZE);
-
-                // Create the world object
-                WorldObject worldObject = new WorldObject(tileX, tileY, texture, objectType);
-
-                // Set the ID if it exists in the data
-                if (data.id != null) {
-                    worldObject.setId(data.id);
-                }
-
-                // Calculate chunk position
-                Vector2 chunkPos = new Vector2(
-                    Math.floorDiv(tileX, Chunk.CHUNK_SIZE),
-                    Math.floorDiv(tileY, Chunk.CHUNK_SIZE)
-                );
-
-                // Add object to the appropriate chunk
-                addObjectToChunk(chunkPos, worldObject);
-
-                GameLogger.info("Created " + objectType + " at (" + tileX + ", " + tileY + ")");
-
-            } catch (IllegalArgumentException e) {
-                GameLogger.error("Invalid object type: " + data.type);
-            } catch (Exception e) {
-                GameLogger.error("Failed to create world object: " + e.getMessage());
-                e.printStackTrace();
-            }
-        }
-        // Ensure trees are spaced out and only spawn on appropriate tiles
         private boolean canPlaceTree(Chunk chunk, int localX, int localY, List<WorldObject> existingObjects, Biome biome) {
             int treeBaseWidth = 2;  // Base is 2x2 tiles
             int treeBaseHeight = 2;
@@ -805,14 +1059,10 @@ public class WorldObject {
                     }
                 }
             }
-
-            // Calculate world coordinates
             int chunkWorldX = chunk.getChunkX() * Chunk.CHUNK_SIZE;
             int chunkWorldY = chunk.getChunkY() * Chunk.CHUNK_SIZE;
             int treeWorldX = chunkWorldX + localX;
             int treeWorldY = chunkWorldY + localY;
-
-            // Check spacing from other trees
             int minSpacing = MIN_TREE_SPACING;
             for (WorldObject obj : existingObjects) {
                 if (obj.getType() == ObjectType.TREE ||
@@ -829,40 +1079,27 @@ public class WorldObject {
             return true;
         }
 
-        public boolean isColliding(Rectangle bounds) {
-            // Calculate chunk coordinates from the center of the bounds
-            int chunkX = (int) Math.floor((bounds.x + bounds.width / 2) / (Chunk.CHUNK_SIZE * World.TILE_SIZE));
-            int chunkY = (int) Math.floor((bounds.y + bounds.height / 2) / (Chunk.CHUNK_SIZE * World.TILE_SIZE));
-            Vector2 chunkPos = new Vector2(chunkX, chunkY);
+        private static class Point {
+            final int x, y;
 
-            // Check surrounding chunks to handle edge cases
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    Vector2 checkPos = new Vector2(chunkX + dx, chunkY + dy);
-                    List<WorldObject> objects = objectsByChunk.get(checkPos);
-
-                    if (objects != null) {
-                        for (WorldObject obj : objects) {
-                            if (obj.isCollidable && obj.getBoundingBox().overlaps(bounds)) {
-                                GameLogger.info("Collision with object: " + obj.getType() +
-                                    " at (" + obj.getPixelX() + ", " + obj.getPixelY() + ")");
-                                return true;
-                            }
-                        }
-                    }
-                }
+            Point(int x, int y) {
+                this.x = x;
+                this.y = y;
             }
 
-            return false;
-        }
+            @Override
+            public boolean equals(Object o) {
+                if (this == o) return true;
+                if (o == null || getClass() != o.getClass()) return false;
+                Point point = (Point) o;
+                return x == point.x && y == point.y;
+            }
 
-        public void renderChunkObjects(SpriteBatch batch, Vector2 chunkPos) {
-            List<WorldObject> objects = objectsByChunk.get(chunkPos);
-            if (objects != null) {
-                for (WorldObject obj : objects) {
-                    obj.render(batch);
-                }
+            @Override
+            public int hashCode() {
+                return Objects.hash(x, y);
             }
         }
     }
+
 }

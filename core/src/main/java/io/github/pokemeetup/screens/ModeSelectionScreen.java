@@ -18,8 +18,6 @@ import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
 import io.github.pokemeetup.utils.TextureManager;
 
-import java.io.IOException;
-
 public class ModeSelectionScreen implements Screen {
     private final CreatureCaptureGame game;
     private final Stage stage;
@@ -147,12 +145,8 @@ public class ModeSelectionScreen implements Screen {
             @Override
             public void changed(ChangeEvent event, Actor actor) {
                 // Navigate to multiplayer login
-                try {
-                    game.setScreen(new LoginScreen(game));
-                    dispose();
-                } catch (IOException e) {
-                    showError("Failed to start multiplayer mode: " + e.getMessage());
-                }
+                game.setScreen(new LoginScreen(game));
+                dispose();
             }
         });
 

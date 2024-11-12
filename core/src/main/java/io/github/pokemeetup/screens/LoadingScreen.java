@@ -5,21 +5,27 @@ import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
-import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import io.github.pokemeetup.CreatureCaptureGame;
+import io.github.pokemeetup.utils.GameLogger;
 
-// Add a simple LoadingScreen class
 public class LoadingScreen implements Screen {
     private final CreatureCaptureGame game;
-    private final ShapeRenderer shapeRenderer;
+    private Screen nextScreen;
+    private boolean initialized = false;
+    private float progress = 0;
     private final SpriteBatch batch;
     private final BitmapFont font;
+    private boolean disposed = false;
 
-    public LoadingScreen(CreatureCaptureGame game) {
+    public LoadingScreen(CreatureCaptureGame game, Screen nextScreen) {
         this.game = game;
-        this.shapeRenderer = new ShapeRenderer();
+        this.nextScreen = nextScreen;
         this.batch = new SpriteBatch();
         this.font = new BitmapFont();
+    }
+
+    public void setNextScreen(Screen screen) {
+        this.nextScreen = screen;
     }
 
     @Override
@@ -29,24 +35,28 @@ public class LoadingScreen implements Screen {
 
     @Override
     public void render(float delta) {
-        Gdx.gl.glClearColor(0, 0, 0, 1);
+        if (disposed) return;
+
+        // Clear screen
+        Gdx.gl.glClearColor(0.1f, 0.1f, 0.1f, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
-        float progress = game.getAssetManager().getProgress();
+        // Update progress
+        progress = Math.min(1, progress + delta * 0.5f);
 
-        // Draw loading bar
-        shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
-        shapeRenderer.setColor(0.3f, 0.3f, 0.3f, 1);
-        shapeRenderer.rect(100, Gdx.graphics.getHeight()/2 - 10, Gdx.graphics.getWidth() - 200, 20);
-        shapeRenderer.setColor(0, 1, 0, 1);
-        shapeRenderer.rect(100, Gdx.graphics.getHeight()/2 - 10, (Gdx.graphics.getWidth() - 200) * progress, 20);
-        shapeRenderer.end();
-
-        // Draw loading text
+        // Draw loading info
         batch.begin();
         font.draw(batch, "Loading... " + (int)(progress * 100) + "%",
-            Gdx.graphics.getWidth()/2 - 50, Gdx.graphics.getHeight()/2 + 50);
+            20, Gdx.graphics.getHeight() - 20);
         batch.end();
+
+        // Check for transition
+        if (nextScreen != null && progress >= 1) {
+            GameLogger.info("Loading complete, transitioning to next screen");
+            disposed = true;
+            game.setScreen(nextScreen);
+            dispose();
+        }
     }
 
     @Override
@@ -69,12 +79,12 @@ public class LoadingScreen implements Screen {
 
     }
 
-    // Implement other Screen methods...
-
     @Override
     public void dispose() {
-        shapeRenderer.dispose();
-        batch.dispose();
-        font.dispose();
+        if (!disposed) {
+            disposed = true;
+            batch.dispose();
+            font.dispose();
+        }
     }
 }

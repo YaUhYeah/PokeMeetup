@@ -10,6 +10,7 @@ import io.github.pokemeetup.multiplayer.server.entity.PokeballEntity;
 import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.system.data.ItemData;
 import com.badlogic.gdx.math.Vector2;
+import io.github.pokemeetup.system.data.PlayerData;
 import io.github.pokemeetup.system.data.PokemonData;
 import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
@@ -34,6 +35,7 @@ public class NetworkProtocol {
         kryo.register(NetworkObjectUpdateType.class);
         kryo.register(NetworkedWorldObject.ObjectType.class);
         kryo.register(ChatType.class);
+        kryo.register(ForceDisconnect.class);
 
         // Request and response classes
         kryo.register(LoginRequest.class);
@@ -51,7 +53,7 @@ public class NetworkProtocol {
         kryo.register(PlayerJoined.class);
         kryo.register(PlayerLeft.class);
         kryo.register(WorldObjectUpdate.class);
-
+        kryo.register(Keepalive.class);
         // Complex data models and entities
         kryo.register(WorldState.class);
         kryo.register(PlayerState.class);
@@ -62,17 +64,18 @@ public class NetworkProtocol {
         // Networked entities
         kryo.register(NetworkedWorldObject.class);
         kryo.register(NetworkedTree.class);
+        kryo.register(WorldStateUpdate.class);
         kryo.register(NetworkedPokeball.class);
         kryo.register(ConnectionResponse.class);
         kryo.register(ConnectionRequest.class);
         kryo.register(ConnectionStatus.class);
-
+        kryo.register(Logout.class);
         kryo.register(UsernameCheckRequest.class);
         kryo.register(UsernameCheckResponse.class);
         kryo
             .register(io.github.pokemeetup.system.data.WorldData.class);
-        kryo
-            .register(io.github.pokemeetup.system.data.PlayerData.class);
+        kryo.register(PlayerData.class);
+        kryo.register(PlayerData[].class);
         // Miscellaneous
         kryo.register(io.github.pokemeetup.system.data.WorldData.WorldConfig.class);
 
@@ -87,11 +90,20 @@ public class NetworkProtocol {
         kryo.register(ChatMessage.class);
         kryo.register(TeamInvite.class);
         kryo.register(TeamHQUpdate.class);
+        kryo.register(ServerInfoRequest.class);
+        kryo.register(ServerInfoResponse.class);
+        kryo.register(ServerInfo.class);
         // Additional Entity subclasses
         kryo.register(CreatureEntity.class);
         kryo.register(PokeballEntity.class);
+        kryo.register(ForceDisconnect.class);
+        kryo.register(ForceLogout.class);
         kryo.register(Object.class);
-
+//            kryo.register(Keepalive.class);
+        kryo.register(ReliableUpdate.class);
+        kryo.register(ClientMessage.class);
+        kryo.register(ServerResponse.class);
+        kryo.register(ConnectionValidation.class);
         kryo.register(UUID.class, new com.esotericsoftware.kryo.Serializer<UUID>() {
 
             @Override
@@ -135,9 +147,66 @@ public class NetworkProtocol {
 
     }
 
+    public static
+    class LogoutResponse {
+        public boolean success;
+        public String message;
+    }
+    public static class ConnectionValidation {
+        public String username;
+        public long timestamp;
+        public String sessionId; // Add a unique session ID for each connection
+    }
+    public static class ClientMessage {
+        public static final int TYPE_LOGOUT = 1;
+
+        public int type;
+        public String username;
+        public long timestamp;
+        public Map<String, Object> data;
+    }
+
+    public static class ServerResponse {
+        public boolean success;
+        public String message;
+        public long timestamp;
+        public Map<String, Object> data;
+    }
+
+    public static class Logout {
+        public String username;
+        public long timestamp;
+    }
+
+    public static class ForceLogout {
+        public String reason;
+        public boolean serverShutdown;
+    }
+
+    public static class ServerInfo {
+        public String name;
+        public String motd; // Message of the day
+        public String iconBase64; // Base64 encoded server icon
+        public int playerCount;
+        public int maxPlayers;
+        public long ping;
+        public String version;
+    }
+
+    public static class ServerInfoRequest {
+        public long timestamp;
+    }
+
+    public static class ServerInfoResponse {
+        public ServerInfo serverInfo;
+        public long timestamp;
+    }
+
     public static class ConnectionResponse {
         public boolean success;
         public String message;
+        public String username;
+        public String token;
     }
 
     public static class ConnectionRequest {
@@ -180,12 +249,16 @@ public class NetworkProtocol {
 
     public static class LoginResponse {
         public boolean success;
+        public double worldTimeInMinutes;
+        public float dayLength;
         public String message;
         public String username;
         public int x;
         public int y;
         public String worldName;
+        public long timestamp;
         public long worldSeed;
+        public PlayerData playerData;
         public io.github.pokemeetup.system.data.WorldData worldData;  // Add serializable world data
     }
 
@@ -219,13 +292,28 @@ public class NetworkProtocol {
         public String direction = "down";
         public boolean isMoving = false;
         public ItemData[] inventoryItems;
+        public long timestamp;
         public ItemData[] hotbarItems;
     }
 
     public static class PlayerLeft {
         public String username;
+        public long timestamp;
     }
-    // Request and Response Classes
+
+    public static class ReliableUpdate {
+        public int sequence;
+        public long timestamp;
+        public NetworkProtocol.PlayerUpdate playerUpdate;
+    }
+
+    public static class ForceDisconnect {
+        public String reason;
+    }
+
+    public static class Keepalive {
+        public long timestamp;
+    }
 
     // Update existing classes with timestamps
     public static class PlayerUpdate {
@@ -234,6 +322,9 @@ public class NetworkProtocol {
         public float y;
         public String direction;
         public boolean isMoving;
+        // Add velocity for smoother movement
+        public float velocityX;
+        public float velocityY;
         public boolean wantsToRun;
         public ItemData[] inventoryItems;
         public ItemData[] hotbarItems;
@@ -244,14 +335,16 @@ public class NetworkProtocol {
     public static class LoginRequest {
         public String username;
         public String password;
+        public long timestamp;
+        public io.github.pokemeetup.system.data.WorldData worldData;
 
-        public void validate() throws IllegalArgumentException {
-            if (username == null || username.trim().isEmpty()) {
-                throw new IllegalArgumentException("Username cannot be empty");
-            }
-            if (password == null || password.trim().isEmpty()) {
-                throw new IllegalArgumentException("Password cannot be empty");
-            }
+        @Override
+        public String toString() {
+            return "LoginRequest{" +
+                "username='" + username + '\'' +
+                ", hasPassword=" + (password != null && !password.isEmpty()) +
+                ", timestamp=" + timestamp +
+                '}';
         }
     }
 
@@ -349,6 +442,7 @@ public class NetworkProtocol {
         public String target;  // For player teleports
         public String homeName;  // For home teleports
         public long timestamp;
+
         public enum TeleportType {
             SPAWN, HOME, PLAYER
         }

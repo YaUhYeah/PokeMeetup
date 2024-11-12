@@ -14,51 +14,14 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 public class PokemonData {
+    private final Vector2 position = new Vector2();
     // Basic Info
     public String name;
     public UUID uuid = UUID.randomUUID();
     public int level;
     public String nature;
-
-    // Helper method to update Pokemon from PokemonData
-    private void updatePokemonFromData(WildPokemon pokemon, PokemonData data) {
-        if (pokemon == null || data == null) return;
-
-        try {
-            // Set basic info
-            pokemon.setPrimaryType(data.getPrimaryType());
-            pokemon.setSecondaryType(data.getSecondaryType());
-
-            // Set stats if available
-            if (data.getStats() != null) {
-                Pokemon.Stats stats = pokemon.getStats();
-                stats.setHp(data.getStats().hp);
-                stats.setAttack(data.getStats().attack);
-                stats.setDefense(data.getStats().defense);
-                stats.setSpecialAttack(data.getStats().specialAttack);
-                stats.setSpecialDefense(data.getStats().specialDefense);
-                stats.setSpeed(data.getStats().speed);
-            }
-
-            // Set moves if available
-            if (data.getMoves() != null) {
-                pokemon.getMoves().clear();
-                for (PokemonData.MoveData moveData : data.getMoves()) {
-                    Move move = moveData.toMove();
-                    if (move != null) {
-                        pokemon.getMoves().add(move);
-                    }
-                }
-            }
-
-        } catch (Exception e) {
-            GameLogger.error("Error updating Pokemon from data: " + e.getMessage());
-        }
-    }
-
     public Pokemon.PokemonType primaryType;
     public Pokemon.PokemonType secondaryType; // Can be null
-
     // Stats
     public Stats stats;
     // Moves
@@ -68,23 +31,18 @@ public class PokemonData {
     private int baseAttack;
     private int baseDefense;
     private int baseSpAtk;
+    private Map<UUID, WildPokemonData> wildPokemonMap = new HashMap<>();
     private int baseSpDef;
     private int baseSpeed;
     // Physical Dimensions
     private float width;
     private float height;
     private List<LearnableMove> learnableMoves;
-    private List<String> tmMoves; // List of TM moves this Pokemon can learn
-
-    // Move Database (Cache)
+    private List<String> tmMoves;
     private HashMap<String, Move> moveDatabase;
     private HashMap<UUID, WildPokemonData> wildPokemon;
-    // Add getter for position
-    private Vector2 position = new Vector2();
-
-    // Constructors
     public PokemonData() {
-        this.uuid = UUID.randomUUID(); // Ensure UUID is set in constructor
+        this.uuid = UUID.randomUUID();
         this.learnableMoves = new ArrayList<>();
         this.moves = new ArrayList<>();
         this.tmMoves = new ArrayList<>();
@@ -92,12 +50,10 @@ public class PokemonData {
         wildPokemon = new HashMap<>();
     }
 
-    // Static method to create PokemonData from Pokemon object
     public static PokemonData fromPokemon(Pokemon pokemon) {
         if (pokemon == null) {
             throw new IllegalArgumentException("Cannot create PokemonData from null Pokemon.");
         }
-
         PokemonData data = new PokemonData();
         data.setName(pokemon.getName());
         data.setLevel(pokemon.getLevel());
@@ -106,7 +62,6 @@ public class PokemonData {
         data.setPrimaryType(pokemon.getPrimaryType());
         data.setSecondaryType(pokemon.getSecondaryType());
 
-        // Apply base stats
         data.setBaseHp(pokemon.getStats().getHp());
         data.setBaseAttack(pokemon.getStats().getAttack());
         data.setBaseDefense(pokemon.getStats().getDefense());
@@ -120,10 +75,29 @@ public class PokemonData {
             data.setMoves(moveDataList);
         }
 
-        // Initialize learnableMoves and tmMoves as needed
-        // (Add as per your game logic)
-
         return data;
+    }
+
+    public Map<UUID, WildPokemonData> getWildPokemonMap() {
+        return wildPokemonMap;
+    }
+
+    public void setWildPokemonMap(Map<UUID, WildPokemonData> wildPokemonMap) {
+        this.wildPokemonMap = wildPokemonMap;
+    }
+
+    public boolean verifyIntegrity() {
+        if (this.name == null || this.name.isEmpty()) {
+            GameLogger.error("PokemonData integrity check failed: name is null or empty");
+            return false;
+        }
+
+        if (this.level <= 0) {
+            GameLogger.error("PokemonData integrity check failed: level is non-positive");
+            return false;
+        }
+
+        return true;
     }
 
     public Map<UUID, WildPokemonData> getWildPokemon() {
@@ -139,17 +113,13 @@ public class PokemonData {
     }
 
     public Vector2 getPosition() {
-        return position.cpy(); // Return a copy to prevent modification
+        return position.cpy();
     }
-
-    // Getters and Setters for all fields
-    // (Ensure all fields have appropriate getters and setters)
 
     public void setPosition(float x, float y) {
         this.position.set(x, y);
     }
 
-    // Example Getters and Setters (Implement others similarly)
     public String getName() {
         return name;
     }
@@ -160,7 +130,7 @@ public class PokemonData {
 
     public UUID getUuid() {
         if (uuid == null) {
-            uuid = UUID.randomUUID(); // Ensure UUID is never null
+            uuid = UUID.randomUUID();
         }
         return uuid;
     }
@@ -281,33 +251,9 @@ public class PokemonData {
         this.moves = moves != null ? new ArrayList<>(moves) : new ArrayList<>();
     }
 
-    public List<LearnableMove> getLearnableMoves() {
-        return learnableMoves;
-    }
-
-    public void setLearnableMoves(List<LearnableMove> learnableMoves) {
-        this.learnableMoves = learnableMoves != null ? new ArrayList<>(learnableMoves) : new ArrayList<>();
-    }
-
-    public List<String> getTmMoves() {
-        return tmMoves;
-    }
-
-    public void setTmMoves(List<String> tmMoves) {
-        this.tmMoves = tmMoves != null ? new ArrayList<>(tmMoves) : new ArrayList<>();
-    }
-
-    public Map<String, Move> getMoveDatabase() {
-        return moveDatabase;
-    }
-
-    public void setMoveDatabase(Map<String, Move> moveDatabase) {
-        this.moveDatabase = moveDatabase != null ? new HashMap<>(moveDatabase) : new HashMap<>();
-    }
 
     public PokemonData copy() {
         PokemonData copy = new PokemonData();
-        // Copy existing fields...
         copy.baseHp = this.baseHp;
         copy.baseAttack = this.baseAttack;
         copy.baseDefense = this.baseDefense;
@@ -319,7 +265,6 @@ public class PokemonData {
             copy.tmMoves = new ArrayList<>(this.tmMoves);
         }
 
-        // Copy existing fields from parent class
         copy.name = this.name;
         copy.level = this.level;
         copy.nature = this.nature;
@@ -406,6 +351,70 @@ public class PokemonData {
             }
         }
 
+        public int getHp() {
+            return hp;
+        }
+
+        public void setHp(int hp) {
+            this.hp = hp;
+        }
+
+        public int getAttack() {
+            return attack;
+        }
+
+        public void setAttack(int attack) {
+            this.attack = attack;
+        }
+
+        public int getDefense() {
+            return defense;
+        }
+
+        public void setDefense(int defense) {
+            this.defense = defense;
+        }
+
+        public int getSpecialAttack() {
+            return specialAttack;
+        }
+
+        public void setSpecialAttack(int specialAttack) {
+            this.specialAttack = specialAttack;
+        }
+
+        public int getSpecialDefense() {
+            return specialDefense;
+        }
+
+        public void setSpecialDefense(int specialDefense) {
+            this.specialDefense = specialDefense;
+        }
+
+        public int getSpeed() {
+            return speed;
+        }
+
+        public void setSpeed(int speed) {
+            this.speed = speed;
+        }
+
+        public int[] getIvs() {
+            return ivs;
+        }
+
+        public void setIvs(int[] ivs) {
+            this.ivs = ivs;
+        }
+
+        public int[] getEvs() {
+            return evs;
+        }
+
+        public void setEvs(int[] evs) {
+            this.evs = evs;
+        }
+
         public Stats copy() {
             Stats copy = new Stats();
             copy.hp = this.hp;
@@ -429,11 +438,15 @@ public class PokemonData {
         public int pp;
         public int maxPp;
         public boolean isSpecial;
+        public String description; // Add description field
+        public PokemonData.MoveEffectData effect; // Add effect field
+        public boolean canFlinch;
 
         public MoveData() {
         }
 
-        public MoveData(String name, Pokemon.PokemonType type, int power, int accuracy, int pp, int maxPp, boolean isSpecial) {
+
+        public MoveData(String name, Pokemon.PokemonType type, int power, int accuracy, int pp, int maxPp, boolean isSpecial, String description, PokemonData.MoveEffectData effect, boolean canFlinch) {
             this.name = name;
             this.type = type;
             this.power = power;
@@ -441,11 +454,98 @@ public class PokemonData {
             this.pp = pp;
             this.maxPp = maxPp;
             this.isSpecial = isSpecial;
+            this.description = description;
+            this.effect = effect;
+            this.canFlinch = canFlinch;
         }
 
         public static MoveData fromMove(Move move) {
             if (move == null) return null;
-            return new MoveData(move.getName(), move.getType(), move.getPower(), move.getAccuracy(), move.getPp(), move.getMaxPp(), move.isSpecial());
+            MoveData moveData = new MoveData();
+            moveData.name = move.getName();
+            moveData.type = move.getType();
+            moveData.power = move.getPower();
+            moveData.accuracy = move.getAccuracy();
+            moveData.pp = move.getPp();
+            moveData.maxPp = move.getMaxPp();
+            moveData.isSpecial = move.isSpecial();
+            moveData.description = move.getDescription();
+            moveData.canFlinch = move.canFlinch();
+
+
+            return moveData;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public Pokemon.PokemonType getType() {
+            return type;
+        }
+
+        public void setType(Pokemon.PokemonType type) {
+            this.type = type;
+        }
+
+        public int getPower() {
+            return power;
+        }
+
+        public void setPower(int power) {
+            this.power = power;
+        }
+
+        public int getAccuracy() {
+            return accuracy;
+        }
+
+        public void setAccuracy(int accuracy) {
+            this.accuracy = accuracy;
+        }
+
+        public int getPp() {
+            return pp;
+        }
+
+        public void setPp(int pp) {
+            this.pp = pp;
+        }
+
+        public int getMaxPp() {
+            return maxPp;
+        }
+
+        public void setMaxPp(int maxPp) {
+            this.maxPp = maxPp;
+        }
+
+        public boolean isSpecial() {
+            return isSpecial;
+        }
+
+        public void setSpecial(boolean special) {
+            isSpecial = special;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+
+        public void setDescription(String description) {
+            this.description = description;
+        }
+
+        public boolean isCanFlinch() {
+            return canFlinch;
+        }
+
+        public void setCanFlinch(boolean canFlinch) {
+            this.canFlinch = canFlinch;
         }
 
         public Move toMove() {
@@ -459,13 +559,129 @@ public class PokemonData {
                 type = Pokemon.PokemonType.NORMAL;
             }
 
-            return new Move(name, type, power, accuracy, pp, isSpecial, "Description not available");
+            Move.Builder builder = new Move.Builder(name, type)
+                .power(power)
+                .accuracy(accuracy)
+                .pp(pp)
+                .special(isSpecial)
+                .description(description)
+                .canFlinch(canFlinch);
+
+            return builder.build();
         }
 
+
         public MoveData copy() {
-            return new MoveData(name, type, power, accuracy, pp, maxPp, isSpecial);
+            return new MoveData(name, type, power, accuracy, pp, maxPp, isSpecial, description, effect, canFlinch);
         }
-    }    // Existing PokemonData fields...
+
+        public static class MoveEffectData {
+            public Pokemon.Status statusEffect;
+            public Map<String, Integer> statModifiers;
+            public String effectType;
+            public float chance;
+            public String animation;
+            public String sound;
+            public int duration;
+
+            public MoveEffectData(Pokemon.Status statusEffect, Map<String, Integer> statModifiers, String effectType, float chance, String animation, String sound, int duration) {
+                this.statusEffect = statusEffect;
+                this.statModifiers = statModifiers;
+                this.effectType = effectType;
+                this.chance = chance;
+                this.animation = animation;
+                this.sound = sound;
+                this.duration = duration;
+            }
+
+            public MoveEffectData() {
+            }
+
+            public static MoveEffectData fromMoveEffect(Move.MoveEffect moveEffect) {
+                if (moveEffect == null) return null;
+                MoveEffectData effectData = new MoveEffectData();
+                effectData.statusEffect = moveEffect.getStatusEffect();
+                effectData.statModifiers = new HashMap<>(moveEffect.getStatModifiers());
+                effectData.effectType = moveEffect.getEffectType();
+                effectData.chance = moveEffect.getChance();
+                effectData.animation = moveEffect.getAnimation();
+                effectData.sound = moveEffect.getSound();
+                effectData.duration = moveEffect.getDuration();
+                return effectData;
+            }
+
+            public Pokemon.Status getStatusEffect() {
+                return statusEffect;
+            }
+
+            public void setStatusEffect(Pokemon.Status statusEffect) {
+                this.statusEffect = statusEffect;
+            }
+
+            public Map<String, Integer> getStatModifiers() {
+                return statModifiers;
+            }
+
+            public void setStatModifiers(Map<String, Integer> statModifiers) {
+                this.statModifiers = statModifiers;
+            }
+
+            public String getEffectType() {
+                return effectType;
+            }
+
+            public void setEffectType(String effectType) {
+                this.effectType = effectType;
+            }
+
+            public float getChance() {
+                return chance;
+            }
+
+            public void setChance(float chance) {
+                this.chance = chance;
+            }
+
+            public String getAnimation() {
+                return animation;
+            }
+
+            public void setAnimation(String animation) {
+                this.animation = animation;
+            }
+
+            public String getSound() {
+                return sound;
+            }
+
+            public void setSound(String sound) {
+                this.sound = sound;
+            }
+
+            public int getDuration() {
+                return duration;
+            }
+
+            public void setDuration(int duration) {
+                this.duration = duration;
+            }
+
+            public Move.MoveEffect toMoveEffect() {
+                Move.MoveEffect moveEffect = new Move.MoveEffect();
+                moveEffect.setStatusEffect(statusEffect);
+                moveEffect.setStatModifiers(statModifiers != null ? new HashMap<>(statModifiers) : new HashMap<>());
+                moveEffect.setEffectType(effectType);
+                moveEffect.setChance(chance);
+                moveEffect.setAnimation(animation);
+                moveEffect.setSound(sound);
+                moveEffect.setDuration(duration);
+                return moveEffect;
+            }
+
+
+            // Constructors, getters, setters
+        }
+    }
 
     public static class WildPokemonData implements Serializable {
         private String name;
@@ -487,44 +703,6 @@ public class PokemonData {
             this.moves = new ArrayList<>();
         }
 
-        // Create a static factory method to create from WildPokemon
-        public static WildPokemonData fromWildPokemon(WildPokemon pokemon) {
-            WildPokemonData data = new WildPokemonData();
-            data.setName(pokemon.getName());
-            data.setLevel(pokemon.getLevel());
-            data.setPosition(new Vector2(pokemon.getX(), pokemon.getY()));
-            data.setDirection(pokemon.getDirection());
-            data.setMoving(pokemon.isMoving());
-            data.setSpawnTime(pokemon.getSpawnTime());
-            data.setPrimaryType(pokemon.getPrimaryType());
-            data.setSecondaryType(pokemon.getSecondaryType());
-            data.setCurrentHp(pokemon.getCurrentHp());
-            data.setUuid(pokemon.getUuid());
-
-            // Copy stats
-            if (pokemon.getStats() != null) {
-                Stats stats = new Stats();
-                stats.hp = pokemon.getStats().getHp();
-                stats.attack = pokemon.getStats().getAttack();
-                stats.defense = pokemon.getStats().getDefense();
-                stats.specialAttack = pokemon.getStats().getSpecialAttack();
-                stats.specialDefense = pokemon.getStats().getSpecialDefense();
-                stats.speed = pokemon.getStats().getSpeed();
-                data.setStats(stats);
-            }
-
-            // Copy moves
-            if (pokemon.getMoves() != null) {
-                List<MoveData> moves = pokemon.getMoves().stream()
-                    .map(MoveData::fromMove)
-                    .collect(Collectors.toList());
-                data.setMoves(moves);
-            }
-
-            return data;
-        }
-
-        // Getters and Setters
         public String getName() {
             return name;
         }
@@ -620,50 +798,41 @@ public class PokemonData {
         public void setUuid(UUID uuid) {
             this.uuid = uuid;
         }
+    }
 
-        // Method to convert back to WildPokemon
-        public WildPokemon toWildPokemon() {
-            try {
-                TextureRegion sprite = TextureManager.getOverworldSprite(name);
-                WildPokemon pokemon = new WildPokemon(
-                    name,
-                    level,
-                    (int) position.x,
-                    (int) position.y,
-                    sprite
-                );
+    public static class MoveEffectData {
+        private String type;
+        private float chance;
+        private Pokemon.Status status;
+        private Map<String, Integer> statChanges = new HashMap<>();
 
-                pokemon.setUuid(uuid);
-                pokemon.setDirection(direction);
-                pokemon.setMoving(isMoving);
-                pokemon.setSpawnTime(spawnTime);
-                pokemon.setPrimaryType(primaryType);
-                pokemon.setSecondaryType(secondaryType);
-                pokemon.setCurrentHp(currentHp);
+        public MoveEffectData(String type, float chance) {
+            this.type = type;
+            this.chance = chance;
+        }
 
-                // Set stats if available
-                if (stats != null) {
-                    pokemon.getStats().setHp(stats.hp);
-                    pokemon.getStats().setAttack(stats.attack);
-                    pokemon.getStats().setDefense(stats.defense);
-                    pokemon.getStats().setSpecialAttack(stats.specialAttack);
-                    pokemon.getStats().setSpecialDefense(stats.specialDefense);
-                    pokemon.getStats().setSpeed(stats.speed);
-                }
+        public String getType() {
+            return type;
+        }
 
-                // Add moves if available
-                if (moves != null) {
-                    moves.stream()
-                        .map(MoveData::toMove)
-                        .filter(Objects::nonNull)
-                        .forEach(pokemon.getMoves()::add);
-                }
+        public float getChance() {
+            return chance;
+        }
 
-                return pokemon;
-            } catch (Exception e) {
-                GameLogger.error("Failed to create WildPokemon from data: " + e.getMessage());
-                return null;
-            }
+        public Pokemon.Status getStatus() {
+            return status;
+        }
 
-    }}
+        public void setStatus(Pokemon.Status status) {
+            this.status = status;
+        }
+
+        public Map<String, Integer> getStatChanges() {
+            return statChanges;
+        }
+
+        public void setStatChanges(Map<String, Integer> changes) {
+            this.statChanges = changes;
+        }
+    }
 }

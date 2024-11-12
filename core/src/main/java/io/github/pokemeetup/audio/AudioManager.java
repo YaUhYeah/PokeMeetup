@@ -80,6 +80,10 @@ public class AudioManager {
         loadBiomeMusic(BiomeType.SNOW, "music/snow_theme.mp3");
         loadBiomeMusic(BiomeType.HAUNTED, "music/haunted_theme.mp3");
         loadBiomeMusic(BiomeType.PLAINS, "music/plains_theme.mp3");
+        loadBiomeMusic(BiomeType.BIG_MOUNTAINS, "music/mountains_theme.mp3");
+        loadBiomeMusic(BiomeType.RAIN_FOREST, "music/rainforest_theme.mp3");
+        loadBiomeMusic(BiomeType.
+            DESERT, "music/desert_theme.mp3");
     }
 
     private void loadBiomeMusic(BiomeType biome, String path) {

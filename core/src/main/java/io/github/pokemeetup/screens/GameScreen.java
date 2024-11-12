@@ -2,30 +2,29 @@ package io.github.pokemeetup.screens;
 
 import com.badlogic.gdx.*;
 import com.badlogic.gdx.files.FileHandle;
-import com.badlogic.gdx.graphics.Color;
-import com.badlogic.gdx.graphics.GL20;
-import com.badlogic.gdx.graphics.OrthographicCamera;
+import com.badlogic.gdx.graphics.*;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.math.Vector2;
-import com.badlogic.gdx.math.Vector3;
-import com.badlogic.gdx.scenes.scene2d.InputEvent;
-import com.badlogic.gdx.scenes.scene2d.Stage;
+import com.badlogic.gdx.scenes.scene2d.*;
+import com.badlogic.gdx.scenes.scene2d.actions.Actions;
+import com.badlogic.gdx.scenes.scene2d.actions.SequenceAction;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ClickListener;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
-import com.badlogic.gdx.utils.Align;
 import com.badlogic.gdx.utils.Scaling;
+import com.badlogic.gdx.utils.Timer;
 import com.badlogic.gdx.utils.viewport.FitViewport;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import io.github.pokemeetup.CreatureCaptureGame;
 import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.chat.ChatSystem;
-import io.github.pokemeetup.managers.DatabaseManager;
+import io.github.pokemeetup.managers.BiomeManager;
 import io.github.pokemeetup.multiplayer.OtherPlayer;
 import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
@@ -33,11 +32,10 @@ import io.github.pokemeetup.multiplayer.server.ServerStorageSystem;
 import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.pokemon.PokemonParty;
 import io.github.pokemeetup.pokemon.WildPokemon;
-import io.github.pokemeetup.screens.otherui.BuildModeUI;
-import io.github.pokemeetup.screens.otherui.PokemonPartyUI;
+import io.github.pokemeetup.pokemon.attacks.Move;
+import io.github.pokemeetup.screens.otherui.*;
 import io.github.pokemeetup.system.*;
 import io.github.pokemeetup.system.battle.BattleInitiationHandler;
-import io.github.pokemeetup.system.battle.BattleResult;
 import io.github.pokemeetup.system.data.PlayerData;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
 import io.github.pokemeetup.system.data.ItemData;
@@ -46,40 +44,54 @@ import io.github.pokemeetup.system.gameplay.overworld.*;
 import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
+import io.github.pokemeetup.utils.BattleAssets;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.storage.InventoryConverter;
 import io.github.pokemeetup.utils.TextureManager;
 
 import java.util.List;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
-import static io.github.pokemeetup.system.Player.MAX_TILE_BOUND;
-import static io.github.pokemeetup.system.Player.MIN_TILE_BOUND;
 import static io.github.pokemeetup.system.gameplay.overworld.World.TILE_SIZE;
 
 public class GameScreen implements Screen, PickupActionHandler, BattleInitiationHandler {
-    public static final int WORLD_SIZE = 1600;
-    public static final int WORLD_HEIGHT = 1600; // 50 chunks high
     private static final float TARGET_VIEWPORT_WIDTH_TILES = 24f; // Increased from 20
-    private static final float VIEWPORT_PADDING = 3f; // Increased from 2
-    private static final float DEFAULT_ZOOM = 1.1f; // Add this constant
-    private static final float STATE_UPDATE_INTERVAL = 0.1f; // Update state every 0.1 seconds
     private static final float UPDATE_INTERVAL = 0.1f; // 10 times per second
-    private static final int WORLD_WIDTH = 1600; // 50 chunks wide
-    private static final float VIRTUAL_JOYSTICK_RADIUS = 100f;
-    private static final float CAMERA_SMOOTH_SPEED = 5f;
-    private static final float MIN_CAMERA_ZOOM = 0.5f;
-    private static final float MAX_CAMERA_ZOOM = 2f;
-    private static final float CAMERA_LERP = 5.0f; // Adjust this value to change follow speed
-    // In World.java, update the camera tracking:
-    private static final float CAMERA_UPDATE_INTERVAL = 0.05f;
+    private static final float CAMERA_LERP = 5.0f;
     private static final float TRANSITION_DURATION = 0.5f;
     private static final float TRANSITION_DELAY = 0.2f; // Add delay before screen switch=
+    private static final float BATTLE_UI_FADE_DURATION = 0.5f;
+    private static final float BATTLE_SCREEN_WIDTH = 800;
+    private static final float BATTLE_SCREEN_HEIGHT = 480;
+    private static final float BUTTON_SIZE = 120f;  // Bigger buttons for touch
+    private static final float BUTTON_PADDING = 20f;
+    private static final float DPAD_SIZE = 300f;  // Make it bigger
+    private static final float DPAD_CENTER_SIZE = 100f;
+    private static final float DPAD_BUTTON_SIZE = 145f; // Larger touch targets
+    private static final float DEAD_ZONE = 10f;
+    private static final float MOVEMENT_REPEAT_DELAY = 0.1f; // How often to trigger movement while holding
+    private static final float ACTION_BUTTON_SIZE = 80f;
+    private static final float RUN_BUTTON_SIZE = 70f;
+    private static final long SCREEN_INIT_TIMEOUT = 30000; // 30 seconds
     public static boolean SHOW_DEBUG_INFO = false; // Toggle flag for debug info
     private final String worldName;
     private final CreatureCaptureGame game;
-    private final ServerStorageSystem storageSystem;
-    private final HashMap<String, OtherPlayer> otherPlayers = new HashMap<>();
+    private final GameClient gameClient;
+    private final Vector2 BATTLE_RESOLUTION = new Vector2(800, 480);
+    private final SpriteBatch uiBatch; // Add separate batch for UI
+    private final float BUTTON_ALPHA = 0.7f;
+    private final float JOYSTICK_SIZE = 200f;
+    private final float KNOB_SIZE = 80f;
+    private final ScheduledExecutorService screenInitScheduler = Executors.newSingleThreadScheduledExecutor();
+    private Vector2 joystickCenter = new Vector2();
+    private Vector2 joystickCurrent = new Vector2();
+    private boolean joystickActive = false;
+    private int initializationTimer = 0;
+    private ServerStorageSystem storageSystem;// In GameScreen class - fix input processor setup
     private WorldManager worldManager;
     private WorldData currentWorld;
     private SpriteBatch batch; // Single SpriteBatch instance
@@ -93,7 +105,6 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     private float stateUpdateTimer = 0;
     private GameMenu gameMenu;
     private float updateTimer = 0;
-    private GameClient gameClient;
     private World world;
     private Stage uiStage;
     private Skin uiSkin;
@@ -106,250 +117,433 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     private InventoryScreen inventoryScreen;
     private Inventory inventory;
     private Table hotbarTable;
-    private Vector2 joystickCenter;
-    private Vector2 joystickCurrent;
     private BuildModeUI buildModeUI;
-    private boolean joystickActive;
     private Rectangle inventoryButton;
     private Rectangle menuButton;
-    private Table fixedHotbarTable;
     private PlayerData playerData;
     private PokemonSpawnManager spawnManager;
     private ShapeRenderer shapeRenderer;
     private Skin skin;
     private Stage stage;
-    private boolean showPokemonBounds = true; // Toggle as needed
-    /**
-     * Synchronizes the hotbar UI with the current inventory state.
-     */
-    private FitViewport cameraViewport; // Usi
-    private float cameraUpdateTimer = 0;
+    private FitViewport cameraViewport;
     private boolean transitioning = false;
     private float transitionTimer = 0;
-    // Add these fields to your GameScreen class if not already present
     private Table inventoryContainer;
     private TextButton closeInventoryButton;
-    private WildPokemon transitioningPokemon = null; // Track the battling Pokemon
-    private boolean transitionOut = true; // true = fade out, false = fade in
+    private WildPokemon transitioningPokemon = null;
+    private boolean transitionOut = true;
+    private boolean controlsInitialized = false;
+    private boolean waitingForInitialization = true;
+    private boolean initializationComplete = false;
+    private StarterSelectionTable starterTable;
+    private boolean inputBlocked = false;
+    private float debugTimer = 0;
+    private boolean initialized = false;
+    private boolean initializedworld = false;
+    private boolean starterSelectionComplete = false;
+    private boolean initializationHandled = false;
+    private volatile boolean isDisposing = false;
+    private BattleTable battleTable;
+    private BattleAssets battleAssets;
+    private Skin battleSkin;
+    private boolean inBattle = false;
+    private Stage battleStage;
+    private boolean battleInitialized = false;
+    private boolean battleUIFading = false;
+    private ScheduledFuture<?> screenInitTimeoutTask;
+
+    private Table androidControls;
+    private Image interactionButton;
+    private float battleUIAlpha = 0f;
+    private boolean inventoryInitialized = false;
+    // Add this field
+    private InputProcessor previousInputProcessor;
+    private boolean menuVisible = false;
+    private boolean isLoading = true;
+    private LoadingScreen loadingScreen;
+    private Table androidControlsTable;
+    private ImageButton joystickKnob;
+    private Table joystickBase;
+    private Vector2 joystickOrigin = new Vector2();
+    private Table closeButtonTable;
+    private Table buttonTable;
+    // Add these fields
+    private Table dpadTable;
+    private Table buttonsTable;
+    private Rectangle upButton, downButton, leftButton, rightButton;
+    private Rectangle runButton;
+    private String currentDpadDirection = null;
+    // In GameScreen class, update handleBattleInitiation method:
+    private float movementTimer = 0f;
+    private boolean isHoldingDirection = false;
+    private boolean isRunPressed = false;
+    // Add these fields
+    private Rectangle centerButton; // For running
+    private AndroidMovementController movementController;
 
     public GameScreen(CreatureCaptureGame game, String username, GameClient gameClient, String worldName) {
-        GameLogger.info("Starting GameScreen initialization...");
+        GameLogger.info("GameScreen constructor called");
+        try {
+            this.game = game;
+            this.worldName = worldName;
+            this.username = username;
+            this.gameClient = gameClient;
+            game.setScreen(new LoadingScreen(game, this));
+            this.isMultiplayer = !gameClient.isSinglePlayer();
+            this.uiBatch = new SpriteBatch();
+            this.uiStage = new Stage(new ScreenViewport(), uiBatch);
+            this.batch = new SpriteBatch();
+            this.shapeRenderer = new ShapeRenderer();
+            this.skin = new Skin(Gdx.files.internal("Skins/uiskin.json"));
+            this.uiSkin = this.skin;
+            this.font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
+            this.pokemonPartyStage = new Stage(new ScreenViewport());
+            this.stage = new Stage(new ScreenViewport());
+            screenInitTimeoutTask = screenInitScheduler.schedule(() -> {
+                if (!initializationComplete) {
+                    GameLogger.error("Screen initialization timeout after " + (SCREEN_INIT_TIMEOUT / 1000) + " seconds");
+                    Gdx.app.postRunnable(this::handleInitializationFailure);
+                }
+            }, SCREEN_INIT_TIMEOUT, TimeUnit.MILLISECONDS);
+            if (isMultiplayer) {
+                gameClient.setInitializationListener(this::handleClientInitialization);
+            } else {
+                completeInitialization();
+            }      // Set up battle stage with specific size
+            if (battleStage == null) {
+                battleStage = new Stage(new FitViewport(800, 480));
+            }
+            this.gameMenu = new GameMenu(this, game, uiSkin, this.player, gameClient);
+            gameMenu.getStage().getViewport().update(
+                Gdx.graphics.getWidth(),
+                Gdx.graphics.getHeight(),
+                true
+            );
+            // Update viewport
+            battleStage.getViewport().update(Gdx.graphics.getWidth(), Gdx.graphics.getHeight(), true);
 
-        // Initialize essential fields first
-        this.game = game;
-        this.worldName = worldName;
-        this.username = username;
-        this.gameClient = gameClient;
-        this.player = game.getPlayer();
-        this.world = game.getCurrentWorld();
+            initializeBattleAssets();
+        } catch (Exception e) {
+            GameLogger.error("Error during GameScreen initialization: " + e.getMessage());
+            throw e;
+        }
+    }
 
-        this.isMultiplayer = !gameClient.isSinglePlayer();
-        this.storageSystem = new ServerStorageSystem();
+    private void setupBattleInput() {
+        if (battleStage != null) {
+            InputMultiplexer battleMultiplexer = new InputMultiplexer();
+            battleMultiplexer.addProcessor(battleStage); // Battle stage gets priority
+            battleMultiplexer.addProcessor(uiStage);
+            Gdx.input.setInputProcessor(battleMultiplexer);
+            GameLogger.info("Battle input processors set up");
+        }
+    }
 
-        this.worldManager = WorldManager.getInstance(storageSystem, isMultiplayer);
-        worldManager.init();
+    private void handleClientInitialization(boolean success) {
+        if (success) {
+            Gdx.app.postRunnable(() -> {
+                GameLogger.info("Client initialization complete - proceeding with setup");
+                completeInitialization();
+            });
+        } else {
+            Gdx.app.postRunnable(this::showReconnectDialog);
+        }
+    }
 
-        // Initialize basic UI and rendering components
-        this.skin = new Skin(Gdx.files.internal("Skins/uiskin.json"));
-        this.uiSkin = this.skin;
-        this.batch = new SpriteBatch();
-        this.shapeRenderer = new ShapeRenderer();
-        this.uiStage = new Stage(new ScreenViewport());
-        this.pokemonPartyStage = new Stage(new ScreenViewport());
-        this.stage = new Stage(new ScreenViewport());
-        this.font = new BitmapFont(Gdx.files.internal("Skins/default.fnt"));
-        setupCamera();
-        initializeChatSystem();
-        // Initialize inputMultiplexer and inputHandler BEFORE any early returns
-        this.inputMultiplexer = new InputMultiplexer();
-        this.inputHandler = new InputHandler(player, this, this);
+    private void initializeBattleAssets() {
+        try {
+            // Initialize battle assets first (atlas-based resources)
+            battleAssets = new BattleAssets();
+            battleAssets.initialize();
 
-        // Initialize game menu
-        this.gameMenu = new GameMenu(this, game, uiSkin, player, gameClient);
 
-        GameLogger.info("Checking player's Pokemon party size...");
-        if (player.getPokemonParty() == null) {
-            GameLogger.error("Player's Pokemon party is null!");
+            // Optionally try to load the skin if it exists
+            try {
+                FileHandle skinFile = Gdx.files.internal("atlas/ui-gfx-atlas.json");
+                if (skinFile.exists()) {
+                    battleSkin = new Skin(skinFile);
+                    battleSkin.addRegions(TextureManager.getUi());
+                    GameLogger.info("Battle skin loaded successfully");
+                } else {
+                    GameLogger.info("No battle skin found - using default styles");
+                    // Continue without skin - will use direct texture regions
+                }
+            } catch (Exception skinEx) {
+                GameLogger.error("Could not load battle skin: " + skinEx.getMessage() + " - continuing without skin");
+                // Continue without skin
+                if (battleSkin != null) {
+                    battleSkin.dispose();
+                    battleSkin = null;
+                }
+            }
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to initialize battle assets: " + e.getMessage());
+            cleanup();
+            throw new RuntimeException("Battle initialization failed", e);
+        }
+    }
+
+    private void showReconnectDialog() {
+        Dialog dialog = new Dialog("Connection Error", skin);
+        dialog.text("Failed to connect to server. Would you like to retry?");
+        TextButton retryButton = new TextButton("Retry", skin);
+        retryButton.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                gameClient.connect();
+                dialog.hide();
+            }
+        });
+        dialog.getButtonTable().add(retryButton).padRight(20);
+        TextButton exitButton = new TextButton("Exit", skin);
+        exitButton.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                Gdx.app.exit();
+            }
+        });
+        dialog.getButtonTable().add(exitButton);
+
+        dialog.show(stage);
+    }
+
+    private void checkStarterSelection() {
+        if (player == null) {
+            GameLogger.error("Player is null during starter check!");
             return;
         }
 
-        // Check if player needs a starter BEFORE doing any other initialization
-        if (player.getPokemonParty().getSize() == 0) {
-            GameLogger.info("Player has no Pokemon - transitioning to starter selection screen");
-            Gdx.app.postRunnable(() -> {
-                StarterSelectionScreen starterScreen = new StarterSelectionScreen(game, this.skin);
-                starterScreen.setReturnScreen(this); // Add method to return to this screen
-                game.setScreen(starterScreen);
-            });
-            return; // Early return, but essential components are initialized
+        PokemonParty party = player.getPokemonParty();
+        if (party == null) {
+            GameLogger.error("Player's Pokémon party is null!");
+            party = new PokemonParty();
+            player.setPokemonParty(party);
         }
 
-        // Continue with full initialization if player has Pokemon
-        GameLogger.info("Player has Pokemon - continuing with full initialization");
-
-        this.pokemonParty = new PokemonParty();
-
-        // Initialize basic systems
-        gameClient.setLocalUsername(username);
-
-        // Set up full initialization
-        GameLogger.info("Starting complete initialization...");
-        completeInitialization();
-
-        // Set up input processors last
-        GameLogger.info("Setting up input processors...");
-        setupInputProcessors();
-        if (Gdx.app.getType() == Application.ApplicationType.Android) {
-            initializeAndroidControls();
-        }
-    }
-
-    private void initializeChatSystem() {
-        if (chatSystem != null) {
-            GameLogger.info("ChatSystem is already initialized.");
-            return; // Already initialized
-        }
-
-        GameLogger.info("Initializing ChatSystem.");
-        float screenWidth = Gdx.graphics.getWidth();
-        float screenHeight = Gdx.graphics.getHeight();
-        float chatWidth = Math.max(ChatSystem.MIN_CHAT_WIDTH, screenWidth * 0.25f);
-        float chatHeight = Math.max(ChatSystem.MIN_CHAT_HEIGHT, screenHeight * 0.3f);
-
-        chatSystem = new ChatSystem(uiStage, uiSkin, gameClient, username);
-        chatSystem.setSize(chatWidth, chatHeight);
-        chatSystem.setPosition(
-            ChatSystem.CHAT_PADDING,
-            screenHeight - chatHeight - ChatSystem.CHAT_PADDING
-        );
-    }
-
-
-    private void onBattleComplete() {
-        // Return to GameScreen
-        game.setScreenWithoutDisposing(this);
-        // Re-setup input processors and other necessary components
-        setupInputProcessors();
-    }
-
-    private void onBattleComplete(BattleResult result) {
-        if (result.isVictory()) {
-            // Remove defeated Pokemon from world
-            world.getPokemonSpawnManager().despawnPokemon(result.getWildPokemon().getUuid());
-
-            // Show victory message in chat
-            NetworkProtocol.ChatMessage message = new NetworkProtocol.ChatMessage();
-            message.sender = "System";
-            message.content = "Defeated wild " + result.getWildPokemon().getName() + "!";
-            message.timestamp = System.currentTimeMillis();
-            message.type = NetworkProtocol.ChatType.SYSTEM;
-            chatSystem.handleIncomingMessage(message);
-
-            // Update player Pokemon stats
-            Pokemon playerPokemon = result.getPlayerPokemon();
-
-            // Play victory sound
-//            AudioManager.getInstance().playSound(AudioManager.SoundEffect.VICTORY);
+        if (party.getSize() == 0) {
+            GameLogger.info("No Pokemon in party - initiating starter selection");
+            initiateStarterSelection();
         } else {
-            // Handle defeat
-            NetworkProtocol.ChatMessage message = new NetworkProtocol.ChatMessage();
-            message.sender = "System";
-            message.content = "Your " + result.getPlayerPokemon().getName() + " fainted!";
-            message.timestamp = System.currentTimeMillis();
-            message.type = NetworkProtocol.ChatType.SYSTEM;
-            chatSystem.handleIncomingMessage(message);
-
-            // Heal Pokemon (as if visited Pokemon Center)
-//            player.getPokemonParty().healAll();
-
-            // Play defeat sound
-//            AudioManager.getInstance().playSound(AudioManager.SoundEffect.DEFEAT);
-        }
-
-        // Return to game screen
-        game.setScreen(this);
-
-        // Reset input processor
-        resetInputProcessor();
-
-        // Save game state after battle
-        if (!gameClient.isSinglePlayer()) {
-//            gameClient.savePlayerState(player);
+            GameLogger.info("Player has Pokemon (" + party.getSize() + ") - proceeding with full initialization");
+            starterSelectionComplete = true;
         }
     }
 
-    private void setupBasicInputProcessors() {
-        inputMultiplexer.clear();
-
-        // Add menu input processor first
-        inputMultiplexer.addProcessor(new InputAdapter() {
+    private void handleInitializationFailure() {
+        if (initializationHandled) {
+            return;
+        }
+        initializationHandled = true;
+        Dialog dialog = new Dialog("Connection Error", skin);
+        dialog.text("Failed to initialize game client.\nWould you like to retry?");
+        dialog.button("Retry", true).addListener(new ClickListener() {
             @Override
-            public boolean keyDown(int keycode) {
-                if (keycode == Input.Keys.ESCAPE) {
-                    if (gameMenu.isVisible()) {
-                        gameMenu.hide();
-                    } else {
-                        gameMenu.show();
-                    }
-                    return true;
-                }
-                return false;
+            public void clicked(InputEvent event, float x, float y) {
+                retryInitialization();
             }
         });
-
-        // Add stages
-        inputMultiplexer.addProcessor(gameMenu.getStage());
-        inputMultiplexer.addProcessor(uiStage);
-        inputMultiplexer.addProcessor(inputHandler);
-
-        Gdx.input.setInputProcessor(inputMultiplexer);
+        dialog.button("Exit", false).addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                Gdx.app.exit();
+            }
+        });
+        dialog.show(stage);
     }
 
-    void completeInitialization() {
-        // Initialize world management
-        // Initialize ItemManager if needed
-        if (!ItemManager.isInitialized()) {
-            GameLogger.info("Initializing ItemManager");
-            ItemManager.initialize(TextureManager.items);
-        }
+    private void retryInitialization() {
+        waitingForInitialization = true;
+        initializationComplete = false;
 
-        // Load world data
-        WorldData worldData = world.getWorldData();
-        this.currentWorld = worldData;
-        if (worldData != null) {
-            PlayerData playerData = worldData.getPlayerData(username);
-            if (playerData != null) {
-                this.playerData = playerData;
-                InventoryConverter.applyInventoryDataToPlayer(playerData, player);
-            } else {
-                this.playerData = new PlayerData(username);
-                worldData.savePlayerData(player.getUsername(), this.playerData);
+        try {
+            if (gameClient != null) {
+                gameClient.connect();
             }
+        } catch (Exception e) {
+            GameLogger.error("Failed to retry initialization: " + e.getMessage());
+            handleClientInitialization(false);
+        }
+    }
+
+    private void initializeWorld() {
+        try {
+            if (isMultiplayer) {
+                this.player = this.gameClient.getActivePlayer();
+            } else {
+                this.player = game.getPlayer();
+            }
+            if (gameClient.getCurrentWorld() != null) {
+                this.world = gameClient.getCurrentWorld();
+                GameLogger.info("Using existing world from GameClient");
+                return;
+            }
+            if (worldName == null) {
+                String defaultWorldName = isMultiplayer ?
+                    CreatureCaptureGame.MULTIPLAYER_WORLD_NAME :
+                    "singleplayer_world";
+                GameLogger.info("No world name provided, using default: " + defaultWorldName);
+                this.world = new World(
+                    defaultWorldName,
+                    World.WORLD_SIZE,
+                    World.WORLD_SIZE,
+                    gameClient.getWorldSeed(),
+                    gameClient,
+                    new BiomeManager(gameClient.getWorldSeed())
+                );
+            } else {
+                GameLogger.info("Creating new world with name: " + worldName);
+                this.world = new World(
+                    worldName,
+                    World.WORLD_SIZE,
+                    World.WORLD_SIZE,
+                    gameClient.getWorldSeed(),
+                    gameClient,
+                    new BiomeManager(gameClient.getWorldSeed())
+                );
+            }
+            if (player != null) {
+                player.initializeInWorld(world);
+                world.setPlayer(player);
+                player.setWorld(world);
+            }
+            if (gameClient.getCurrentWorld() == null) {
+                gameClient.setCurrentWorld(world);
+            }
+            this.storageSystem = new ServerStorageSystem();
+            this.worldManager = WorldManager.getInstance(storageSystem, isMultiplayer);
+            try {
+                worldManager.init();
+                GameLogger.info("World manager initialized successfully");
+            } catch (Exception e) {
+                GameLogger.error("Failed to initialize world manager: " + e.getMessage());
+                throw e;
+            }
+
+            GameLogger.info("World initialization complete");
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to initialize world: " + e.getMessage());
+            throw new RuntimeException("World initialization failed", e);
+        }
+    }
+
+    private void completeInitialization() {
+        GameLogger.info("completeInitialization() called");
+        if (initializationComplete) {
+            GameLogger.info("Initialization already completed");
+            return;
         }
 
-        // Initialize UI components
-        buildModeUI = new BuildModeUI(uiStage, skin, player);
-        buildModeUI.hide();
+        try {
+            // 1. Initialize ItemManager first as it's needed for inventory operations
+            if (!ItemManager.isInitialized()) {
+                GameLogger.info("Initializing ItemManager");
+                ItemManager.initialize(TextureManager.items);
+            }
 
-        world.setPlayerData(playerData);
+            // 2. Initialize storage and world manager first
+            this.storageSystem = new ServerStorageSystem();
+            this.worldManager = WorldManager.getInstance(storageSystem, isMultiplayer);
+            try {
+                worldManager.init();
+                GameLogger.info("World manager initialized successfully");
+            } catch (Exception e) {
+                GameLogger.error("Failed to initialize world manager: " + e.getMessage());
+                throw e;
+            }
 
-        // Initialize inventory and spawn manager
-        this.inventory = player.getInventory();
-        this.spawnManager = world.getPokemonSpawnManager();
+            // 3. Initialize world and ensure it's valid
+            initializeWorld();
+            if (world == null) {
+                throw new IllegalStateException("World initialization failed");
+            }
 
-        // Initialize game systems
-        this.gameMenu = new GameMenu(this, game, uiSkin, this.player, gameClient);
-        setupGameClientListeners();
-//        this.chatSystem = new ChatSystem(uiStage, uiSkin, gameClient, username);
-        createPartyDisplay();
+            // 4. Setup camera (needs valid player position)
+            setupCamera();
 
-        // Now set up all input processors with complete UI
-        setupInputProcessors();
+            // 5. Initialize player's resources and animations
+            if (player != null) {
+                player.initializeResources();
+                GameLogger.info("Player resources initialized");
+            }
 
-        // Add Android processor
-        inputMultiplexer.addProcessor(new AndroidInputProcessor());
-        if (Gdx.app.getType() == Application.ApplicationType.Android) {
-            initializeAndroidControls();
+            // 6. Load and apply player data
+            if (isMultiplayer) {
+                PlayerData playerDataFromServer = gameClient.getCurrentWorld().getWorldData().getPlayerData(username);
+                if (playerDataFromServer != null) {
+                    this.playerData = playerDataFromServer;
+                    player.updateFromPlayerData(playerData);
+                    GameLogger.info("Applied player data from server to player");
+                } else {
+                    GameLogger.error("Player data from server is null");
+                    handleInitializationFailure();
+                    return;
+                }
+            } else {
+                WorldData worldData = world.getWorldData();
+                if (worldData == null) {
+                    GameLogger.error("World data is null during initialization");
+                    handleInitializationFailure();
+                    return;
+                }
+
+                this.currentWorld = worldData;
+                PlayerData playerData = worldData.getPlayerData(username);
+
+                if (playerData == null) {
+                    playerData = new PlayerData(username);
+                    worldData.savePlayerData(username, playerData);
+                }
+
+                this.playerData = playerData;
+                playerData.applyToPlayer(player);
+            }
+
+            // 7. Initialize essential game systems
+            this.inventory = player.getInventory();
+            this.spawnManager = world.getPokemonSpawnManager();
+
+            // 8. Check starter selection
+            checkStarterSelection();
+
+            // 9. Initialize chat system
+            initializeChatSystem();
+
+            // 10. Create input handler (needs initialized player and world)
+            this.inputHandler = new InputHandler(player, this, this);
+
+            setupGameClientListeners();
+            createPartyDisplay();
+
+            movementController = new AndroidMovementController(player);
+
+            // 11. Setup input processors (needs all UI components)
+            setupInputProcessors();
+
+            // 12. Platform specific setup
+            if (Gdx.app.getType() == Application.ApplicationType.Android) {
+                initializeAndroidControls();
+                initializationComplete = true;
+            }
+
+            // 13. Final world checks
+            if (world != null && world.areAllChunksLoaded()) {
+                initializedworld = true;
+                GameLogger.info("Screen fully initialized and ready");
+            }
+
+            initializationComplete = true;
+            if (screenInitTimeoutTask != null) {
+                screenInitTimeoutTask.cancel(false);
+            }
+            initialized = true;
+            GameLogger.info("Game initialization completed successfully");
+
+        } catch (Exception e) {
+            GameLogger.error("Error during initialization: " + e.getMessage());
+            e.printStackTrace();
+            handleInitializationFailure();
         }
     }
 
@@ -357,45 +551,202 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         if (inputMultiplexer == null) {
             inputMultiplexer = new InputMultiplexer();
         }
-
         inputMultiplexer.clear();
-
-        // Add stages in order of priority
-        if (chatSystem != null) {
-            inputMultiplexer.addProcessor(stage); // Stage contains chat UI
+        if (inventoryOpen && inventoryScreen != null) {
+            inputMultiplexer.addProcessor(inventoryScreen.getStage());
+            GameLogger.info("Added inventoryScreen stage to InputMultiplexer (first)");
+        }
+        if (battleStage != null) {
+            inputMultiplexer.addProcessor(battleStage);
+        }
+        // Add uiStage first, ensuring it has higher priority
+        if (uiStage != null) {
+            inputMultiplexer.addProcessor(uiStage);
+            GameLogger.info("Added uiStage to InputMultiplexer");
         }
 
-        // Add menu processor
-        inputMultiplexer.addProcessor(new InputAdapter() {
-            @Override
-            public boolean keyDown(int keycode) {
-                if (keycode == Input.Keys.ESCAPE && !chatSystem.isActive()) {
-                    if (gameMenu != null) {
-                        if (gameMenu.isVisible()) {
-                            gameMenu.hide();
-                        } else {
-                            gameMenu.show();
-                        }
-                        return true;
-                    }
-                }
-                return false;
-            }
-        });
-
-        // Add other processors
+        // Add Game Menu Stage if it exists
         if (gameMenu != null && gameMenu.getStage() != null) {
             inputMultiplexer.addProcessor(gameMenu.getStage());
+            GameLogger.info("Added gameMenu stage to InputMultiplexer");
         }
-        inputMultiplexer.addProcessor(uiStage);
-        inputMultiplexer.addProcessor(inputHandler);
+        // Add inputHandler for game inputs
+        if (inputHandler != null) {
+            inputMultiplexer.addProcessor(inputHandler);
+            GameLogger.info("Added inputHandler to InputMultiplexer");
+        }
 
-        // Add Android processor if needed
-        if (Gdx.app.getType() == Application.ApplicationType.Android) {
+        // Add Android Input Processor if applicable
+        if (Gdx.app.getType() == Application.ApplicationType.Android && controlsInitialized) {
             inputMultiplexer.addProcessor(new AndroidInputProcessor());
+            GameLogger.info("Added AndroidInputProcessor to InputMultiplexer");
         }
 
         Gdx.input.setInputProcessor(inputMultiplexer);
+        GameLogger.info("Input processors updated - Total processors: " + inputMultiplexer.size());
+    }
+
+    public void toggleGameMenu() {
+        if (gameMenu != null) {
+            if (!menuVisible) {
+                gameMenu.show();
+                menuVisible = true;
+                // Set input focus to menu
+                if (inputMultiplexer != null) {
+                    inputMultiplexer.addProcessor(0, gameMenu.getStage()); // Add at highest priority
+                }
+            } else {
+                gameMenu.hide();
+                menuVisible = false;
+                // Remove menu input processor
+                if (inputMultiplexer != null) {
+                    inputMultiplexer.removeProcessor(gameMenu.getStage());
+                }
+            }
+        }
+    }
+
+    private void onStarterSelectionComplete(Pokemon starter) {
+        if (starter == null || starterSelectionComplete) {
+            GameLogger.error("Invalid starter selection or already completed");
+            return;
+        }
+
+        GameLogger.info("Starter selection completed: " + starter.getName());
+        starterSelectionComplete = true;
+
+        player.getPokemonParty().addPokemon(starter);
+        player.updatePlayerData();
+        updateSlotVisuals();
+
+        if (starterTable != null) {
+            starterTable.remove();
+            starterTable = null;
+        }
+
+        setupInputProcessors();
+        if (isMultiplayer) {
+            gameClient.setInitialized(true);
+        }
+
+        inputBlocked = false;
+        GameLogger.info("Starter selection completed - normal game input restored");
+    }
+
+    private void initiateStarterSelection() {
+        if (inputMultiplexer != null) {
+            inputMultiplexer.clear();
+        }
+
+        Gdx.input.setInputProcessor(uiStage);
+        if (uiStage == null) {
+            uiStage = new Stage(new ScreenViewport());
+        }
+        if (starterTable == null) {
+            starterTable = new StarterSelectionTable(skin);
+            ;
+            starterTable.setSelectionListener(new StarterSelectionTable.SelectionListener() {
+                @Override
+                public void onStarterSelected(Pokemon starter) {
+                    GameLogger.info("Starter selection triggered: " + (starter != null ? starter.getName() : "null"));
+                    onStarterSelectionComplete(starter);
+                }
+
+                @Override
+                public void onSelectionStart() {
+                    inputBlocked = true;
+                }
+            });
+
+            // Set up table layout
+            starterTable.setFillParent(true); // This ensures the table fills the stage
+
+            uiStage.addActor(starterTable);
+
+
+            // Ensure visibility and touchability
+            starterTable.setVisible(true);
+            starterTable.setTouchable(Touchable.enabled);
+
+            // Log for debugging
+            GameLogger.info("Starter table created and added to stage");
+        }
+
+        // Important: Update stage viewport to match screen size
+        uiStage.getViewport().update(Gdx.graphics.getWidth(), Gdx.graphics.getHeight(), true);
+
+        // Set input processor
+        Gdx.input.setInputProcessor(uiStage);
+
+        // Log stage and input processor state
+        GameLogger.info("Stage viewport size: " + uiStage.getViewport().getScreenWidth() +
+            "x" + uiStage.getViewport().getScreenHeight());
+        GameLogger.info("Current input processor: " + Gdx.input.getInputProcessor().getClass().getName());
+    }
+
+    private void addAndroidMenuButton() {
+        if (Gdx.app.getType() != Application.ApplicationType.Android) {
+            return;
+        }
+
+        Table menuButtonTable = new Table();
+        menuButtonTable.setFillParent(true);
+
+        TextButton menuButton = new TextButton("MENU", skin);
+        menuButton.getColor().a = BUTTON_ALPHA;
+        menuButton.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                toggleGameMenu();
+            }
+        });
+
+        menuButtonTable.add(menuButton).size(BUTTON_SIZE * 1.5f, BUTTON_SIZE).top().right().pad(20);
+        uiStage.addActor(menuButtonTable);
+    }
+
+    private void initializeChatSystem() {
+        if (chatSystem != null) {
+            return;
+        }
+
+        float screenWidth = Gdx.graphics.getWidth();
+        float screenHeight = Gdx.graphics.getHeight();
+        float chatWidth = Math.max(ChatSystem.MIN_CHAT_WIDTH, screenWidth * 0.25f);
+        float chatHeight = Math.max(ChatSystem.MIN_CHAT_HEIGHT, screenHeight * 0.3f);
+
+        chatSystem = new ChatSystem(uiStage, skin, gameClient, username);
+        chatSystem.setSize(chatWidth, chatHeight);
+        chatSystem.setPosition(
+            ChatSystem.CHAT_PADDING,
+            screenHeight - chatHeight - ChatSystem.CHAT_PADDING
+        );
+
+        // **Ensure ChatSystem is on top by adding it last**
+        chatSystem.setZIndex(Integer.MAX_VALUE); // Use maximum Z-index
+        chatSystem.setVisible(true);
+        chatSystem.setTouchable(Touchable.enabled);
+
+        // **Create background with new SVG texture**
+        Pixmap bgPixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+        bgPixmap.setColor(0, 0, 0, 0.8f);
+        bgPixmap.fill();
+        TextureRegion bgTexture = new TextureRegion(new Texture(bgPixmap));
+        chatSystem.setBackground(new TextureRegionDrawable(bgTexture));
+        bgPixmap.dispose();
+
+        // **Add to UI stage after all other UI elements**
+        uiStage.addActor(chatSystem);
+        chatSystem.toFront(); // Ensure it's the topmost actor
+
+        // **Set Z-index to highest value**
+        chatSystem.setZIndex(Integer.MAX_VALUE);
+
+        // **Update input processors**
+        setupInputProcessors();
+
+        GameLogger.info("Chat system initialized at: " + ChatSystem.CHAT_PADDING + "," +
+            (screenHeight - chatHeight - ChatSystem.CHAT_PADDING));
     }
 
     private void createPartyDisplay() {
@@ -422,10 +773,6 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         uiStage.addActor(partyDisplay);
     }
 
-    public OrthographicCamera getCamera() {
-        return camera;
-    }
-
     @Override
     public void hide() {
 
@@ -435,36 +782,6 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         FileHandle saveDir = Gdx.files.local("save");
         if (!saveDir.exists()) {
             saveDir.mkdirs();
-        }
-    }
-
-    private void updatePlayerMovement() {
-        if (!joystickActive) return;
-
-        float dx = joystickCurrent.x - joystickCenter.x;
-        float dy = joystickCurrent.y - joystickCenter.y;
-        float distance = (float) Math.sqrt(dx * dx + dy * dy);
-
-        if (distance > 10) { // Small dead zone
-            // Determine direction
-            if (Math.abs(dx) > Math.abs(dy)) {
-                // Horizontal movement
-                if (dx > 0) {
-                    player.move("right");
-                } else {
-                    player.move("left");
-                }
-            } else {
-                // Vertical movement
-                if (dy > 0) {
-                    player.move("up");
-                } else {
-                    player.move("down");
-                }
-            }
-
-            // Set running based on joystick distance
-            player.setRunning(distance > VIRTUAL_JOYSTICK_RADIUS * 0.7f);
         }
     }
 
@@ -480,34 +797,24 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         gameClient.setLoginResponseListener(response -> {
             if (response.success) {
                 GameLogger.info("Logged in as " + response.username);
-                // Handle successful login, initialize game state
-                // Potentially apply any additional data received from server
             } else {
                 GameLogger.info("Login failed: " + response.message);
-                // Handle login failure, possibly prompt user again
             }
         });
 
         gameClient.setRegistrationResponseListener(response -> {
             if (response.success) {
                 GameLogger.info("Registration successful for " + response.username);
-                // Handle successful registration, possibly auto-login or prompt user
             } else {
                 GameLogger.info("Registration failed: " + response.message);
-                // Handle registration failure, possibly prompt user again
             }
         });
     }
 
-    public WorldData getCurrentWorld() {
-        return currentWorld;
-    }
-
     private Table createPartySlotCell(int index, Pokemon pokemon) {
         Table cell = new Table();
-        boolean isSelected = index == 0; // First Pokémon is active
+        boolean isSelected = index == 0;
 
-        // Set background based on selection
         TextureRegionDrawable slotBg = new TextureRegionDrawable(
             TextureManager.ui.findRegion(isSelected ? "slot_selected" : "slot_normal")
         );
@@ -517,19 +824,15 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
             Table contentStack = new Table();
             contentStack.setFillParent(true);
 
-            // Center the Pokémon icon within the slot
             Image pokemonIcon = new Image(pokemon.getCurrentIconFrame(Gdx.graphics.getDeltaTime()));
             pokemonIcon.setScaling(Scaling.fit);
 
-            // Stack the icon at the top of the cell
             contentStack.add(pokemonIcon).size(40).padTop(4).row();
 
-            // Add level label below the icon
             Label levelLabel = new Label("Lv." + pokemon.getLevel(), skin);
             levelLabel.setFontScale(0.8f);
             contentStack.add(levelLabel).padTop(2).row();
 
-            // Add health bar below the level label
             ProgressBar hpBar = new ProgressBar(0, pokemon.getStats().getHp(), 1, false, skin);
             hpBar.setValue(pokemon.getCurrentHp());
             contentStack.add(hpBar).width(40).height(4).padTop(2);
@@ -541,23 +844,9 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     }
 
     private void updateSlotVisuals() {
-        // Clear existing slots and re-create with updated visuals
         partyDisplay.clearChildren();
-        createPartyDisplay(); // Re-render the slots with the updated selection
+        createPartyDisplay();
     }
-
-    private void selectPokemon(int index) {
-        if (pokemonPartyUI != null) {
-            pokemonPartyUI.selectPokemon(index);
-            updatePokemonPartyUI();
-        }
-        updateSlotVisuals(); // Refresh the slot visuals after changing selection
-    }
-
-    /**
-     * Creates the hotbar UI by rendering all hotbar slots.
-     */
-
 
     public PlayerData getCurrentPlayerState() {
         PlayerData currentState = new PlayerData(player.getUsername());
@@ -566,168 +855,451 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         return currentState;
     }
 
-    private Color getSlotNumberColor(boolean isSelected) {
-        return isSelected ? Color.WHITE : Color.LIGHT_GRAY;
-    }
-
-    private Color getCountBackgroundColor() {
-        return new Color(0, 0, 0, 0.7f);
-    }
-
     // Helper methods for Pokemon party handling
     private boolean isPokemonPartyVisible() {
         return pokemonPartyUI != null && pokemonPartyUI.isVisible();
     }
 
-    private void showPokemonParty() {
-        if (pokemonPartyUI == null) {
-            pokemonPartyUI = new PokemonPartyUI(player.getPokemonParty(), skin);
-            pokemonPartyStage.addActor(pokemonPartyUI);
-        }
-        pokemonPartyUI.setVisible(!pokemonPartyUI.isVisible());
-        updatePokemonPartyUI();
-    }
-
-    private void hidePokemonParty() {
-        if (pokemonPartyUI != null) {
-            pokemonPartyUI.setVisible(false);
-        }
-    }
-
     private void updateAndroidControlPositions() {
-        if (Gdx.app.getType() == Application.ApplicationType.Android) {
+        if (Gdx.app.getType() != Application.ApplicationType.Android) {
+            return;
+        }
+
+        try {
             float screenWidth = Gdx.graphics.getWidth();
             float screenHeight = Gdx.graphics.getHeight();
             float buttonSize = screenHeight * 0.1f;
             float padding = buttonSize * 0.5f;
 
-            // Update joystick position
-            joystickCenter.set(screenWidth * 0.15f, screenHeight * 0.2f);
-            joystickCurrent.set(joystickCenter);
+            if (joystickCenter == null) {
+                joystickCenter = new Vector2(screenWidth * 0.15f, screenHeight * 0.2f);
+            } else {
+                joystickCenter.set(screenWidth * 0.15f, screenHeight * 0.2f);
+            }
 
-            // Update button positions
-            inventoryButton.set(
+            if (joystickCurrent == null) {
+                joystickCurrent = new Vector2(joystickCenter);
+            } else {
+                joystickCurrent.set(joystickCenter);
+            }
+            if (inventoryButton == null) {
+                inventoryButton = new Rectangle(
+                    screenWidth - (buttonSize * 2 + padding * 2),
+                    screenHeight - (buttonSize + padding),
+                    buttonSize,
+                    buttonSize
+                );
+            } else {
+                inventoryButton.set(
+                    screenWidth - (buttonSize * 2 + padding * 2),
+                    screenHeight - (buttonSize + padding),
+                    buttonSize,
+                    buttonSize
+                );
+            }
+
+            if (menuButton == null) {
+                menuButton = new Rectangle(
+                    screenWidth - (buttonSize + padding),
+                    screenHeight - (buttonSize + padding),
+                    buttonSize,
+                    buttonSize
+                );
+            } else {
+                menuButton.set(
+                    screenWidth - (buttonSize + padding),
+                    screenHeight - (buttonSize + padding),
+                    buttonSize,
+                    buttonSize
+                );
+            }
+
+            GameLogger.info("Updated Android controls - Screen: " + screenWidth + "x" + screenHeight +
+                ", Joystick at: " + joystickCenter.x + "," + joystickCenter.y);
+
+        } catch (Exception e) {
+            GameLogger.error("Error updating Android controls: " + e.getMessage());
+            e.printStackTrace();
+
+            initializeAndroidControlsSafe();
+        }
+    }
+
+    private void initializeAndroidControlsSafe() {
+        try {
+            float screenWidth = Math.max(Gdx.graphics.getWidth(), 480); // Minimum safe width
+            float screenHeight = Math.max(Gdx.graphics.getHeight(), 320); // Minimum safe height
+            float buttonSize = Math.min(screenHeight * 0.1f, 64); // Limit maximum size
+            float padding = buttonSize * 0.5f;
+
+            joystickCenter = new Vector2(screenWidth * 0.15f, screenHeight * 0.2f);
+            joystickCurrent = new Vector2(joystickCenter);
+
+            inventoryButton = new Rectangle(
                 screenWidth - (buttonSize * 2 + padding * 2),
                 screenHeight - (buttonSize + padding),
                 buttonSize,
                 buttonSize
             );
 
-            menuButton.set(
+            menuButton = new Rectangle(
                 screenWidth - (buttonSize + padding),
                 screenHeight - (buttonSize + padding),
                 buttonSize,
                 buttonSize
             );
+
+            GameLogger.info("Initialized safe Android controls");
+        } catch (Exception e) {
+            GameLogger.error("Failed to initialize safe Android controls: " + e.getMessage());
         }
     }
 
-    private int getCurrentPokemonIndex() {
-        return pokemonPartyUI != null ? pokemonPartyUI.getSelectedIndex() : 0;
-    }
+    private void ensureAndroidControlsInitialized() {
+        if (Gdx.app.getType() == Application.ApplicationType.Android &&
+            (joystickCenter == null || joystickCurrent == null ||
+                inventoryButton == null || menuButton == null)) {
 
-    private void updatePokemonPartyUI() {
-        if (pokemonPartyUI != null && pokemonPartyUI.isVisible()) {
-            pokemonPartyUI.updateUI();
+            initializeAndroidControlsSafe();
         }
     }
 
-    private void updateSlotVisuals(Table cell, boolean isSelected) {
-        cell.setBackground(new TextureRegionDrawable(
-            TextureManager.ui.findRegion(isSelected ? "slot_selected" : "slot_normal")
+    @Override
+    public void handleBattleInitiation() {
+        if (inBattle || transitioning) {
+            GameLogger.info("Battle or transition already in progress");
+            return;
+        }
+
+        WildPokemon nearestPokemon = world.getNearestInteractablePokemon(player);
+        if (nearestPokemon == null || nearestPokemon.isAddedToParty()) {
+            GameLogger.info("No valid Pokemon found for battle");
+            return;
+        }
+
+        if (nearestPokemon.getLevel() >= 7) {
+            GameLogger.info("Initiating battle with level " + nearestPokemon.getLevel() + " " + nearestPokemon.getName());
+
+            if (player.getPokemonParty().getSize() == 0) {
+                chatSystem.handleIncomingMessage(createSystemMessage("You need Pokémon to battle!"));
+                return;
+            }
+
+            // Initialize battle components first
+            try {
+                // Create battle stage if needed
+                if (battleStage == null) {
+                    battleStage = new Stage(new FitViewport(800, 480));
+                    battleStage.getViewport().update(Gdx.graphics.getWidth(), Gdx.graphics.getHeight(), true);
+                    GameLogger.info("Created new battle stage with viewport: 800x480");
+                }
+
+                // Create battle table immediately to verify it works
+                battleTable = new BattleTable(battleStage, battleSkin,
+                    player.getPokemonParty().getFirstPokemon(),
+                    nearestPokemon);
+
+                if (battleTable == null) {
+                    throw new IllegalStateException("Failed to create battle table");
+                }
+                battleTable.setFillParent(true); // Ensures correct sizing
+                battleTable.setVisible(true);    // Ensures visibility
+                battleStage.addActor(battleTable); // Adds to battleStage
+
+                GameLogger.info("Battle table created successfully");
+
+                // Now start transition sequence
+                transitioning = true;
+                inputBlocked = true;
+                inBattle = true;
+
+                // Create dark overlay
+                Table overlay = new Table();
+                overlay.setFillParent(true);
+                overlay.setBackground(new TextureRegionDrawable(
+                    TextureManager.getUi().findRegion("dark-overlay")));
+                overlay.getColor().a = 0f;
+                uiStage.addActor(overlay);
+
+
+                // Create and execute transition sequence
+                SequenceAction battleSequence = Actions.sequence(
+                    Actions.fadeIn(TRANSITION_DURATION),
+                    Actions.delay(TRANSITION_DURATION),
+                    Actions.run(() -> {
+                        GameLogger.info("Starting battle initialization...");
+                        initiateBattle(nearestPokemon);
+
+                        if (battleInitialized) {
+                            inBattle = true;
+                            GameLogger.info("Battle initialized successfully");
+                        } else {
+                            GameLogger.error("Battle initialization failed");
+                            cleanup();
+                        }
+                        // Add table to stage
+                        battleStage.addActor(battleTable);
+
+                        // Set input processor
+                        InputMultiplexer multiplexer = new InputMultiplexer(battleStage);
+                        Gdx.input.setInputProcessor(multiplexer);
+                        GameLogger.info("Set input processor to battle stage");
+
+                        // Set up callback
+                        battleTable.setCallback(new BattleTable.BattleCallback() {
+                            @Override
+                            public void onBattleEnd(boolean playerWon) {
+                                GameLogger.info("Battle ended, playerWon: " + playerWon);
+                                endBattle(playerWon, nearestPokemon);
+                            }
+
+                            @Override
+                            public void onTurnEnd(Pokemon activePokemon) {
+                                GameLogger.info("Turn ended for: " + activePokemon.getName());
+                            }
+
+                            @Override
+                            public void onStatusChange(Pokemon pokemon, Pokemon.Status newStatus) {
+                                GameLogger.info("Status changed for " + pokemon.getName() + ": " + newStatus);
+                            }
+
+                            @Override
+                            public void onMoveUsed(Pokemon user, Move move, Pokemon target) {
+                                GameLogger.info(user.getName() + " used " + move.getName());
+                            }
+                        });
+
+                        battleTable.validate(); // Force layout update
+                        GameLogger.info("Battle initialization complete");
+                    }),
+                    Actions.run(() -> {
+                        // Fade in battle table
+                        battleTable.getColor().a = 0f;
+                        battleTable.addAction(Actions.fadeIn(TRANSITION_DURATION));
+                    }),
+                    Actions.delay(TRANSITION_DURATION),
+                    Actions.run(() -> {
+                        overlay.remove();
+                        transitioning = false;
+                        inputBlocked = false;
+                        GameLogger.info("Battle transition complete");
+                    })
+                );
+
+                overlay.addAction(battleSequence);
+                GameLogger.info("Battle sequence started");
+
+            } catch (Exception e) {
+                GameLogger.error("Error during battle initiation: " + e.getMessage());
+                e.printStackTrace();
+                cleanup();
+                inBattle = false;
+                transitioning = false;
+                inputBlocked = false;
+            }
+        } else {
+            handlePokemonCapture(nearestPokemon);
+        }
+    }
+
+    private void handlePokemonCapture(WildPokemon wildPokemon) {
+        if (player.getPokemonParty().isFull()) {
+            chatSystem.handleIncomingMessage(createSystemMessage(
+                "Your party is full! Cannot capture more Pokémon!"
+            ));
+            return;
+        }
+
+        // For now, auto-capture low-level Pokémon
+        player.getPokemonParty().addPokemon(wildPokemon);
+        world.getPokemonSpawnManager().removePokemon(wildPokemon.getUuid());
+
+        chatSystem.handleIncomingMessage(createSystemMessage(
+            "Caught a wild " + wildPokemon.getName() + "!"
+        ));
+        updateSlotVisuals();
+    }
+
+    private void endBattle(boolean playerWon, WildPokemon pokemon) {
+        if (battleTable != null) {
+            // Add fade-out animation
+            battleTable.addAction(Actions.sequence(
+                Actions.fadeOut(BATTLE_UI_FADE_DURATION),
+                Actions.run(() -> {
+                    inBattle = false;
+                    battleUIFading = false;
+                    cleanup();
+
+                    // Handle battle results
+                    if (playerWon) {
+                        handleBattleVictory(pokemon);
+                    } else {
+                        handleBattleDefeat();
+                    }
+
+                    // Restore normal game input
+                    setupInputProcessors();
+                })
+            ));
+            battleUIFading = true;
+        }
+    }
+
+    // Add this method to handle cleanup
+    private void cleanup() {
+        if (battleTable != null) {
+            battleTable.dispose();
+            battleTable = null;
+        }
+        if (battleStage != null) {
+            battleStage.dispose();
+            battleStage = null;
+        }
+        inBattle = false;
+        transitioning = false;
+        inputBlocked = false;
+        setupInputProcessors();
+    }
+
+    // Helper method to revert to world state
+    private void revertToWorld() {
+        if (battleTable != null) {
+            battleTable.remove();
+            battleTable = null;
+        }
+        transitioning = false;
+        inputBlocked = false;
+        inBattle = false;
+    }
+
+    private void initiateBattle(WildPokemon wildPokemon) {
+        try {
+
+            if (battleStage == null) {
+                battleStage = new Stage(new FitViewport(800, 480));
+            }
+            battleStage.clear();
+
+            // Create battle table
+            if (battleTable != null) {
+                battleTable.remove();
+                battleTable = null;
+            }
+            float screenWidth = Gdx.graphics.getWidth();
+            float screenHeight = Gdx.graphics.getHeight();
+            Table worldDim = new Table();
+            worldDim.setFillParent(true);
+            Pixmap dimPixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+            dimPixmap.setColor(0, 0, 0, 0.5f);
+            dimPixmap.fill();
+            worldDim.setBackground(new TextureRegionDrawable(new TextureRegion(new Texture(dimPixmap))));
+            dimPixmap.dispose();
+            battleStage.addActor(worldDim);
+            // Add to stage
+            // Create and add battle table
+            battleTable = new BattleTable(battleStage, battleSkin,
+                player.getPokemonParty().getFirstPokemon(),
+                wildPokemon);
+            battleTable.setFillParent(true);
+            battleStage.addActor(battleTable);
+
+
+            // Fade in battle UI
+            battleTable.getColor().a = 0f;
+            battleTable.addAction(Actions.fadeIn(0.5f));
+            setupBattleInput();
+            // Update viewport and layout
+            battleStage.getViewport().update(
+                (int) screenWidth,
+                (int) screenHeight,
+                true
+            );
+            battleTable.validate();
+
+            // Set battle state
+            inBattle = true;
+            battleInitialized = true;
+
+            // Update input processors
+            setupInputProcessors();
+            // Log sizes to verify
+            GameLogger.info("Screen size: " + screenWidth + "x" + screenHeight);
+            GameLogger.info("Battle table size: " + battleTable.getWidth() + "x" + battleTable.getHeight());
+
+            // Set up battle callback
+            battleTable.setCallback(new BattleTable.BattleCallback() {
+                @Override
+                public void onBattleEnd(boolean playerWon) {
+                    endBattle(playerWon, wildPokemon);
+                }
+
+                @Override
+                public void onTurnEnd(Pokemon activePokemon) {
+                    GameLogger.info("Turn ended for: " + activePokemon.getName());
+                }
+
+                @Override
+                public void onStatusChange(Pokemon pokemon, Pokemon.Status newStatus) {
+                    GameLogger.info("Status changed for " + pokemon.getName() + ": " + newStatus);
+                }
+
+                @Override
+                public void onMoveUsed(Pokemon user, Move move, Pokemon target) {
+                    GameLogger.info(user.getName() + " used " + move.getName());
+                }
+            });
+
+            // Update input processors to maintain menu functionality
+            inBattle = true;
+
+            GameLogger.info("Battle initialization complete");
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to initialize battle: " + e.getMessage());
+            e.printStackTrace();
+            cleanup();
+        }
+    }
+
+    private void handleBattleVictory(WildPokemon wildPokemon) {
+        // Award experience
+        int expGain = calculateExperienceGain(wildPokemon);
+        player.getPokemonParty().getFirstPokemon().addExperience(expGain);
+
+        world.getPokemonSpawnManager().removePokemon(wildPokemon.getUuid());
+
+        // Show victory message
+        chatSystem.handleIncomingMessage(createSystemMessage(
+            "Victory! " + player.getPokemonParty().getFirstPokemon().getName() +
+                " gained " + expGain + " experience!"
         ));
     }
 
-    // In GameScreen class
-    @Override
-    public void handleBattleInitiation() {
-        if (transitioning) return; // Prevent multiple transitions
+    private void handleBattleDefeat() {
+        // Simply heal the party
+        player.getPokemonParty().healAllPokemon();
 
-        WildPokemon nearestPokemon = world.getNearestInteractablePokemon(player);
-        if (nearestPokemon != null && !nearestPokemon.isAddedToParty()) {
-            if (nearestPokemon.getLevel() >= 7) {
-                if (player.getPokemonParty().getSize() == 0) {
-                    chatSystem.handleIncomingMessage(createSystemMessage("You need Pokémon to battle!"));
-                    return;
-                }
-
-                // Start transition
-                transitioning = true;
-                transitionTimer = 0;
-                transitionOut = true;
-                transitioningPokemon = nearestPokemon;
-
-            } else {
-                // Handle friendly Pokemon as before
-                if (!player.getPokemonParty().isFull()) {
-                    player.getPokemonParty().addPokemon(nearestPokemon);
-                    nearestPokemon.setAddedToParty(true);
-                    world.getPokemonSpawnManager().despawnPokemon(nearestPokemon.getUuid());
-                    updatePartyDisplay();
-                    chatSystem.handleIncomingMessage(createSystemMessage(
-                        nearestPokemon.getName() + " seems friendly and joined your party!"
-                    ));
-                    updateSlotVisuals();
-                } else {
-                    chatSystem.handleIncomingMessage(createSystemMessage(
-                        "Your party is full. " + nearestPokemon.getName() + " cannot join."
-                    ));
-                }
-            }
-        }
+        // Show healing message
+        chatSystem.handleIncomingMessage(createSystemMessage(
+            "Your Pokémon have been healed!"
+        ));
     }
 
-    private void renderTransitionOverlay(float progress) {
-        Gdx.gl.glEnable(GL20.GL_BLEND);
-        shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
-        shapeRenderer.setColor(0, 0, 0, progress);
-
-        // Draw full screen black overlay
-        float screenWidth = Gdx.graphics.getWidth();
-        float screenHeight = Gdx.graphics.getHeight();
-        shapeRenderer.rect(0, 0, screenWidth, screenHeight);
-
-        shapeRenderer.end();
-        Gdx.gl.glDisable(GL20.GL_BLEND);
-    }
-
-    private void renderWorldWithFade(float alpha) {
-        batch.setProjectionMatrix(camera.combined);
-        batch.begin();
-        Color c = batch.getColor();
-        float oldA = c.a;
-        c.a *= alpha;
-        batch.setColor(c);
-
-        // Render world elements
-        Rectangle viewBounds = new Rectangle(
-            camera.position.x - (camera.viewportWidth * camera.zoom) / 2,
-            camera.position.y - (camera.viewportHeight * camera.zoom) / 2,
-            camera.viewportWidth * camera.zoom,
-            camera.viewportHeight * camera.zoom
-        );
-
-        world.render(batch, viewBounds, player);
-
-        // Restore alpha
-        c.a = oldA;
-        batch.setColor(c);
-        batch.end();
+    private int calculateExperienceGain(WildPokemon wildPokemon) {
+        // Basic experience calculation
+        return (int) (wildPokemon.getBaseExperience() * wildPokemon.getLevel() / 7);
     }
 
     private void renderBattleTransition(float delta) {
         transitionTimer += delta;
         float progress = Math.min(1, transitionTimer / TRANSITION_DURATION);
 
-        // Draw black bars closing in
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
         shapeRenderer.setColor(0, 0, 0, 1);
 
         float height = Gdx.graphics.getHeight() * progress / 2;
-        // Top bar
         shapeRenderer.rect(0, Gdx.graphics.getHeight() - height,
             Gdx.graphics.getWidth(), height);
-        // Bottom bar
         shapeRenderer.rect(0, 0, Gdx.graphics.getWidth(), height);
 
         shapeRenderer.end();
@@ -737,43 +1309,8 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
             transitionTimer = 0;
         }
     }
-    // Add this helper method for better chunk visibility checking
 
-    public void startBattle(WildPokemon pokemon) {
-//        BattleScreen battleScreen = new BattleScreen(
-//            player.getPokemonParty().getPokemon(0),
-//            pokemon,
-//            world.getBiomeAt(player.getTileX(), player.getTileY()).getType(),
-//            TextureManager.battlebacks,
-//            skin
-//        );
-//
-//        battleScreen.setBattleCompletionHandler(() -> {
-//            // After battle, return to the GameScreen
-//            game.setScreenWithoutDisposing(this);
-//            // Re-setup input processors and other necessary components
-//            setupInputProcessors();
-//        });
-//
-//        game.setScreenWithoutDisposing(battleScreen);
-    }
-
-    private WildPokemon getNearbyPokemonBelowLevel() {
-        // Search for the nearest Pokémon within interaction range
-        Collection<WildPokemon> nearbyPokemon = world.getPokemonSpawnManager().getAllWildPokemon();
-        WildPokemon closestPokemon = null;
-        float closestDistance = Float.MAX_VALUE;
-
-        for (WildPokemon pokemon : nearbyPokemon) {
-            float distance = Vector2.dst(player.getTileX(), player.getTileY(), pokemon.getX(), pokemon.getY());
-
-            if (distance < TILE_SIZE * 1.5f && distance < closestDistance) {
-                closestPokemon = pokemon;
-                closestDistance = distance;
-            }
-
-        }
-        return closestPokemon; // Returns null if no suitable Pokémon is found
+    public void startBattle() {
     }
 
     private NetworkProtocol.ChatMessage createSystemMessage(String content) {
@@ -787,83 +1324,94 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
 
     @Override
     public void show() {
-        setupInputProcessors();
-        batch = new SpriteBatch();
-        AudioManager.getInstance().stopMenuMusic();
-
-        // Set up input processors in correct order
-        InputMultiplexer multiplexer = new InputMultiplexer();
-
-        // Add chat stage first for chat input priority
-        multiplexer.addProcessor(stage);
-
-        // Add game input processors
-        multiplexer.addProcessor(inputHandler);
-
-        // Add Android processor if needed
-        if (Gdx.app.getType() == Application.ApplicationType.Android) {
-            multiplexer.addProcessor(new AndroidInputProcessor());
+        if (player != null) {
+            player.initializeResources();
+            GameLogger.info("Reinitialized player resources on screen show");
         }
-
-        Gdx.input.setInputProcessor(multiplexer);
-    }
-
-    /**
-     * Updates the state of other players based on network data.
-     */
-
-    private void updateOtherPlayers() {
-        Map<String, NetworkProtocol.PlayerUpdate> networkPlayerUpdates = gameClient.getPlayerUpdates();
-        GameLogger.info("Number of other players to update: " + networkPlayerUpdates.size());
-
-        for (Map.Entry<String, NetworkProtocol.PlayerUpdate> entry : networkPlayerUpdates.entrySet()) {
-            String username = entry.getKey();
-            NetworkProtocol.PlayerUpdate netUpdate = entry.getValue();
-
-            GameLogger.info("Processing PlayerUpdate for: " + username);
-
-            if (!username.equals(player.getUsername()) && netUpdate != null) {
-                // Get the existing OtherPlayer or create a new one
-                OtherPlayer op = otherPlayers.get(username);
-                if (op == null) {
-                    // Create a new OtherPlayer instance
-                    op = new OtherPlayer(username, netUpdate.x, netUpdate.y, TextureManager.boy);
-                    otherPlayers.put(username, op);
-                    GameLogger.info("Created new OtherPlayer for username: " + username);
-                }
-
-                // Update the OtherPlayer's state with the network data
-                op.updateFromNetwork(netUpdate);
-                GameLogger.info("Updated OtherPlayer " + username + " with position: (" + netUpdate.x + ", " + netUpdate.y + ")");
+        if (!initializationComplete) {
+            if (uiStage != null) {
+                Gdx.input.setInputProcessor(uiStage);
+                GameLogger.info("Set input processor to uiStage during starter selection");
+            }
+            return;
+        }
+        if (inBattle && battleStage != null) {
+            // Set up battle-specific input handling
+            InputMultiplexer battleMultiplexer = new InputMultiplexer();
+            battleMultiplexer.addProcessor(battleStage);
+            battleMultiplexer.addProcessor(uiStage);
+            if (inputHandler != null) {
+                battleMultiplexer.addProcessor(inputHandler);
+            }
+            Gdx.input.setInputProcessor(battleMultiplexer);
+            GameLogger.info("Battle input processors initialized");
+        }
+        if (!initialized) {
+            initialized = true;
+            if (isMultiplayer) {
+                initializeChatSystem();
+                setupGameClientListeners();
+            }
+            if (!starterSelectionComplete) {
+                Gdx.input.setInputProcessor(uiStage);
+                GameLogger.info("Set input processor to uiStage for starter selection");
+            } else {
+                setupInputProcessors();
             }
         }
+        batch = new SpriteBatch();
+        AudioManager.getInstance().stopMenuMusic();
+        if (player.getPokemonParty().getSize() == 0) {
+            GameLogger.info("In starter selection - setting input processor to uiStage only");
+            Gdx.input.setInputProcessor(uiStage);
+        } else {
+            GameLogger.info("Not in starter selection - setting up normal input processors");
+            setupInputProcessors();
+            //            InputMultiplexer multiplexer = new InputMultiplexer();
+            //            multiplexer.addProcessor(stage);
+            //            multiplexer.addProcessor(inputHandler);
+            //            if (Gdx.app.getType() == Application.ApplicationType.Android) {
+            //                multiplexer.addProcessor(new AndroidInputProcessor());
+            //                initializeAndroidControls();
+            //                addAndroidMenuButton();
+            //            }
+            //
+            //            Gdx.input.setInputProcessor(multiplexer);
+        }
+    }
 
-        // Remove OtherPlayers that are no longer present
-        Set<String> playersToRemove = new HashSet<>(otherPlayers.keySet());
-        playersToRemove.removeAll(networkPlayerUpdates.keySet());
-        for (String username : playersToRemove) {
-            OtherPlayer op = otherPlayers.remove(username);
-            if (op != null) {
-                op.dispose();
-                GameLogger.info("Removed OtherPlayer: " + username);
+    private void renderOtherPlayers(SpriteBatch batch, Rectangle viewBounds) {
+        if (gameClient == null || gameClient.isSinglePlayer()) {
+            return;
+        }
+
+        Map<String, OtherPlayer> otherPlayers = gameClient.getOtherPlayers();
+
+        synchronized (otherPlayers) {
+            // Sort players by Y position for correct depth
+            List<OtherPlayer> sortedPlayers = new ArrayList<>(otherPlayers.values());
+            sortedPlayers.sort((p1, p2) -> Float.compare(p2.getY(), p1.getY()));
+
+            for (OtherPlayer otherPlayer : sortedPlayers) {
+                if (otherPlayer == null) continue;
+
+                float playerX = otherPlayer.getX();
+                float playerY = otherPlayer.getY();
+
+                // Only render if within view bounds
+                if (viewBounds.contains(playerX, playerY)) {
+                    otherPlayer.render(batch);
+                }
             }
         }
     }
 
     private void setupCamera() {
         camera = new OrthographicCamera();
-
-        // Calculate viewport size based on target tiles
         float baseWidth = TARGET_VIEWPORT_WIDTH_TILES * TILE_SIZE;
         float baseHeight = baseWidth * ((float) Gdx.graphics.getHeight() / Gdx.graphics.getWidth());
-
-        // Initialize cameraViewport
         cameraViewport = new FitViewport(baseWidth, baseHeight, camera);
-
-        // Now update the cameraViewport without centering the camera
         cameraViewport.update(Gdx.graphics.getWidth(), Gdx.graphics.getHeight(), false);
-
-        // Set initial position
         if (player != null) {
             camera.position.set(
                 player.getX() + Player.FRAME_WIDTH / 2f,
@@ -879,72 +1427,44 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
 
     private void updateCamera() {
         if (player != null) {
-            // Calculate target position (center on player)
             float targetX = player.getX() + Player.FRAME_WIDTH / 2f;
             float targetY = player.getY() + Player.FRAME_HEIGHT / 2f;
-
-            // Smooth camera follow
             float lerp = CAMERA_LERP * Gdx.graphics.getDeltaTime();
             camera.position.x += (targetX - camera.position.x) * lerp;
             camera.position.y += (targetY - camera.position.y) * lerp;
 
-            // Debug camera position
-//            GameLogger.info("Camera following - target: " + targetX + "," + targetY +
-//                " actual: " + camera.position.x + "," + camera.position.y);
-
             camera.update();
         }
     }
 
-    private void centerCameraOnPlayer() {
-        if (player != null) {
-            // Calculate the center position based on player's tile position
-            float exactPlayerX = player.getX() + (Player.FRAME_WIDTH / 2f);
-            float exactPlayerY = player.getY() + (Player.FRAME_HEIGHT / 2f);
-
-            // Smoothly transition the camera's position to the player's position
-            camera.position.lerp(new Vector3(exactPlayerX, exactPlayerY, 0), CAMERA_SMOOTH_SPEED * Gdx.graphics.getDeltaTime());
-            camera.update();
-        }
-    }
-
-    private void clampCameraPosition() {
-        float halfViewportWidth = (camera.viewportWidth * camera.zoom) / 2f;
-        float halfViewportHeight = (camera.viewportHeight * camera.zoom) / 2f;
-
-        camera.position.x = MathUtils.clamp(camera.position.x, MIN_TILE_BOUND * TILE_SIZE + halfViewportWidth,
-            MAX_TILE_BOUND * TILE_SIZE - halfViewportWidth);
-        camera.position.y = MathUtils.clamp(camera.position.y, MIN_TILE_BOUND * TILE_SIZE + halfViewportHeight,
-            MAX_TILE_BOUND * TILE_SIZE - halfViewportHeight);
-    }
-
+    @Override
     public void render(float delta) {
-
-        // Clear the screen properly first
+        // Clear screen
+        Gdx.gl.glClearColor(0, 0, 0, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
-        float viewportWidthPixels = camera.viewportWidth * camera.zoom;
-        float viewportHeightPixels = camera.viewportHeight * camera.zoom;
-        if (transitioning) {
-            transitionTimer += delta;
-            float progress = transitionTimer / TRANSITION_DURATION;
+        if (movementController != null) {
+            movementController.update(delta);
+        }
+        // Handle starter Pokemon case first
+        if (player != null && player.getPokemonParty().getSize() == 0) {
+            Gdx.gl.glClearColor(0.1f, 0.1f, 0.2f, 1);
+            Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
-            if (transitionOut) {
-                // Fade out
-                if (progress >= 1.0f) {
-                    // Switch to battle screen
-                    if (transitioningPokemon != null) {
-                        startBattle(transitioningPokemon);
-                    }
-                    transitioning = false;
-                    transitionTimer = 0;
-                    transitioningPokemon = null;
-                } else {
-                    // Render world with fade out effect
-                    renderWorldWithFade(1.0f - progress);
-                    renderTransitionOverlay(progress);
-                }
+            uiStage.act(delta);
+            uiStage.draw();
+
+            debugTimer += delta;
+            if (debugTimer >= 1.0f) {
+                debugInputState();
+                debugTimer = 0;
             }
-        } else {
+            return;
+        }
+        batch.begin();
+        batch.setProjectionMatrix(camera.combined);
+
+        // World rendering
+        if (world != null && player != null) {
             Rectangle viewBounds = new Rectangle(
                 camera.position.x - (camera.viewportWidth * camera.zoom) / 2,
                 camera.position.y - (camera.viewportHeight * camera.zoom) / 2,
@@ -952,81 +1472,173 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
                 camera.viewportHeight * camera.zoom
             );
 
-            // Calculate view bounds for rendering
-
-
-            batch.setProjectionMatrix(camera.combined);
-            batch.begin();
-            // Update and render the world
             world.render(batch, viewBounds, player);
-        }
-        // Update world with current viewport dimensions
-        world.update(delta,
-            new Vector2(player.getTileX(), player.getTileY()),
-            viewportWidthPixels,
-            viewportHeightPixels
-        );
 
-        world.update(delta, new Vector2(player.getTileX(), player.getTileY()), camera.viewportWidth, camera.viewportHeight);
-
-        float deltaTime = Gdx.graphics.getDeltaTime();
-
-        worldManager.checkAutoSave();
-        // Update systems
-        chatSystem.update(delta);
-        handleInput();
-        player.update(deltaTime);
-        updateCamera();
-
-
-        // Update other players
-        if (!gameClient.isSinglePlayer()) {
-            updateOtherPlayers(deltaTime);
-            renderOtherPlayers(batch);
-        }
-
-        batch.end();
-
-        // Render UI
-        uiStage.getViewport().apply();
-        uiStage.act(deltaTime);
-        uiStage.draw();
-
+            if (!gameClient.isSinglePlayer()) {
+                renderOtherPlayers(batch, viewBounds);
+            }
+        }           // Debug info
         if (SHOW_DEBUG_INFO) {
             renderDebugInfo();
         }
 
-        // Menu rendering
-        if (gameMenu != null) {
-            gameMenu.getStage().getViewport().apply();
-            gameMenu.getStage().act(deltaTime);
-            gameMenu.getStage().draw();
+        batch.end();
+        // Handle world initialization
+        if (world != null && !initializedworld) {
+            if (!world.areAllChunksLoaded()) {
+                initializationTimer += (int) delta;
+                if (initializationTimer > 5f) {
+                    GameLogger.info("Attempting to force load missing chunks...");
+                    world.forceLoadMissingChunks();
+                    initializationTimer = 0;
+                }
+            } else {
+                initializedworld = true;
+                GameLogger.info("All chunks successfully loaded");
+            }
         }
-        if (transitioning) {
-            renderBattleTransition(delta);
+        if (isHoldingDirection && currentDpadDirection != null) {
+            movementTimer += delta;
+            if (movementTimer >= MOVEMENT_REPEAT_DELAY) {
+                player.move(currentDpadDirection);
+                movementTimer = 0f;
+            }
+            player.setRunning(isRunPressed);
         }
-        // Inventory rendering
+
+        // Enable blending for UI elements
+        Gdx.gl.glEnable(GL20.GL_BLEND);
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+
+        if (inBattle && battleStage != null) {
+            battleStage.act(delta);
+            battleStage.draw();
+
+            // Debug touch input
+            if (Gdx.input.justTouched()) {
+                float x = Gdx.input.getX();
+                float y = Gdx.input.getY();
+                Vector2 stageCoords = battleStage.screenToStageCoordinates(new Vector2(x, y));
+                GameLogger.info("Touch at stage coordinates: " + stageCoords.x + ", " + stageCoords.y);
+            }
+        }
+        // UI Stage rendering
+        if (uiStage != null) {
+            uiStage.getViewport().apply();
+            uiStage.act(delta);
+            uiStage.draw();
+        }
+
+
+        if (menuVisible && gameMenu != null) {
+            gameMenu.render();
+        }
+
         if (inventoryOpen && inventoryScreen != null) {
+            // Enable blending for semi-transparent background
             Gdx.gl.glEnable(GL20.GL_BLEND);
             Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
 
+            // Draw dark background
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
-            shapeRenderer.setColor(0, 0, 0, 0.5f);
+            shapeRenderer.setColor(0, 0, 0, 0.7f);
             shapeRenderer.rect(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
             shapeRenderer.end();
 
-            inventoryScreen.render(deltaTime);
+            // Render inventory
+            inventoryScreen.render(delta);
 
             Gdx.gl.glDisable(GL20.GL_BLEND);
         }
 
+        // Pokemon party rendering
         if (isPokemonPartyVisible()) {
-            pokemonPartyStage.act(deltaTime);
+            pokemonPartyStage.act(delta);
             pokemonPartyStage.draw();
         }
 
-        if (Gdx.app.getType() == Application.ApplicationType.Android) {
+
+        // Android controls
+        if (Gdx.app.getType() == Application.ApplicationType.Android && controlsInitialized) {
+            ensureAndroidControlsInitialized();
             renderAndroidControls();
+        }
+
+        Gdx.gl.glDisable(GL20.GL_BLEND);
+
+        // Game state updates
+        if (world != null && player != null) {
+            float deltaTime = Gdx.graphics.getDeltaTime();
+            player.update(deltaTime);
+            // Camera update
+            if (!inBattle && !transitioning) {
+                updateCamera();
+            }
+
+            if (isMultiplayer) {
+                // Other systems updates
+                updateOtherPlayers(delta);
+
+                if (gameClient != null) {
+                    gameClient.tick(delta);
+                }
+                if (world != null) {
+                    world.update(delta, new Vector2(player.getTileX(), player.getTileY()),
+                        Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+                }
+            } else {
+                player.validateResources();
+                float viewportWidthPixels = camera.viewportWidth * camera.zoom;
+                float viewportHeightPixels = camera.viewportHeight * camera.zoom;
+                world.update(delta,
+                    new Vector2(player.getTileX(), player.getTileY()),
+                    viewportWidthPixels,
+                    viewportHeightPixels
+                );
+            }
+
+            if (worldManager != null) {
+                worldManager.checkAutoSave();
+            }
+
+            handleInput();
+            updateTimer += delta;
+
+            // Handle multiplayer updates
+            if (isMultiplayer && updateTimer >= UPDATE_INTERVAL) {
+                updateTimer = 0;
+                NetworkProtocol.PlayerUpdate update = new NetworkProtocol.PlayerUpdate();
+                update.username = player.getUsername();
+                update.x = player.getX();
+                update.y = player.getY();
+                update.direction = player.getDirection();
+                update.isMoving = player.isMoving();
+                update.wantsToRun = player.isRunning();
+                update.timestamp = System.currentTimeMillis();
+                // Add debug log
+                GameLogger.info("Sending player update: pos=(" + update.x + "," + update.y +
+                    ") dir=" + update.direction + " moving=" + update.isMoving);
+                assert gameClient != null;
+                gameClient.sendPlayerUpdate();
+
+                // Handle incoming updates
+                Map<String, NetworkProtocol.PlayerUpdate> updates = gameClient.getPlayerUpdates();
+                if (!updates.isEmpty()) {
+                    synchronized (gameClient.getOtherPlayers()) {
+                        for (NetworkProtocol.PlayerUpdate playerUpdate : updates.values()) {
+                            if (!playerUpdate.username.equals(player.getUsername())) {
+                                OtherPlayer op = gameClient.getOtherPlayers().get(playerUpdate.username);
+                                if (op == null) {
+                                    op = new OtherPlayer(playerUpdate.username, playerUpdate.x, playerUpdate.y);
+                                    gameClient.getOtherPlayers().put(playerUpdate.username, op);
+                                    GameLogger.info("Created new player: " + playerUpdate.username);
+                                }
+                                op.updateFromNetwork(playerUpdate);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1042,68 +1654,41 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     }
 
     private void updateOtherPlayers(float delta) {
-        Map<String, OtherPlayer> players = gameClient.getOtherPlayers();
-        if (players == null || players.isEmpty()) {
-            return;
-        }
-
-        for (OtherPlayer otherPlayer : players.values()) {
-            if (otherPlayer != null) {
-                otherPlayer.update(delta);
+        if (isMultiplayer) {
+            Map<String, OtherPlayer> others = gameClient.getOtherPlayers();
+            GameLogger.info("Number of other players: " + others.size());
+            if (!others.isEmpty()) {
+                for (OtherPlayer otherPlayer : others.values()) {
+                    try {
+                        otherPlayer.update(delta);
+                    } catch (Exception e) {
+                        GameLogger.error("Error updating other player: " + e.getMessage());
+                    }
+                }
             }
         }
     }
 
-    private void renderOtherPlayers(SpriteBatch batch) {
-        Map<String, OtherPlayer> players = gameClient.getOtherPlayers();
-        if (players == null || players.isEmpty()) {
-            return;
-        }
-
-        // Sort players by Y position for proper layering
-        List<OtherPlayer> sortedPlayers = new ArrayList<>(players.values());
-        sortedPlayers.sort(Comparator.comparing(OtherPlayer::getY));
-
-        for (OtherPlayer otherPlayer : sortedPlayers) {
-            if (isPlayerInView(otherPlayer)) { // Frustum culling
-                otherPlayer.render(batch);
-            }
-        }
+    public boolean isInitialized() {
+        return initializedworld;
     }
 
-    private boolean isPlayerInView(OtherPlayer player) {
-        // Calculate bounds based on camera
-        float camLeft = camera.position.x - camera.viewportWidth / 2 * camera.zoom;
-        float camRight = camera.position.x + camera.viewportWidth / 2 * camera.zoom;
-        float camBottom = camera.position.y - camera.viewportHeight / 2 * camera.zoom;
-        float camTop = camera.position.y + camera.viewportHeight / 2 * camera.zoom;
-
-        return player.getX() >= camLeft && player.getX() <= camRight &&
-            player.getY() >= camBottom && player.getY() <= camTop;
+    public void setInitialized(boolean initialized) {
+        this.initializedworld = initialized;
     }
 
-    /**
-     * Renders debug information on the screen.
-     */
     private void renderDebugInfo() {
+        // Remove batch.begin() and batch.end() since we're now inside an existing batch block
         batch.setProjectionMatrix(uiStage.getCamera().combined);
-        batch.begin();
         font.setColor(Color.WHITE);
 
-        float debugY = 25; // Start from 10 pixels above the bottom edge
+        float debugY = 25;
 
-        // Get raw pixel coordinates
         float pixelX = player.getX();
         float pixelY = player.getY();
-
-        // Convert to tile coordinates correctly
         int tileX = (int) Math.floor(pixelX / TILE_SIZE);
         int tileY = (int) Math.floor(pixelY / TILE_SIZE);
-
-        // Get the current biome
         Biome currentBiome = world.getBiomeAt(tileX, tileY);
-
-        // Display coordinates, biome, and time
         font.draw(batch, String.format("Pixels: (%d, %d)", (int) pixelX, (int) pixelY), 10, debugY);
         debugY += 20;
         font.draw(batch, String.format("Tiles: (%d, %d)", tileX, tileY), 10, debugY);
@@ -1113,7 +1698,6 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         font.draw(batch, "Biome: " + currentBiome.getName(), 10, debugY);
         debugY += 20;
 
-        // Add total Pokemon count
         font.draw(batch, "Active Pokemon: " + getTotalPokemonCount(), 10, debugY);
         debugY += 20;
 
@@ -1121,26 +1705,45 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         font.draw(batch, "Time: " + timeString, 10, debugY);
         debugY += 20;
 
-        // Add total time played
-        long playedTimeMillis = world.getWorldData().getPlayedTime();
-        String playedTimeStr = formatPlayedTime(playedTimeMillis);
-        font.draw(batch, "Total Time Played: " + playedTimeStr, 10, debugY);
-
-        batch.end();
+        if (!isMultiplayer) {
+            long playedTimeMillis = world.getWorldData().getPlayedTime();
+            String playedTimeStr = formatPlayedTime(playedTimeMillis);
+            font.draw(batch, "Total Time Played: " + playedTimeStr, 10, debugY);
+        }
     }
 
-    /**
-     * Handles user input for the game, including toggling the inventory and debug info.
-     */
+    public void prepareForDisposal() {
+        isDisposing = true;
+        if (gameMenu != null) {
+            gameMenu.dispose();
+        }
+    }
+
     private void handleInput() {
-        // First check if chat is active
-        if (chatSystem != null && chatSystem.isActive()) {
-            return; // Skip all game input when chat is active
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+            toggleGameMenu();
+            return;
+        }
+        if (chatSystem.isActive()) {
+            return;
         }
 
-        // Handle game inputs only when chat is not active
+        if (!inputBlocked || starterSelectionComplete) {
+            handleGameInput();
+        }
+    }
+
+    private void handleGameInput() {
+        if (inBattle) {
+            return;
+        }
+        if (inputBlocked) {
+            return;
+        }
         if (Gdx.input.isKeyJustPressed(Input.Keys.E)) {
-            toggleInventory();
+            if (starterSelectionComplete) {
+                toggleInventory();
+            }
         }
 
         if (player.isBuildMode()) {
@@ -1159,7 +1762,6 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     }
 
     private void handleBuildModeInput() {
-        // Handle build mode specific inputs
         for (int i = 0; i < 9; i++) {
             if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_1 + i)) {
                 buildModeUI.selectSlot(i);
@@ -1194,36 +1796,67 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         }
     }
 
-    private void initializeAndroidControls() {
-        float screenWidth = Gdx.graphics.getWidth();
-        float screenHeight = Gdx.graphics.getHeight();
+    private TextButton createControlButton(String text) {
+        TextButton button = new TextButton(text, skin);
+        button.getColor().a = BUTTON_ALPHA;
 
-        // Initialize joystick
-        joystickCenter = new Vector2(screenWidth * 0.15f, screenHeight * 0.2f);
-        joystickCurrent = new Vector2(joystickCenter);
-        joystickActive = false;
+        if (text.equals("INV")) {
+            button.addListener(new ClickListener() {
+                @Override
+                public void clicked(InputEvent event, float x, float y) {
+                    toggleInventory();
+                }
+            });
+        } else if (text.equals("MENU")) {
+            button.addListener(new ClickListener() {
+                @Override
+                public void clicked(InputEvent event, float x, float y) {
+                    toggleGameMenu();
+                }
+            });
+        } else if (text.equals("X")) {
+            button.addListener(new ClickListener() {
+                @Override
+                public void clicked(InputEvent event, float x, float y) {
+                    handleInteractionButton();
+                }
+            });
+        }
 
-        // Calculate button dimensions
-        float buttonSize = screenHeight * 0.1f; // 10% of screen height
-        float padding = buttonSize * 0.5f;
+        return button;
+    }
 
-        // Initialize UI buttons with safe positioning
-        inventoryButton = new Rectangle(
-            screenWidth - (buttonSize * 2 + padding * 2),
-            screenHeight - (buttonSize + padding),
-            buttonSize,
-            buttonSize
+    private void updateJoystickPosition() {
+        if (!controlsInitialized) return;
+
+        // Get the base position in stage coordinates
+        Vector2 basePos = joystickBase.localToStageCoordinates(new Vector2());
+        joystickOrigin.set(
+            basePos.x + JOYSTICK_SIZE / 2f,
+            basePos.y + JOYSTICK_SIZE / 2f
         );
 
-        menuButton = new Rectangle(
-            screenWidth - (buttonSize + padding),
-            screenHeight - (buttonSize + padding),
-            buttonSize,
-            buttonSize
+        // Center the knob
+        joystickKnob.setPosition(
+            joystickOrigin.x - KNOB_SIZE / 2f,
+            joystickOrigin.y - KNOB_SIZE / 2f
         );
+    }
 
+    private void handleInteractionButton() {
+        // Same logic as pressing X key
+        if (player != null) {
+            WildPokemon nearestPokemon = world.getNearestInteractablePokemon(player);
+            if (nearestPokemon != null) {
+                handleBattleInitiation();
+                return;
+            }
 
-        GameLogger.info("Android controls initialized with screen dimensions: " + screenWidth + "x" + screenHeight);
+            WorldObject nearestPokeball = world.getNearestPokeball();
+            if (nearestPokeball != null && player.canPickupItem(nearestPokeball.getPixelX(), nearestPokeball.getPixelY())) {
+                handlePickupAction();
+            }
+        }
     }
 
     private void renderButtonLabels() {
@@ -1237,20 +1870,17 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
             float labelScale = 1.5f;
             font.getData().setScale(labelScale);
             font.setColor(1, 1, 1, 0.9f);
-
-            // Draw "INV" text centered on inventory button
             GlyphLayout invLayout = new GlyphLayout(font, "INV");
             font.draw(batch, "INV",
                 inventoryButton.x + (inventoryButton.width - invLayout.width) / 2,
                 inventoryButton.y + (inventoryButton.height + invLayout.height) / 2);
 
-            // Draw "MENU" text centered on menu button
             GlyphLayout menuLayout = new GlyphLayout(font, "MENU");
             font.draw(batch, "MENU",
                 menuButton.x + (menuButton.width - menuLayout.width) / 2,
                 menuButton.y + (menuButton.height + menuLayout.height) / 2);
 
-            font.getData().setScale(1.0f); // Reset scale
+            font.getData().setScale(1.0f);
         } finally {
             batch.end();
         }
@@ -1269,55 +1899,44 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         return 0;
     }
 
-    private void renderAndroidControls() {
-        if (shapeRenderer == null) {
-            shapeRenderer = new ShapeRenderer();
-        }
+    private void drawTriangle(float x, float y, float size, float rotation) {
+        float halfSize = size / 2;
+        float[] vertices = new float[6];
 
-        Gdx.gl.glEnable(GL20.GL_BLEND);
-        shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+        // Calculate triangle points based on rotation
+        float rad = rotation * MathUtils.degreesToRadians;
+        float cos = MathUtils.cos(rad);
+        float sin = MathUtils.sin(rad);
 
-        // Draw joystick base
-        shapeRenderer.setColor(0.3f, 0.3f, 0.3f, 0.5f);
-        shapeRenderer.circle(joystickCenter.x, joystickCenter.y, VIRTUAL_JOYSTICK_RADIUS);
+        vertices[0] = x + (-halfSize * cos - (-halfSize) * sin);
+        vertices[1] = y + (-halfSize * sin + (-halfSize) * cos);
+        vertices[2] = x + (halfSize * cos - (-halfSize) * sin);
+        vertices[3] = y + (halfSize * sin + (-halfSize) * cos);
+        vertices[4] = x + (0 * cos - halfSize * sin);
+        vertices[5] = y + (0 * sin + halfSize * cos);
 
-        // Draw joystick handle at current position if active, or at center if not
-        shapeRenderer.setColor(0.7f, 0.7f, 0.7f, joystickActive ? 0.7f : 0.5f);
-        shapeRenderer.circle(joystickCurrent.x, joystickCurrent.y, VIRTUAL_JOYSTICK_RADIUS * 0.5f);
-
-        // Draw buttons
-        shapeRenderer.setColor(0.2f, 0.2f, 0.2f, 0.7f);
-        renderButton(shapeRenderer, inventoryButton);
-        renderButton(shapeRenderer, menuButton);
-
-        shapeRenderer.end();
-        Gdx.gl.glDisable(GL20.GL_BLEND);
-
-        // Draw button labels
-        renderButtonLabels();
+        shapeRenderer.triangle(
+            vertices[0], vertices[1],
+            vertices[2], vertices[3],
+            vertices[4], vertices[5]
+        );
     }
 
     private void setupInventoryUI() {
-        // Create main container
         inventoryContainer = new Table();
         inventoryContainer.setFillParent(true);
-
-        // Create close button
         closeInventoryButton = new TextButton("X", skin);
         closeInventoryButton.setColor(Color.RED);
 
-        // Size the button appropriately for touch
-        float buttonSize = Gdx.graphics.getHeight() * 0.08f; // 8% of screen height
+        float buttonSize = Gdx.graphics.getHeight() * 0.08f;
 
-        // Position in top right with padding
-        float padding = Gdx.graphics.getHeight() * 0.02f; // 2% of screen height
+        float padding = Gdx.graphics.getHeight() * 0.02f;
         closeInventoryButton.setSize(buttonSize, buttonSize);
         closeInventoryButton.setPosition(
             Gdx.graphics.getWidth() - buttonSize - padding,
             Gdx.graphics.getHeight() - buttonSize - padding
         );
 
-        // Add click listener
         closeInventoryButton.addListener(new ClickListener() {
             @Override
             public void clicked(InputEvent event, float x, float y) {
@@ -1326,72 +1945,134 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         });
     }
 
+    // Update inventory handling
+    // Update the inventory visibility check to ensure proper initialization
     private void toggleInventory() {
-        inventoryOpen = !inventoryOpen;
-
         if (inventoryOpen) {
-            if (inventoryScreen == null) {
-                inventoryScreen = new InventoryScreen(player, uiSkin, gameClient);
-                setupInventoryUI(); // Set up the UI components
+            closeInventory();
+        } else {
+            // Debug current state before opening
+            logInventoryState("Pre-inventory open state:");
 
-                // Add the close button to the inventory screen's stage
-                inventoryScreen.getStage().addActor(closeInventoryButton);
+            // Create new screen if needed and force initialization
+            if (inventoryScreen == null || !inventoryScreen.isInitialized()) {
+                inventoryScreen = new InventoryScreen(
+                    player,
+                    skin,
+                    gameClient,
+                    inputHandler,
+                    player.getInventory()
+                );
+                inventoryScreen.initialize(); // Add initialization method
             }
 
-            // Create input processor that handles both inventory and close button
-            InputMultiplexer inventoryMultiplexer = new InputMultiplexer();
-            inventoryMultiplexer.addProcessor(inventoryScreen.getStage()); // Inventory stage first
-            inventoryMultiplexer.addProcessor(new InputAdapter() {
-                @Override
-                public boolean touchDown(int screenX, int screenY, int pointer, int button) {
-                    // Convert touch coordinates to stage coordinates
-                    Vector2 stageCoords = inventoryScreen.getStage().screenToStageCoordinates(
-                        new Vector2(screenX, screenY)
-                    );
+            // Force refresh inventory data
+            inventoryScreen.reloadInventory();
+            inventoryScreen.show();
+            inventoryOpen = true;
 
-                    // Check if touch is outside inventory area
-                    if (!inventoryScreen.isOverInventory(stageCoords.x, stageCoords.y)) {
-                        closeInventory();
-                        return true;
-                    }
-                    return false;
-                }
-            });
+            setupInputProcessors();
 
-            Gdx.input.setInputProcessor(inventoryMultiplexer);
-        } else {
-            closeInventory();
+            // Verify screen state after opening
+            logInventoryState("Post-inventory open state:");
         }
     }
+
+    // Add this helper method to clean up the render method
 
     private void closeInventory() {
         if (inventoryScreen != null) {
             inventoryScreen.hide();
-            inventoryScreen.dispose();
-            inventoryScreen = null;
-        }
-        inventoryOpen = false;
+            inventoryOpen = false;
 
-        // Restore game input processors
-        setupInputProcessors();
+            // Update input processors
+            setupInputProcessors();
+        }
     }
 
+    private void logInventoryState(String context) {
+        if (player == null || player.getInventory() == null) {
+            GameLogger.error(context + ": Player or inventory is null");
+            return;
+        }
 
-    /**
-     * Closes the inventory screen and restores normal game input.
-     */
+        GameLogger.info("\n=== Inventory State: " + context + " ===");
+        List<ItemData> items = player.getInventory().getAllItems();
+        GameLogger.info("Total slots: " + items.size());
+        GameLogger.info("Non-null items: " + items.stream().filter(Objects::nonNull).count());
 
+        for (int i = 0; i < items.size(); i++) {
+            ItemData item = items.get(i);
+            if (item != null) {
+                GameLogger.info(String.format("Slot %d: %s (x%d) UUID: %s",
+                    i, item.getItemId(), item.getCount(), item.getUuid()));
+            }
+        }
+        GameLogger.info("=====================================\n");
+    }
+
+    private void debugInputState() {
+        InputProcessor current = Gdx.input.getInputProcessor();
+        GameLogger.info("Current input processor: " + (current == null ? "null" : current.getClass().getName()));
+        if (current instanceof InputMultiplexer) {
+            InputMultiplexer multiplexer = (InputMultiplexer) current;
+            for (int i = 0; i < multiplexer.size(); i++) {
+                GameLogger.info("Processor " + i + ": " + multiplexer.getProcessors().get(i).getClass().getName());
+            }
+        }
+    }
 
     @Override
     public void resize(int width, int height) {
-        // Update viewport without recentering the camera
+        if (player != null) {
+            player.validateResources();
+        }
+        if (androidControls != null) {
+            androidControls.invalidateHierarchy();
+        }
+        // Update camera viewport
         cameraViewport.update(width, height, false);
-        uiStage.getViewport().update(width, height, true);
-        if (pokemonPartyStage != null) {
-            pokemonPartyStage.getViewport().update(width, height, true);
+
+        // Add this for inventory handling
+        if (inventoryScreen != null) {
+            inventoryScreen.resize(width, height);
+
+            // Reposition close button if it exists
+            if (closeButtonTable != null && closeButtonTable.getParent() != null) {
+                closeButtonTable.invalidate();
+            }
+        }  // Find and resize the StarterSelectionTable if it exists
+        for (Actor actor : stage.getActors()) {
+            if (actor instanceof StarterSelectionTable) {
+                ((StarterSelectionTable) actor).resize(width, height);
+                starterTable.resize(width, height);
+                break;
+            }
+        }
+        if (uiStage != null) {
+            uiStage.getViewport().update(width, height, true);
+            GameLogger.info("Stage viewport updated to: " + width + "x" + height);
+
+            // If in starter selection, ensure table is still properly positioned
+            if (starterTable != null && player.getPokemonParty().getSize() == 0) {
+                starterTable.setFillParent(true);
+                // Log new position
+                GameLogger.info("Starter table position after resize: " +
+                    starterTable.getX() + "," + starterTable.getY());
+            }
+        }
+        if (battleTable != null) {
+            battleTable.resize(width, height);
+            battleStage.getViewport().update(width, height, true);
+        }
+        if (uiStage != null) {
+            uiStage.getViewport().update(width, height, true);
         }
         if (gameMenu != null && gameMenu.getStage() != null) {
             gameMenu.getStage().getViewport().update(width, height, true);
+        }
+        if (pokemonPartyStage != null) {
+            pokemonPartyStage.getViewport().update(width, height, true);
         }
         if (chatSystem != null) {
             float chatWidth = Math.max(ChatSystem.MIN_CHAT_WIDTH, width * 0.25f);
@@ -1404,35 +2085,23 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
             );
             chatSystem.resize(width, height);
         }
+        if (controlsInitialized) {
+            joystickCenter.set(width * 0.2f, height * 0.25f);
+            joystickCurrent.set(joystickCenter);
 
+            // Update UI positions
+            if (androidControlsTable != null) {
+                androidControlsTable.invalidateHierarchy();
+            }
+        }
         // Update Android controls
+        ensureAndroidControlsInitialized();
         updateAndroidControlPositions();
 
         updateCamera();
         GameLogger.info("Screen resized to: " + width + "x" + height);
     }
 
-
-    private Vector2 pixelsToTiles(float pixelX, float pixelY) {
-        int tileX = (int) Math.floor(pixelX / TILE_SIZE);
-        int tileY = (int) Math.floor(pixelY / TILE_SIZE);
-        return new Vector2(tileX, tileY);
-    }
-
-    private Vector2 tilesToPixels(int tileX, int tileY) {
-        float pixelX = tileX * TILE_SIZE;
-        float pixelY = tileY * TILE_SIZE;
-        return new Vector2(pixelX, pixelY);
-    }
-    /**
-     * Updates the hotbar UI after inventory changes.
-     */
-
-    /**
-     * Generates a random ItemData instance.
-     *
-     * @return A new ItemData object.
-     */
     private ItemData generateRandomItemData() {
         List<String> itemNames = new ArrayList<>(ItemManager.getAllItemNames());
         if (itemNames.isEmpty()) {
@@ -1443,7 +2112,7 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         String itemName = itemNames.get(index);
         ItemData itemData = InventoryConverter.itemToItemData(ItemManager.getItem(itemName));
         if (itemData != null) {
-            itemData.setCount(1); // Ensure count is 1
+            itemData.setCount(1);
             itemData.setUuid(UUID.randomUUID());
             return itemData;
         }
@@ -1451,37 +2120,23 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         return null;
     }
 
-
-    /**
-     * Handles item pickup actions by the player.
-     */
     public void handlePickupAction() {
         WorldObject nearestPokeball = world.getNearestPokeball();
         if (nearestPokeball == null) {
             GameLogger.info("No pokeball found nearby");
             return;
         }
-
-        // Log positions for debugging
         GameLogger.info("Player position: " + player.getX() + "," + player.getY());
         GameLogger.info("Pokeball position: " + nearestPokeball.getPixelX() + "," + nearestPokeball.getPixelY());
 
         if (player.canPickupItem(nearestPokeball.getPixelX(), nearestPokeball.getPixelY())) {
-            // Important: Remove the object BEFORE trying to add item to inventory
             world.removeWorldObject(nearestPokeball);
-
-
-            // Generate single random item
             ItemData randomItemData = generateRandomItemData();
             if (randomItemData == null) {
                 GameLogger.error("Failed to generate random item data.");
                 return;
             }
-
-            // Add to inventory using InventoryConverter
             boolean added = InventoryConverter.addItemToInventory(inventory, randomItemData);
-
-            // Create chat message for successful pickup
             NetworkProtocol.ChatMessage pickupMessage = new NetworkProtocol.ChatMessage();
             pickupMessage.sender = "System";
             pickupMessage.timestamp = System.currentTimeMillis();
@@ -1495,13 +2150,8 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
                 pickupMessage.type = NetworkProtocol.ChatType.SYSTEM;
                 GameLogger.info("Inventory full. Cannot add: " + randomItemData.getItemId());
             }
+            chatSystem.handleIncomingMessage(pickupMessage);
 
-            // Handle message based on game mode
-            if (gameClient.isSinglePlayer()) {
-                chatSystem.handleIncomingMessage(pickupMessage);
-            } else {
-                gameClient.sendPrivateMessage(pickupMessage, player.getUsername());
-            }
 
             AudioManager.getInstance().playSound(AudioManager.SoundEffect.ITEM_PICKUP);
             player.updatePlayerData();
@@ -1511,207 +2161,667 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     }
 
     private void updatePartyDisplay() {
-        // Clear existing display
         partyDisplay.clearChildren();
-
-        // Recreate the party display
         createPartyDisplay();
     }
 
     @Override
     public void pause() {
-        // Implement if needed
     }
 
     @Override
     public void resume() {
-        // Implement if needed
     }
 
-    private void resetInputProcessor() {
-        // Create new input multiplexer
-        inputMultiplexer = new InputMultiplexer();
-
-        // Add processors in correct order
-        inputMultiplexer.addProcessor(stage);
-        inputMultiplexer.addProcessor(inputHandler);
-
-        // If on Android, add Android processor
-        if (Gdx.app.getType() == Application.ApplicationType.Android) {
-            inputMultiplexer.addProcessor(new AndroidInputProcessor());
-        }
-
-        Gdx.input.setInputProcessor(inputMultiplexer);
+    public SpriteBatch getBatch() {
+        return batch;
     }
 
     @Override
     public void dispose() {
-
-        batch.dispose();
+        isDisposing = true;
+        cleanup();
+        if (gameMenu != null) {
+            gameMenu.dispose();
+            gameMenu = null;
+        }
+        if (!gameClient.isSinglePlayer()) {
+            gameClient.clearCredentials();
+            PlayerData finalState = getCurrentPlayerState();
+            currentWorld.savePlayerData(player.getUsername(), finalState);
+        }
         if (pokemonPartyStage != null) {
             pokemonPartyStage.dispose();
         }
-
         if (currentWorld != null) {
             currentWorld.savePlayerData(username, playerData);
         }
 
         try {
             if (player != null) {
-                // Get final state using InventoryConverter
-                PlayerData finalState = getCurrentPlayerState();
-                GameLogger.info("Final player state before save:");
-                GameLogger.info("Position: " + finalState.getX() + "," + finalState.getY());
-                GameLogger.info("Inventory: " + finalState.getInventoryItems());
+                try {
+                    PlayerData finalState = new PlayerData(player.getUsername());
+                    finalState.updateFromPlayer(player); // Ensure all data is captured
 
-                // Update world data
-                WorldData worldData = world.getWorldData();
-                InventoryConverter.extractInventoryDataFromPlayer(player, finalState);
-                worldData.savePlayerData(player.getUsername(), finalState);
+                    WorldData worldData = world.getWorldData();
+                    worldData.savePlayerData(player.getUsername(), finalState);
 
-                // Save to storage
-                game.getWorldManager().saveWorld(worldData);
+                    game.getWorldManager().saveWorld(worldData);
 
-                GameLogger.info("Player state saved successfully");
+                    GameLogger.info("Player state saved successfully");
+                } catch (Exception e) {
+                    GameLogger.error("Error saving final state: " + e.getMessage());
+                    e.printStackTrace();
+                }
             }
 
         } catch (Exception e) {
             GameLogger.info("Error saving final state: " + e.getMessage());
             e.printStackTrace();
         }
-
-        // Cleanup resources
-        if (gameClient != null) {
-            gameClient.dispose();
-        }
-
-        // Dispose other resourc
+        gameClient.dispose();
+        assert player != null;
         player.dispose();
-
-        // Ensure other players are disposed of
-        for (OtherPlayer op : otherPlayers.values()) {
+        for (OtherPlayer op : gameClient.getOtherPlayers().values()) {
             op.dispose();
         }
-
-        // Ensure save directories are created if necessary
+        disposeResources();
         ensureSaveDirectories();
 
-        // Update player coordinates in the database when the game screen is disposed
-        DatabaseManager dbManager = game.getDatabaseManager();
-        dbManager.updatePlayerCoordinates(player.getUsername(), player.getTileX(), player.getTileY());
-        GameLogger.info("Player coordinates updated in database.");
+    }
+
+    private void disposeResources() {
+        if (player != null) player.dispose();
+        if (gameClient != null) {
+            for (OtherPlayer op : gameClient.getOtherPlayers().values()) {
+                if (op != null) op.dispose();
+            }
+        }
+        if (gameClient != null) gameClient.dispose();
+    }
+
+    private void initializeAndroidControls() {
+        if (Gdx.app.getType() != Application.ApplicationType.Android || controlsInitialized) {
+            return;
+        }
+
+        try {
+            // Main container
+            androidControlsTable = new Table();
+            androidControlsTable.setFillParent(true);
+
+            // Create D-pad
+            createDpad();
+
+            // Create action buttons
+            createActionButtons();
+
+            // Add to stage
+            uiStage.addActor(androidControlsTable);
+
+            // Initialize hit boxes
+            createDpadHitboxes();
+
+            controlsInitialized = true;
+            GameLogger.info("Android controls initialized");
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to initialize Android controls: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void createDpad() {
+        float screenWidth = Gdx.graphics.getWidth();
+        float screenHeight = Gdx.graphics.getHeight();
+
+        // Adjust these percentages to move the D-pad
+        float paddingLeft = screenWidth * 0.05f; // Moves D-pad to the right
+        float paddingBottom = screenHeight * 0.05f; // Moves D-pad upwards
+
+        // Create d-pad container
+        dpadTable = new Table();
+        dpadTable.setBackground(createBackgroundDrawable(0.2f, 0.2f, 0.2f, 0.4f));
+        dpadTable.setBounds(paddingLeft, paddingBottom, DPAD_SIZE, DPAD_SIZE);
+
+
+        // Create run button
+        Table runButtonTable = new Table();
+        TextButton runBtn = createControlButton("RUN");
+        runBtn.getColor().set(0.2f, 0.7f, 0.2f, 0.8f); // Green tint
+        runButtonTable.add(runBtn).size(BUTTON_SIZE);
+        runButtonTable.setPosition(paddingLeft + DPAD_SIZE, paddingBottom);
+
+        uiStage.addActor(dpadTable);
+        uiStage.addActor(runButtonTable);
+    }
+
+
+    private void createActionButtons() {
+        // Create main buttons container
+        buttonsTable = new Table();
+        buttonsTable.setFillParent(true);
+
+        // Create all buttons
+        TextButton actionButton = createActionButton();
+        TextButton inventoryButton = createInventoryButton();
+        TextButton menuButton = createMenuButton();
+        TextButton chatButton = createChatButton();
+        TextButton debugButton = createDebugButton();
+        TextButton runButton = createRunButton();
+
+        // Create right-side grid container
+        Table buttonGrid = new Table();
+        buttonGrid.defaults().size(BUTTON_SIZE).pad(BUTTON_PADDING / 2);
+
+        // Organize buttons in a 2x3 grid based on importance:
+        // [ Menu    ][ Inventory ]
+        // [ Action  ][ Chat     ]
+        // [ Run     ][ Debug    ]
+
+        buttonGrid.add(menuButton).pad(5f);
+        buttonGrid.add(inventoryButton).pad(5f).row();
+
+        buttonGrid.add(actionButton).pad(5f);
+        buttonGrid.add(chatButton).pad(5f).row();
+
+        buttonGrid.add(runButton).pad(5f);
+        buttonGrid.add(debugButton).pad(5f);
+
+        // Position the grid container in top-right
+        buttonsTable.add(buttonGrid)
+            .expand()
+            .top()
+            .right()
+            .padRight(20f)
+            .padTop(100f); // Move buttons down to avoid status bar
+
+        uiStage.addActor(buttonsTable);
+    }
+
+
+    private TextButton createActionButton() {
+        TextButton button = new TextButton("ACTION", skin);
+        button.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                handleInteractionButton();
+            }
+        });
+        styleButton(button, Color.ROYAL);
+        return button;
+    }
+
+    private TextButton createInventoryButton() {
+        TextButton button = new TextButton("INV", skin);
+        button.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                toggleInventory();
+            }
+        });
+        styleButton(button, Color.ORANGE);
+        return button;
+    }
+
+    private TextButton createMenuButton() {
+        TextButton button = new TextButton("MENU", skin);
+        button.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                toggleGameMenu();
+            }
+        });
+        styleButton(button, Color.GRAY);
+        return button;
+    }
+
+    private TextButton createChatButton() {
+        TextButton button = new TextButton("CHAT", skin);
+        button.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                showChatDialog();
+            }
+        });
+        styleButton(button, new Color(0.4f, 0.7f, 1f, 1f)); // Light blue
+        return button;
+    }
+
+    private TextButton createDebugButton() {
+        TextButton button = new TextButton("DEBUG", skin);
+        button.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                SHOW_DEBUG_INFO = !SHOW_DEBUG_INFO;
+                button.setColor(SHOW_DEBUG_INFO ? Color.GREEN : Color.GRAY);
+            }
+        });
+        styleButton(button, Color.GRAY);
+        return button;
+    }
+
+    private TextButton createRunButton() {
+        TextButton button = new TextButton("RUN", skin);
+        button.addListener(new InputListener() {
+            @Override
+            public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                if (player != null) {
+                    isRunPressed = true;
+                    player.setRunning(true);
+                }
+                return true;
+            }
+
+            @Override
+            public void touchUp(InputEvent event, float x, float y, int pointer, int button) {
+                if (player != null) {
+                    isRunPressed = false;
+                    player.setRunning(false);
+                }
+            }
+        });
+        styleButton(button, new Color(0.2f, 0.7f, 0.2f, 1f)); // Green
+        return button;
+    }
+
+    private void showChatDialog() {
+        if (chatSystem != null && !chatSystem.isActive()) {
+            final Dialog dialog = new Dialog("Chat", skin) {
+                @Override
+                protected void result(Object obj) {
+                    if (obj instanceof Boolean && (Boolean) obj) {
+                        TextField chatInput = findActor("chatInput");
+                        if (chatInput != null) {
+                            String message = chatInput.getText().trim();
+                            if (!message.isEmpty()) {
+                                chatSystem.sendMessage(message);
+                            }
+                        }
+                    }
+                    Gdx.input.setOnscreenKeyboardVisible(false);
+                }
+            };
+
+            // Create content table with padding
+            Table contentTable = new Table();
+            contentTable.pad(20);
+
+            // Create and style text field
+            final TextField chatInput = new TextField("", skin);
+            chatInput.setName("chatInput"); // Important for finding it later
+
+            // Style the text field
+            TextField.TextFieldStyle style = new TextField.TextFieldStyle(chatInput.getStyle());
+            style.background = skin.newDrawable("white", new Color(0.2f, 0.2f, 0.2f, 0.8f));
+            style.fontColor = Color.WHITE;
+            chatInput.setStyle(style);
+
+            // Add text field to content
+            contentTable.add(chatInput).width(400f).padBottom(20f);
+            dialog.getContentTable().add(contentTable);
+
+            // Add buttons with boolean values for result handling
+            dialog.button("Send", true);
+            dialog.button("Cancel", false);
+
+            // Add enter key handler
+            chatInput.addListener(new InputListener() {
+                @Override
+                public boolean keyDown(InputEvent event, int keycode) {
+                    if (keycode == Input.Keys.ENTER) {
+                        String message = chatInput.getText().trim();
+                        if (!message.isEmpty()) {
+                            chatSystem.sendMessage(message);
+                            dialog.hide();
+                        }
+                        return true;
+                    }
+                    return false;
+                }
+            });
+
+            // Text filter for valid characters
+            chatInput.setTextFieldFilter(new TextField.TextFieldFilter() {
+                @Override
+                public boolean acceptChar(TextField textField, char c) {
+                    return c >= 32; // Accept printable characters
+                }
+            });
+
+            // Show dialog and focus
+            dialog.show(uiStage);
+
+            // Focus and show keyboard with slight delay to ensure proper focus
+            com.badlogic.gdx.utils.Timer.schedule(new Timer.Task() {
+                @Override
+                public void run() {
+                    uiStage.setKeyboardFocus(chatInput);
+                    Gdx.input.setOnscreenKeyboardVisible(true);
+                }
+            }, 0.1f);
+        }
+    }
+
+    private void createDpadHitboxes() {
+        float screenWidth = Gdx.graphics.getWidth();
+        float screenHeight = Gdx.graphics.getHeight();
+
+        // Calculate D-pad position (bottom left area)
+        float dpadCenterX = screenWidth * 0.15f;
+        float dpadCenterY = screenHeight * 0.2f;
+        float buttonSize = DPAD_BUTTON_SIZE * 1.2f; // Slightly larger hitboxes
+
+        // Create hitboxes with proper spacing and overlap
+        upButton = new Rectangle(
+            dpadCenterX - buttonSize / 2,
+            dpadCenterY + buttonSize / 4,
+            buttonSize,
+            buttonSize
+        );
+
+        downButton = new Rectangle(
+            dpadCenterX - buttonSize / 2,
+            dpadCenterY - buttonSize - buttonSize / 4,
+            buttonSize,
+            buttonSize
+        );
+
+        leftButton = new Rectangle(
+            dpadCenterX - buttonSize - buttonSize / 4,
+            dpadCenterY - buttonSize / 2,
+            buttonSize,
+            buttonSize
+        );
+
+        rightButton = new Rectangle(
+            dpadCenterX + buttonSize / 4,
+            dpadCenterY - buttonSize / 2,
+            buttonSize,
+            buttonSize
+        );
+
+        // Center/running button
+        centerButton = new Rectangle(
+            dpadCenterX - buttonSize / 2,
+            dpadCenterY - buttonSize / 2,
+            buttonSize,
+            buttonSize
+        );
+    }
+
+
+    private void styleButton(TextButton button, float r, float g, float b) {
+        // Create a new style based on the existing one
+        TextButton.TextButtonStyle style = new TextButton.TextButtonStyle(button.getStyle());
+
+        // Create background drawable
+        Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+        pixmap.setColor(r, g, b, 0.8f);
+        pixmap.fill();
+        Texture texture = new Texture(pixmap);
+        pixmap.dispose();
+
+        style.up = new TextureRegionDrawable(new TextureRegion(texture));
+
+        // Increase text size and set color
+        style.font.getData().setScale(1.2f);
+        style.fontColor = Color.WHITE;
+
+        button.setStyle(style);
+
+        // Add press effect
+        button.addAction(Actions.alpha(0.85f));
+        button.addListener(new ClickListener() {
+            @Override
+            public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                event.getTarget().addAction(Actions.alpha(0.7f));
+                return super.touchDown(event, x, y, pointer, button);
+            }
+
+            @Override
+            public void touchUp(InputEvent event, float x, float y, int pointer, int button) {
+                event.getTarget().addAction(Actions.alpha(0.85f));
+                super.touchUp(event, x, y, pointer, button);
+            }
+        });
+    }
+
+    private void styleButton(TextButton button, Color baseColor) {
+        TextButton.TextButtonStyle style = new TextButton.TextButtonStyle(button.getStyle());
+
+        // Create background
+        Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+        pixmap.setColor(baseColor.r, baseColor.g, baseColor.b, 0.8f);
+        pixmap.fill();
+        Texture texture = new Texture(pixmap);
+        pixmap.dispose();
+
+        // Set up style
+        style.up = new TextureRegionDrawable(new TextureRegion(texture));
+        style.font = skin.getFont("default-font");
+        style.font.getData().setScale(1.2f);
+        style.fontColor = Color.WHITE;
+
+        button.setStyle(style);
+
+        // Add visual feedback for pressing
+        button.addListener(new InputListener() {
+            @Override
+            public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                event.getTarget().setColor(1, 1, 1, 0.6f);
+                return true;
+            }
+
+            @Override
+            public void touchUp(InputEvent event, float x, float y, int pointer, int button) {
+                event.getTarget().setColor(1, 1, 1, 1f);
+            }
+        });
+    }
+
+    private TextureRegionDrawable createBackgroundDrawable(float r, float g, float b, float a) {
+        Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+        pixmap.setColor(r, g, b, a);
+        pixmap.fill();
+        Texture texture = new Texture(pixmap);
+        pixmap.dispose();
+        return new TextureRegionDrawable(new TextureRegion(texture));
+    }
+
+
+// In your initializeAndroidControls() method, add:
+
+// In your GameScreen's update/render method, add:
+
+
+    private void renderAndroidControls() {
+        if (!controlsInitialized) return;
+
+        Gdx.gl.glEnable(GL20.GL_BLEND);
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+
+        shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+
+        // Draw only the base circle
+        float centerX = upButton.x + upButton.width / 2;
+        float centerY = leftButton.y + leftButton.height / 2;
+
+        // Draw semi-transparent base circle
+        shapeRenderer.setColor(0.2f, 0.2f, 0.2f, 0.3f);
+        shapeRenderer.circle(centerX, centerY, DPAD_SIZE / 2);
+
+        // Draw arrows only - no rectangles
+        drawDpadArrow("up", upButton, centerX, centerY);
+        drawDpadArrow("down", downButton, centerX, centerY);
+        drawDpadArrow("left", leftButton, centerX, centerY);
+        drawDpadArrow("right", rightButton, centerX, centerY);
+
+        shapeRenderer.end();
+        Gdx.gl.glDisable(GL20.GL_BLEND);
+    }
+
+    private void drawDpadArrow(String direction, Rectangle bounds, float centerX, float centerY) {
+        boolean isActive = currentDpadDirection != null && currentDpadDirection.equals(direction);
+        float arrowSize = bounds.width * 0.3f; // Smaller arrows
+        float midX = bounds.x + bounds.width / 2;
+        float midY = bounds.y + bounds.height / 2;
+
+        // Set arrow color based on state
+        if (isActive) {
+            shapeRenderer.setColor(1f, 1f, 1f, 0.8f); // Bright white when active
+        } else {
+            shapeRenderer.setColor(0.8f, 0.8f, 0.8f, 0.4f); // Dimmer when inactive
+        }
+
+        // Calculate arrow position based on direction
+        float angle = 0;
+        switch (direction) {
+            case "up":
+                angle = 0;
+                break;
+            case "down":
+                angle = 180;
+                break;
+            case "left":
+                angle = 270;
+                break;
+            case "right":
+                angle = 90;
+                break;
+        }
+
+        // Draw arrow triangle
+        drawTriangle(midX, midY, arrowSize, angle);
+    }
+
+    private void drawDpadButton(Rectangle button, String direction, float centerX, float centerY) {
+        boolean isActive = currentDpadDirection != null && currentDpadDirection.equals(direction);
+
+        // Draw only the arrow
+        float arrowSize = button.width * 0.4f; // Slightly larger arrows
+        float midX = button.x + button.width / 2;
+        float midY = button.y + button.height / 2;
+
+        // Set color based on active state
+        if (isActive) {
+            shapeRenderer.setColor(0.8f, 0.8f, 0.8f, 0.8f); // Brighter when active
+        } else {
+            shapeRenderer.setColor(0.6f, 0.6f, 0.6f, 0.6f); // Dimmer when inactive
+        }
+
+        // Draw arrow based on direction
+        switch (direction) {
+            case "up":
+                drawArrow(midX, midY, arrowSize, 0);
+                break;
+            case "down":
+                drawArrow(midX, midY, arrowSize, 180);
+                break;
+            case "left":
+                drawArrow(midX, midY, arrowSize, 270);
+                break;
+            case "right":
+                drawArrow(midX, midY, arrowSize, 90);
+                break;
+        }
+    }
+
+    private void drawArrow(float x, float y, float size, float rotation) {
+        float rad = rotation * MathUtils.degreesToRadians;
+        float cos = MathUtils.cos(rad);
+        float sin = MathUtils.sin(rad);
+
+        // Triangle points for arrow
+        float[] vertices = new float[6];
+        float width = size * 0.5f;
+        float height = size;
+
+        // Calculate rotated points
+        vertices[0] = x + (-width * cos - (-height / 2) * sin); // Left point
+        vertices[1] = y + (-width * sin + (-height / 2) * cos);
+        vertices[2] = x + (width * cos - (-height / 2) * sin);  // Right point
+        vertices[3] = y + (width * sin + (-height / 2) * cos);
+        vertices[4] = x + (0 * cos - (height / 2) * sin);       // Top point
+        vertices[5] = y + (0 * sin + (height / 2) * cos);
+
+        shapeRenderer.triangle(
+            vertices[0], vertices[1],
+            vertices[2], vertices[3],
+            vertices[4], vertices[5]
+        );
+    }
+
+    private boolean isDpadTouch(float x, float y) {
+        // Calculate area around d-pad with some padding
+        float padding = 40f; // Adjust this value for larger/smaller touch area
+        return (upButton.contains(x, y) || downButton.contains(x, y) ||
+            leftButton.contains(x, y) || rightButton.contains(x, y) ||
+            isNearButton(x, y, upButton, padding) ||
+            isNearButton(x, y, downButton, padding) ||
+            isNearButton(x, y, leftButton, padding) ||
+            isNearButton(x, y, rightButton, padding));
+    }
+
+    private boolean isNearButton(float x, float y, Rectangle button, float padding) {
+        return x >= button.x - padding &&
+            x <= button.x + button.width + padding &&
+            y >= button.y - padding &&
+            y <= button.y + button.height + padding;
     }
 
 
     public class AndroidInputProcessor extends InputAdapter {
-        private static final float DEAD_ZONE = 5f; // Reduced dead zone for better sensitivity
+        private final Vector2 touchPos = new Vector2();
+        private int activePointer = -1;
+
 
         @Override
         public boolean touchDown(int screenX, int screenY, int pointer, int button) {
-            if (Gdx.app.getType() != Application.ApplicationType.Android) return false;
-
-            if (inventoryButton == null || menuButton == null || joystickCenter == null) {
-                GameLogger.error("Android controls not properly initialized");
-                return false;
-            }
-
-            float touchY = Gdx.graphics.getHeight() - screenY; // Flip Y for touch coordinates
-
-            // Add logging for touch events
-            GameLogger.info("Touch down at: (" + screenX + ", " + touchY + ")");
-
-            float touchPadding = 20f;
-            Rectangle paddedInvButton = new Rectangle(
-                inventoryButton.x - touchPadding,
-                inventoryButton.y - touchPadding,
-                inventoryButton.width + touchPadding * 2,
-                inventoryButton.height + touchPadding * 2
-            );
-
-            Rectangle paddedMenuButton = new Rectangle(
-                menuButton.x - touchPadding,
-                menuButton.y - touchPadding,
-                menuButton.width + touchPadding * 2,
-                menuButton.height + touchPadding * 2
-            );
-
-            // Handle UI button touches
-            if (paddedInvButton.contains(screenX, touchY)) {
-                GameLogger.info("Inventory button touched");
-                toggleInventory();
+            screenY = Gdx.graphics.getHeight() - screenY; // Flip Y coordinate
+            if (isDpadTouch(screenX, screenY)) {
+                movementController.handleTouchDown(screenX, screenY);
                 return true;
             }
-            if (paddedMenuButton.contains(screenX, touchY)) {
-                GameLogger.info("Menu button touched");
-                if (gameMenu.isVisible()) gameMenu.hide();
-                else gameMenu.show();
-                return true;
-            }
-
-            // Handle joystick activation
-            float distanceFromJoystick = Vector2.dst(screenX, touchY, joystickCenter.x, joystickCenter.y);
-            if (distanceFromJoystick <= VIRTUAL_JOYSTICK_RADIUS * 1.5f) {
-                GameLogger.info("Joystick activated");
-                joystickActive = true;
-                joystickCurrent.set(screenX, touchY);
-                return true;
-            }
-
             return false;
         }
 
         @Override
         public boolean touchDragged(int screenX, int screenY, int pointer) {
-            if (!joystickActive) return false;
-
-            float touchY = Gdx.graphics.getHeight() - screenY;
-            joystickCurrent.set(screenX, touchY);
-
-            float dx = joystickCurrent.x - joystickCenter.x;
-            float dy = joystickCurrent.y - joystickCenter.y;
-            float distance = joystickCurrent.dst(joystickCenter);
-
-            if (distance > DEAD_ZONE) {
-                // Restrict joystick to max radius
-                if (distance > VIRTUAL_JOYSTICK_RADIUS) {
-                    float scale = VIRTUAL_JOYSTICK_RADIUS / distance;
-                    dx *= scale;
-                    dy *= scale;
-                    joystickCurrent.set(joystickCenter.x + dx, joystickCenter.y + dy);
-                }
-
-                // Determine movement direction
-                String direction = null;
-                if (Math.abs(dx) > Math.abs(dy)) {
-                    direction = dx > 0 ? "right" : "left";
-                } else {
-                    direction = dy > 0 ? "up" : "down";
-                }
-
-                // Log direction and distance for debugging
-                GameLogger.info("Moving " + direction + " with distance: " + distance);
-
-                if (direction != null) {
-                    player.move(direction);
-                }
-                player.setRunning(distance > VIRTUAL_JOYSTICK_RADIUS * 0.7f);
-                player.setMoving(true);
-            }
-            return true;
-        }
-
-        @Override
-        public boolean touchUp(int screenX, int screenY, int pointer, int button) {
-            if (joystickActive) {
-                GameLogger.info("Joystick deactivated");
-                joystickActive = false;
-                player.setMoving(false);
-                player.setRunning(false);
-                joystickCurrent.set(joystickCenter); // Reset to center
+            screenY = Gdx.graphics.getHeight() - screenY;
+            if (movementController != null) {
+                movementController.handleTouchDragged(screenX, screenY);
                 return true;
             }
             return false;
         }
+
+        @Override
+        public boolean touchUp(int screenX, int screenY, int pointer, int button) {
+            if (movementController != null) {
+                movementController.handleTouchUp();
+                return true;
+            }
+            return false;
+        }
+
+
+        private String getDpadDirection(float x, float y) {
+            // Check each d-pad button with extended hit areas
+            if (upButton.contains(x, y) || isNearButton(x, y, upButton)) return "up";
+            if (downButton.contains(x, y) || isNearButton(x, y, downButton)) return "down";
+            if (leftButton.contains(x, y) || isNearButton(x, y, leftButton)) return "left";
+            if (rightButton.contains(x, y) || isNearButton(x, y, rightButton)) return "right";
+            return null;
+        }
+
+        private boolean isNearButton(float x, float y, Rectangle button) {
+            // Add some tolerance around buttons for better touch detection
+            float tolerance = 20f;
+            return x >= button.x - tolerance &&
+                x <= button.x + button.width + tolerance &&
+                y >= button.y - tolerance &&
+                y <= button.y + button.height + tolerance;
+        }
     }
 }
-

@@ -1,14 +1,14 @@
 package io.github.pokemeetup.multiplayer.server;
 
-import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.utils.Json;
 import com.esotericsoftware.kryonet.Server;
 import com.esotericsoftware.kryonet.Connection;
 import com.esotericsoftware.kryonet.Listener;
+import com.esotericsoftware.minlog.Log;
 import com.sun.tools.jconsole.JConsoleContext;
 import io.github.pokemeetup.CreatureCaptureGame;
-import io.github.pokemeetup.chat.TeleportManager;
 import io.github.pokemeetup.managers.BiomeManager;
 import io.github.pokemeetup.managers.BiomeTransitionResult;
 import io.github.pokemeetup.managers.DatabaseManager;
@@ -20,7 +20,6 @@ import io.github.pokemeetup.multiplayer.server.events.EventManager;
 import io.github.pokemeetup.multiplayer.server.plugin.PluginManager;
 import io.github.pokemeetup.multiplayer.server.storage.FileStorage;
 import io.github.pokemeetup.multiplayer.server.storage.StorageSystem;
-import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.pokemon.WildPokemon;
 import io.github.pokemeetup.system.data.ItemData;
 import io.github.pokemeetup.system.data.PlayerData;
@@ -32,24 +31,27 @@ import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
 import io.github.pokemeetup.utils.GameLogger;
+import io.github.pokemeetup.utils.PasswordUtils;
 import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.storage.JsonConfig;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
-import static io.github.pokemeetup.CreatureCaptureGame.MULTIPLAYER_WORLD_SEED;
-
-/**
- * The GameServer class manages the server-side operations of the multiplayer game,
- * including handling client connections, processing login and registration requests,
- * managing player states, and coordinating with various managers like PlayerManager,
- * PluginManager, and EventManager.
- */
 public class GameServer {
-
+    private static final long CONNECTION_TIMEOUT = 1000;
+    private static final int SCHEDULER_POOL_SIZE = 3;
+    private static final long AUTH_TIMEOUT = 10000;
+    private static final long CLEANUP_INTERVAL = 60000; // 1 minute
+    private static final int SYNC_BATCH_SIZE = 10;
+    private static final float SYNC_INTERVAL = 1 / 20f; // 20Hz sync rate
+    private final Map<Integer, ConnectionState> connectionStates = new ConcurrentHashMap<>();
     private final Server networkServer;
     private final ServerConnectionConfig config;
     private final WorldManager worldManager;
@@ -59,18 +61,23 @@ public class GameServer {
     private final EventManager eventManager;
     private final DatabaseManager databaseManager;
     private final ConcurrentHashMap<Integer, String> connectedPlayers;
-    private final PlayerManager playerManager; // Manages player-related operations
-    private final TeleportManager teleportManager;
+    private final PlayerManager playerManager;
+    private final ScheduledExecutorService scheduler;
+    private final Queue<NetworkProtocol.PlayerUpdate> pendingUpdates = new ConcurrentLinkedQueue<>();
+    private final Map<String, Integer> activeUserConnections = new ConcurrentHashMap<>(); // Map username to connection ID
     private PluginManager pluginManager = null;
     private WorldData multiplayerWorld;
     private volatile boolean running;
+    private NetworkProtocol.ServerInfo serverInfo;
 
-    /**
-     * Constructor initializes the GameServer with the provided ServerConfig.
-     *
-     * @param config The server configuration containing settings like port, maxPlayers, etc.
-     */
     public GameServer(ServerConnectionConfig config) {
+        this.scheduler = Executors.newScheduledThreadPool(SCHEDULER_POOL_SIZE, r -> {
+            Thread thread = new Thread(r, "GameServer-Scheduler");
+            thread.setDaemon(true);
+            return thread;
+        });
+
+        Log.set(Log.LEVEL_DEBUG);
         this.config = config;
         this.storageSystem = new ServerStorageSystem();
         this.networkServer = new Server(16384, 2048); // Initialize KryoNet Server with send and receive buffers
@@ -84,73 +91,62 @@ public class GameServer {
 
 
         try {
-            worldManager.init();
 
-            multiplayerWorld = worldManager.getWorld(CreatureCaptureGame.MULTIPLAYER_WORLD_NAME);
-            if (multiplayerWorld == null) {
-                multiplayerWorld = worldManager.createWorld(
-                    CreatureCaptureGame.MULTIPLAYER_WORLD_NAME,
-                    System.currentTimeMillis(),
-                    0.15f,
-                    0.05f
-                );
-                initializeWorldData(multiplayerWorld);
+            this.multiplayerWorld = initializeMultiplayerWorld();
+
+            if (this.multiplayerWorld == null) {
+                throw new RuntimeException("Failed to initialize multiplayer world");
             }
+
             setupNetworkListener();
             this.pluginManager = new PluginManager(this, multiplayerWorld);
-            this.teleportManager = new TeleportManager();
             this.biomeManager = new BiomeManager(multiplayerWorld.getConfig().getSeed());
         } catch (Exception e) {
             GameLogger.error("Failed to initialize game world: " + e.getMessage());
             throw new RuntimeException("Failed to initialize server world", e);
         }
     }
+    private WorldData initializeMultiplayerWorld() {
+        try {
+            // First try to load existing world
+            WorldData world = worldManager.getWorld(CreatureCaptureGame.MULTIPLAYER_WORLD_NAME);
 
-    public Server getNetworkServer() {
-        return networkServer;
+            if (world == null) {
+                GameLogger.info("Creating new multiplayer world");
+                // Create new world with specific seed
+                world = worldManager.createWorld(
+                    CreatureCaptureGame.MULTIPLAYER_WORLD_NAME,
+                    System.currentTimeMillis(), // or specific seed
+                    0.15f,  // tree spawn rate
+                    0.05f   // pokemon spawn rate
+                );
+
+                // Initialize world data
+                world.setWorldTimeInMinutes(480.0); // Start at 8:00 AM
+                world.setDayLength(24.0f);          // 24 minutes per day
+                world.setPlayedTime(0);
+
+                // Set spawn point
+                world.setSpawnX(500); // Adjust based on your world size
+                world.setSpawnY(500);
+
+                // Save the initialized world
+                worldManager.saveWorld(world);
+                GameLogger.info("Created and saved new multiplayer world");
+            }
+
+            return world;
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to initialize multiplayer world: " + e.getMessage());
+            throw new RuntimeException("World initialization failed", e);
+        }
     }
 
     public StorageSystem getStorage() {
         return storage;
     }
 
-    public BiomeManager getBiomeManager() {
-        return biomeManager;
-    }
-
-    public ServerStorageSystem getStorageSystem() {
-        return storageSystem;
-    }
-
-    public EventManager getEventManager() {
-        return eventManager;
-    }
-
-    public DatabaseManager getDatabaseManager() {
-        return databaseManager;
-    }
-
-    public ConcurrentHashMap<Integer, String> getConnectedPlayers() {
-        return connectedPlayers;
-    }
-
-
-    public TeleportManager getTeleportManager() {
-        return teleportManager;
-    }
-
-    public PluginManager getPluginManager() {
-        return pluginManager;
-    }
-
-    public WorldData getMultiplayerWorld() {
-        return multiplayerWorld;
-    }
-
-
-    /**
-     * Handles username availability check requests from clients.
-     */
     private void handleUsernameCheckRequest(Connection connection, NetworkProtocol.UsernameCheckRequest request) {
         try {
             GameLogger.info("Checking username availability: " + request.username);
@@ -176,42 +172,6 @@ public class GameServer {
             networkServer.sendToTCP(connection.getID(), response);
         }
     }
-
-    private WorldData initializeMultiplayerWorld(String worldName, long seed) {
-        GameLogger.info("Initializing multiplayer world: " + worldName + " with seed: " + seed);
-
-        // Create WorldConfig and WorldData
-        WorldData.WorldConfig config = new WorldData.WorldConfig(seed);
-        WorldData worldData = new WorldData(worldName, System.currentTimeMillis(), config); // Include config
-
-        // Initialize core chunks around spawn point
-        int spawnChunkRadius = 3;  // Adjust as needed
-        Vector2 spawnPoint = new Vector2(0, 0); // Starting point, can be adjusted
-
-        for (int x = -spawnChunkRadius; x <= spawnChunkRadius; x++) {
-            for (int y = -spawnChunkRadius; y <= spawnChunkRadius; y++) {
-                Vector2 chunkPos = new Vector2(x, y);
-                BiomeTransitionResult biomeTransition = biomeManager.getBiomeAt(
-                    x * Chunk.CHUNK_SIZE * World.TILE_SIZE,
-                    y * Chunk.CHUNK_SIZE * World.TILE_SIZE
-                );
-
-                Chunk chunk = new Chunk(x, y, biomeTransition.getPrimaryBiome(), seed, biomeManager);
-                worldData.addChunk(chunkPos, chunk);
-
-                // Generate and add objects for this chunk using the new config
-                List<WorldObject> chunkObjects = generateChunkObjects(chunk, chunkPos, config); // Pass config
-                worldData.addChunkObjects(chunkPos, chunkObjects);
-            }
-        }
-
-        // Set spawn point and other world properties
-        worldData.setSpawnX((int) spawnPoint.x);
-        worldData.setSpawnY((int) spawnPoint.y);
-
-        return worldData;
-    }
-
 
     private void initializeWorldData(WorldData worldData) {
         try {
@@ -301,31 +261,452 @@ public class GameServer {
         return objects;
     }
 
-    private void handlePlayerUpdate(Connection connection, NetworkProtocol.PlayerUpdate update) {
-        String username = connectedPlayers.get(connection.getID());
-        if (username != null && username.equals(update.username)) {
-            ServerPlayer player = playerManager.getPlayer(username);
-            if (player != null) {
-                player.updatePosition(update.x, update.y, update.direction, update.isMoving);
+    private void broadcastPlayerStates() {
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                List<NetworkProtocol.PlayerUpdate> updates = new ArrayList<>();
+                NetworkProtocol.PlayerUpdate update;
 
-                // Get the current world instance to update player data
-                WorldData currentWorld = worldManager.getCurrentWorld();
-                if (currentWorld != null) {
-                    PlayerData playerData = currentWorld.getPlayerData(username);
-                    if (playerData != null) {
-                        // Update player data in the world
-                        playerData.setX(update.x);
-                        playerData.setY(update.y);
-                        currentWorld.savePlayerData(username, playerData);
+                // Batch pending updates
+                while ((update = pendingUpdates.poll()) != null && updates.size() < SYNC_BATCH_SIZE) {
+                    updates.add(update);
+                }
+
+                if (updates.isEmpty()) return;
+
+                // Create combined update packet
+                NetworkProtocol.PlayerPosition position = new NetworkProtocol.PlayerPosition();
+                position.players = new HashMap<>();
+                updates.forEach(u -> position.players.put(u.username, u));
+
+                // Broadcast to all connected clients
+                networkServer.sendToAllTCP(position);
+
+            } catch (Exception e) {
+                GameLogger.error("Error broadcasting player states: " + e.getMessage());
+            }
+        }, 0, (long) (SYNC_INTERVAL * 1000), TimeUnit.MILLISECONDS);
+    }
+
+    public void initializeServerInfo() {
+        serverInfo = new NetworkProtocol.ServerInfo();
+        serverInfo.name = config.getServerName();
+        serverInfo.motd = config.getMotd();
+        serverInfo.maxPlayers = config.getMaxPlayers();
+        serverInfo.version = "1.0"; // Set your version
+
+        // Load server icon if exists
+        try {
+            File iconFile = new File(config.getIconPath());
+            if (iconFile.exists()) {
+                byte[] iconBytes = Files.readAllBytes(iconFile.toPath());
+                serverInfo.iconBase64 = Base64.getEncoder().encodeToString(iconBytes);
+            }
+        } catch (Exception e) {
+            GameLogger.error("Error loading server icon: " + e.getMessage());
+        }
+    }
+
+    private void handleServerInfoRequest(Connection connection, NetworkProtocol.ServerInfoRequest request) {
+        try {
+            NetworkProtocol.ServerInfoResponse response = new NetworkProtocol.ServerInfoResponse();
+            serverInfo.playerCount = connectedPlayers.size();
+            response.serverInfo = serverInfo;
+            response.timestamp = System.currentTimeMillis();
+
+            connection.sendTCP(response);
+        } catch (Exception e) {
+            GameLogger.error("Error handling server info request: " + e.getMessage());
+        }
+    }
+    private final Map<String, ServerPlayer> activePlayers = new ConcurrentHashMap<>();
+    private boolean isUserAlreadyConnected(String username) {
+        synchronized (activeUserConnections) {
+            Integer connectionId = activeUserConnections.get(username);
+            if (connectionId != null) {
+                Connection existingConnection = findConnection(connectionId);
+                return existingConnection != null && existingConnection.isConnected();
+            }
+            return false;
+        }
+    }
+    private void handleLoginRequest(Connection connection, NetworkProtocol.LoginRequest request) {
+        try {
+            GameLogger.info("Processing login request for: " + request.username);
+
+            // Check if user is already connected
+            if (isUserAlreadyConnected(request.username)) {
+                // Force disconnect existing connection
+                forceDisconnectUser(request.username);
+            }
+
+            // Prevent rapid join attempts
+            Long lastJoin = lastJoinTime.get(request.username);
+            if (lastJoin != null && System.currentTimeMillis() - lastJoin < JOIN_COOLDOWN) {
+                sendLoginFailure(connection, "Please wait before reconnecting");
+                return;
+            }
+
+            // Store connection time
+            lastJoinTime.put(request.username, System.currentTimeMillis());
+
+            if (!authenticateUser(request.username, request.password)) {
+                sendLoginFailure(connection, "Invalid credentials");
+                return;
+            }
+
+            // Create or load player
+            ServerPlayer player = playerManager.createOrLoadPlayer(request.username);
+            if (player == null) {
+                sendLoginFailure(connection, "Failed to initialize player data");
+                return;
+            }
+
+            // Register new connection
+            synchronized (activeUserConnections) {
+                // Remove any existing connection
+                Integer oldConnectionId = activeUserConnections.get(request.username);
+                if (oldConnectionId != null) {
+                    Connection oldConnection = findConnection(oldConnectionId);
+                    if (oldConnection != null && oldConnection.isConnected()) {
+                        NetworkProtocol.ForceDisconnect forceDisconnect = new NetworkProtocol.ForceDisconnect();
+                        forceDisconnect.reason = "Logged in from another location";
+                        oldConnection.sendTCP(forceDisconnect);
+                        oldConnection.close();
                     }
                 }
 
-                // Broadcast update to other clients
-                networkServer.sendToAllExceptTCP(connection.getID(), update);
+                activeUserConnections.put(request.username, connection.getID());
+                activePlayers.put(request.username, player);
+            }
+
+            // Handle successful login
+            handleSuccessfulLogin(connection, player);
+
+        } catch (Exception e) {
+            GameLogger.error("Login error: " + e.getMessage());
+            sendLoginFailure(connection, "Server error occurred");
+        }
+    }
+    private WorldData cloneWorldDataWithoutOtherPlayers(WorldData originalWorldData, String currentUsername) {
+        // Use serialization-deserialization for deep copy
+        try {
+            Json json = JsonConfig.getInstance();
+            String jsonData = json.toJson(originalWorldData);
+            WorldData clonedWorldData = json.fromJson(WorldData.class, jsonData);
+
+            // Remove other players' data
+            Map<String, PlayerData> playerDataMap = clonedWorldData.getPlayersMap();
+            if (playerDataMap != null) {
+                PlayerData currentPlayerData = playerDataMap.get(currentUsername);
+                HashMap<String, PlayerData> newPlayerDataMap = new HashMap<>();
+                if (currentPlayerData != null) {
+                    newPlayerDataMap.put(currentUsername, currentPlayerData);
+                }
+                clonedWorldData.setPlayersMap(newPlayerDataMap);
+            }
+
+            return clonedWorldData;
+
+        } catch (Exception e) {
+            GameLogger.error("Error cloning world data: " + e.getMessage());
+            return null;
+        }
+    }
+    private void forceDisconnectUser(String username) {
+        synchronized (activeUserConnections) {
+            Integer connectionId = activeUserConnections.get(username);
+            if (connectionId != null) {
+                Connection existingConnection = findConnection(connectionId);
+                if (existingConnection != null && existingConnection.isConnected()) {
+                    NetworkProtocol.ForceDisconnect forceDisconnect = new NetworkProtocol.ForceDisconnect();
+                    forceDisconnect.reason = "Logged in from another location";
+                    existingConnection.sendTCP(forceDisconnect);
+                    existingConnection.close();
+                }
+                activeUserConnections.remove(username);
+                activePlayers.remove(username);
             }
         }
     }
 
+    private void handleSuccessfulLogin(Connection connection, ServerPlayer player) {
+            try {
+                // Ensure world is initialized
+                if (multiplayerWorld == null) {
+                    throw new RuntimeException("Multiplayer world not initialized");
+                }
+
+                // Create login response with world data
+                WorldData worldDataToSend = cloneWorldDataWithoutOtherPlayers(multiplayerWorld, player.getUsername());
+
+                // Create login response with world data
+                NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
+                response.success = true;
+                response.username = player.getUsername();
+                response.message = "Login successful";
+
+                // Set world data
+                response.worldData = worldDataToSend;
+
+                // Set player data
+                response.playerData = player.getData();
+                response.x = (int) player.getPosition().x;
+                response.y = (int) player.getPosition().y;
+                response.timestamp = System.currentTimeMillis();
+
+                // Send response
+                connection.sendTCP(response);
+
+                // Update server state
+                connectedPlayers.put(connection.getID(), player.getUsername());
+                GameLogger.info("Player logged in successfully: " + player.getUsername());
+
+                // Send existing players to new player
+                sendExistingPlayersToNewPlayer(connection);
+
+                // Broadcast new player to others
+                broadcastNewPlayerToOthers(connection, player);
+
+                // Send current world state
+                sendWorldState(connection,player.getUsername());
+
+            } catch (Exception e) {
+                GameLogger.error("Error during login completion: " + e.getMessage());
+                handleLoginError(connection, player, e);
+            }
+        }
+
+    private void sendExistingPlayersToNewPlayer(Connection connection) {
+        try {
+            NetworkProtocol.PlayerPosition existingPlayers = new NetworkProtocol.PlayerPosition();
+            existingPlayers.players = new HashMap<>();
+
+            for (Map.Entry<String, ServerPlayer> entry : activePlayers.entrySet()) {
+                Integer playerConnectionId = activeUserConnections.get(entry.getKey());
+                if (playerConnectionId != null && playerConnectionId != connection.getID()) {
+                    ServerPlayer existingPlayer = entry.getValue();
+                    NetworkProtocol.PlayerUpdate update = createPlayerUpdate(existingPlayer);
+                    existingPlayers.players.put(existingPlayer.getUsername(), update);
+                }
+            }
+
+            connection.sendTCP(existingPlayers);
+            GameLogger.info("Sent existing players to new connection: " + connection.getID());
+
+        } catch (Exception e) {
+            GameLogger.error("Error sending existing players: " + e.getMessage());
+        }
+    }
+
+
+    private void broadcastNewPlayerToOthers(Connection connection, ServerPlayer newPlayer) {
+            try {
+                NetworkProtocol.PlayerJoined joinMessage = new NetworkProtocol.PlayerJoined();
+                joinMessage.username = newPlayer.getUsername();
+                joinMessage.x = newPlayer.getPosition().x;
+                joinMessage.y = newPlayer.getPosition().y;
+                joinMessage.direction = newPlayer.getDirection();
+                joinMessage.isMoving = newPlayer.isMoving();
+                joinMessage.timestamp = System.currentTimeMillis();
+
+                // Send player joined message to all except new player
+                networkServer.sendToAllExceptTCP(connection.getID(), joinMessage);
+
+                // Send system message about new player
+                NetworkProtocol.ChatMessage systemMessage = new NetworkProtocol.ChatMessage();
+                systemMessage.sender = "System";
+                systemMessage.content = newPlayer.getUsername() + " has joined the game";
+                systemMessage.type = NetworkProtocol.ChatType.SYSTEM;
+                systemMessage.timestamp = System.currentTimeMillis();
+
+                networkServer.sendToAllTCP(systemMessage);
+                GameLogger.info("Broadcast new player join: " + newPlayer.getUsername());
+
+            } catch (Exception e) {
+                GameLogger.error("Error broadcasting new player: " + e.getMessage());
+            }
+        }
+
+    private void sendWorldState(Connection connection, String currentUsername) {
+        try {
+            WorldData worldDataToSend = cloneWorldDataWithoutOtherPlayers(multiplayerWorld, currentUsername);
+
+            NetworkProtocol.WorldStateUpdate worldUpdate = new NetworkProtocol.WorldStateUpdate();
+            worldUpdate.worldData = worldDataToSend;
+            worldUpdate.timestamp = System.currentTimeMillis();
+
+            connection.sendTCP(worldUpdate);
+            GameLogger.info("Sent world state to connection: " + connection.getID());
+
+        } catch (Exception e) {
+            GameLogger.error("Error sending world state: " + e.getMessage());
+        }
+    }
+
+
+    private NetworkProtocol.PlayerUpdate createPlayerUpdate(ServerPlayer player) {
+            NetworkProtocol.PlayerUpdate update = new NetworkProtocol.PlayerUpdate();
+            update.username = player.getUsername();
+            update.x = player.getPosition().x;
+            update.y = player.getPosition().y;
+            update.direction = player.getDirection();
+            update.isMoving = player.isMoving();
+            update.wantsToRun = player.isRunning();
+            update.timestamp = System.currentTimeMillis();
+
+            // Include inventory if available
+            List<ItemData> inventory = player.getInventoryItems();
+            if (inventory != null) {
+                update.inventoryItems = inventory.toArray(new ItemData[0]);
+            }
+
+            return update;
+        }
+
+        private void handleLoginError(Connection connection, ServerPlayer player, Exception e) {
+            GameLogger.error("Login error for " + player.getUsername() + ": " + e.getMessage());
+
+            // Clean up any partial state
+            activeUserConnections.remove(player.getUsername());
+            activePlayers.remove(player.getUsername());
+            connectedPlayers.remove(connection.getID());
+
+            // Send error response
+            NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
+            response.success = false;
+            response.message = "Server error during login process";
+            connection.sendTCP(response);
+
+            // Consider disconnecting the client
+            connection.close();
+        }
+
+    private Connection findConnection(int connectionId) {
+        return Arrays.stream(networkServer.getConnections())
+            .filter(conn -> conn.getID() == connectionId)
+            .findFirst()
+            .orElse(null);
+    }
+
+    private final Map<String, Long> lastJoinTime = new ConcurrentHashMap<>();
+    private static final long JOIN_COOLDOWN = 5000; // 5 seconds cooldown between join attempts
+
+    private void handlePlayerDisconnect(Connection connection) {
+        String username = null;
+        for (Map.Entry<String, Integer> entry : activeUserConnections.entrySet()) {
+            if (entry.getValue() == connection.getID()) {
+                username = entry.getKey();
+                break;
+            }
+        }
+
+        if (username != null) {
+            // Clean up player state
+            activeUserConnections.remove(username);
+            connectedPlayers.remove(connection.getID()); // Add this line
+            ServerPlayer player = activePlayers.remove(username);
+
+            if (player != null) {
+                // Save final state
+                try {
+                    PlayerData finalState = player.getData();
+                    worldManager.getCurrentWorld().savePlayerData(username, finalState);
+                } catch (Exception e) {
+                    GameLogger.error("Error saving disconnect state: " + e.getMessage());
+                }
+
+                // Broadcast departure
+                NetworkProtocol.PlayerLeft leftMessage = new NetworkProtocol.PlayerLeft();
+                leftMessage.username = username;
+                leftMessage.timestamp = System.currentTimeMillis();
+                networkServer.sendToAllExceptTCP(connection.getID(), leftMessage);
+            }
+        }
+    }
+
+
+    private void handlePlayerUpdate(Connection connection, NetworkProtocol.PlayerUpdate update) {
+        try {
+            if (update == null || update.username == null) {
+                return;
+            }
+
+            String connectedUsername = connectedPlayers.get(connection.getID());
+            if (!update.username.equals(connectedUsername)) {
+                return;
+            }
+
+            ServerPlayer player = playerManager.getPlayer(update.username);
+            if (player == null) {
+                return;
+            }
+
+            // Update server-side state
+            player.updatePosition(update.x, update.y, update.direction, update.isMoving);
+
+            // Create broadcast message
+            NetworkProtocol.PlayerPosition position = new NetworkProtocol.PlayerPosition();
+            position.players = new HashMap<>();
+            position.players.put(update.username, update);
+
+            // Broadcast the update to all clients
+            networkServer.sendToAllTCP(position);
+
+            GameLogger.info("Broadcasting position for " + update.username +
+                " to (" + update.x + "," + update.y + ")");
+
+        } catch (Exception e) {
+            GameLogger.error("Error handling player update: " + e.getMessage());
+        }
+    }
+
+    private boolean validateUpdate(NetworkProtocol.PlayerUpdate update) {
+        if (update == null || update.username == null) {
+            return false;
+        }
+
+        ServerPlayer player = playerManager.getPlayer(update.username);
+        if (player == null) {
+            return false;
+        }
+
+        // More permissive movement validation for testing
+        float distance = Vector2.dst(
+            player.getPosition().x, player.getPosition().y,
+            update.x, update.y
+        );
+
+        float maxAllowedDistance = World.TILE_SIZE * 2; // Allow up to 2 tiles of movement
+
+        boolean valid = distance <= maxAllowedDistance;
+        if (!valid) {
+            GameLogger.error("Large movement detected: " + distance + " pixels");
+        }
+
+        return true; // Allow all movements during testing
+    }
+
+    private void monitorConnections() {
+        scheduler.scheduleAtFixedRate(() -> {
+            long now = System.currentTimeMillis();
+
+            for (Connection conn : networkServer.getConnections()) {
+                ConnectionState state = connectionStates.get(conn.getID());
+                if (state == null) continue;
+
+                // Check keepalive timeout
+                if (now - state.lastKeepAliveReceived > CONNECTION_TIMEOUT) {
+                    state.failedKeepalives++;
+                    if (state.failedKeepalives >= 3) {
+                        GameLogger.info("Connection " + conn.getID() + " timed out");
+                        handlePlayerDisconnect(conn);
+                        conn.close();
+                    }
+                }
+            }
+        }, 1000, 1000, TimeUnit.MILLISECONDS);
+    }
 
     private WorldObject generateObjectForBiome(Biome biome, float x, float y, Random random) {
         WorldObject.ObjectType objectType = getObjectTypeForBiome(biome, random);
@@ -335,14 +716,6 @@ public class GameServer {
         if (texture == null) return null;
 
         return new WorldObject((int) x, (int) y, texture, objectType);
-    }
-
-    private void broadcastTimeSync() {
-        NetworkProtocol.TimeSync timeSync = new NetworkProtocol.TimeSync();
-        timeSync.timestamp = System.currentTimeMillis();
-        timeSync.dayLength = multiplayerWorld.getDayLength();
-        timeSync.worldTimeInMinutes = multiplayerWorld.getWorldTimeInMinutes();
-        networkServer.sendToAllTCP(timeSync);
     }
 
     private void handlePokemonSpawn(Connection connection, NetworkProtocol.WildPokemonSpawn spawnRequest) {
@@ -409,8 +782,6 @@ public class GameServer {
         WorldData world = worldManager.getCurrentWorld();
         if (world == null) return false;
 
-        // Check if tile is passable (you'll need to implement this check based on your world system)
-        // Return true for now, implement actual checks based on your world system
         return true;
     }
 
@@ -447,94 +818,6 @@ public class GameServer {
         return broadcast;
     }
 
-
-    // Implement the Pokemon update handler
-    private void handlePokemonUpdate(Connection connection, NetworkProtocol.PokemonUpdate update) {
-        if (update == null || update.uuid == null) {
-            GameLogger.error("Invalid Pokemon update received");
-            return;
-        }
-
-        try {
-            WorldData currentWorld = worldManager.getCurrentWorld();
-            if (currentWorld == null) {
-                GameLogger.error("Current world is null. Cannot handle PokemonUpdate");
-                return;
-            }
-
-            WildPokemon wildPokemon = currentWorld.getWildPokemon(update.uuid);
-            if (wildPokemon == null) {
-                GameLogger.error("Received PokemonUpdate for unknown UUID: " + update.uuid);
-                return;
-            }
-
-            synchronized (wildPokemon) {
-                // Update position
-                wildPokemon.setX(update.x);
-                wildPokemon.setY(update.y);
-                wildPokemon.updateBoundingBox();
-
-                // Update movement and direction
-                wildPokemon.setDirection(update.direction);
-                wildPokemon.setMoving(update.isMoving);
-
-                // Update level and stats if provided
-                if (update.level > 0) {
-                    wildPokemon.setLevel(update.level);
-                }
-                if (update.currentHp > 0) {
-                    wildPokemon.setCurrentHp(update.currentHp);
-                }
-
-                // Update timestamp
-                wildPokemon.setSpawnTime(update.timestamp);
-
-                // Update additional data if provided
-                if (update.data != null) {
-                    updatePokemonFromData(wildPokemon, update.data);
-                }
-            }
-
-            // Broadcast the update to all other clients
-            NetworkProtocol.PokemonUpdate broadcastUpdate = createBroadcastUpdate(wildPokemon);
-            networkServer.sendToAllExceptTCP(connection.getID(), broadcastUpdate);
-
-            GameLogger.info("Updated and broadcast WildPokemon: " + wildPokemon.getName() +
-                " UUID: " + update.uuid);
-
-        } catch (Exception e) {
-            GameLogger.error("Error handling Pokemon update: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    // Handle Pokemon despawn
-    private void handlePokemonDespawn(Connection connection, NetworkProtocol.WildPokemonDespawn despawnRequest) {
-        try {
-            WorldData world = worldManager.getCurrentWorld();
-            if (world == null) {
-                return;
-            }
-
-            UUID pokemonId = despawnRequest.uuid;
-            if (pokemonId == null) {
-                return;
-            }
-
-            // Remove the Pokemon from the world
-            world.removeWildPokemon(pokemonId);
-
-            // Broadcast despawn to all clients
-            networkServer.sendToAllExceptTCP(connection.getID(), despawnRequest);
-
-            GameLogger.info("Pokemon despawned and broadcast: " + pokemonId);
-
-        } catch (Exception e) {
-            GameLogger.error("Error handling Pokemon despawn: " + e.getMessage());
-        }
-    }
-
-    // Helper methods
     private WildPokemon createWildPokemon(NetworkProtocol.WildPokemonSpawn spawnRequest) {
         try {
             // Create Pokemon from the spawn data
@@ -557,39 +840,6 @@ public class GameServer {
         }
     }
 
-    private void updatePokemonFromData(WildPokemon pokemon, PokemonData data) {
-        if (data == null || pokemon == null) return;
-
-        // Update basic stats
-        pokemon.setPrimaryType(data.getPrimaryType());
-        pokemon.setSecondaryType(data.getSecondaryType());
-
-        // Update other relevant data
-        if (data.getStats() != null) {
-            Pokemon.Stats stats = pokemon.getStats();
-            stats.setHp(data.getStats().hp);
-            stats.setAttack(data.getStats().attack);
-            stats.setDefense(data.getStats().defense);
-            stats.setSpecialAttack(data.getStats().specialAttack);
-            stats.setSpecialDefense(data.getStats().specialDefense);
-            stats.setSpeed(data.getStats().speed);
-        }
-    }
-
-    private NetworkProtocol.PokemonUpdate createBroadcastUpdate(WildPokemon pokemon) {
-        NetworkProtocol.PokemonUpdate update = new NetworkProtocol.PokemonUpdate();
-        update.uuid = pokemon.getUuid();
-        update.x = pokemon.getX();
-        update.y = pokemon.getY();
-        update.direction = pokemon.getDirection();
-        update.isMoving = pokemon.isMoving();
-        update.level = pokemon.getLevel();
-        update.currentHp = pokemon.getCurrentHp();
-        update.timestamp = System.currentTimeMillis();
-        update.data = PokemonData.fromPokemon(pokemon);
-        return update;
-    }
-
     private WorldObject.ObjectType getObjectTypeForBiome(Biome biome, Random random) {
         switch (biome.getType()) {
             case FOREST:
@@ -605,108 +855,240 @@ public class GameServer {
         }
     }
 
-    // Add broadcast method
-    public void broadcastWorldState() {
+    private void sendLoginSuccess(Connection connection, String username) {
+        if (worldManager.getCurrentWorld() == null) {
+            GameLogger.error("Current world is null in sendLoginSuccess");
+            // Handle the error appropriately, possibly throw an exception
+            return;
+        }
+        NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
+        response.success = true;
+        response.username = username;
+        response.message = "Login successful";
+
+        // Set additional data as needed
+        response.worldSeed = worldManager.getCurrentWorld().getConfig().getSeed();
+        response.worldTimeInMinutes = worldManager.getCurrentWorld().getWorldTimeInMinutes();
+        response.dayLength = worldManager.getCurrentWorld().getDayLength();
+
+        response.worldName = worldManager.getCurrentWorld().getName(); // Set worldName
+
+        // Retrieve player coordinates
+        int[] coordinates = databaseManager.getPlayerCoordinates(username);
+        response.x = coordinates[0];
+        response.y = coordinates[1];
+
+        response.timestamp = System.currentTimeMillis();
+
+        connection.sendTCP(response);
+        GameLogger.info("Sent login success response to " + username);
+    }
+
+    private void broadcastPlayerJoined(Connection connection, String username) {
         try {
-            NetworkProtocol.WorldStateUpdate update = new NetworkProtocol.WorldStateUpdate();
-            update.worldData = getSerializableWorldData();
-            update.timestamp = System.currentTimeMillis();
-
-            // Send to all connected clients
-            networkServer.sendToAllTCP(update);
-
-            GameLogger.info("Broadcasted world state update to all clients");
-
-        } catch (Exception e) {
-            GameLogger.error("Failed to broadcast world state: " + e.getMessage());
-        }
-    }
-
-    private WorldData getSerializableWorldData() {
-        synchronized (worldManager) {
-            WorldData data = worldManager.getCurrentWorld();
-            // Create a copy with only necessary data for network transmission
-            WorldData networkData = new WorldData(data.getName());
-            networkData.setWorldSeed(data.getConfig().getSeed());
-            networkData.setWorldTimeInMinutes(data.getWorldTimeInMinutes());
-            networkData.setPlayedTime(data.getPlayedTime());
-            // Add other necessary data
-            return networkData;
-        }
-    }
-
-
-    // In GameClient.java - Handle world state updates
-    private void handleWorldStateUpdate(NetworkProtocol.WorldStateUpdate update) {
-        if (multiplayerWorld != null) {
-            multiplayerWorld.updateFromServerData(update.worldData);
-        }
-    }
-
-    private void handleLoginRequest(Connection connection, NetworkProtocol.LoginRequest request) {
-        try {
-            String sessionId = String.valueOf(connection.getID());
-            ServerPlayer player = playerManager.loginPlayer(request.username, request.password, sessionId);
-
-            NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
-
-            if (player != null) {
-                response.success = true;
-                response.username = player.getUsername();
-                response.x = (int) player.getPosition().x;
-                response.y = (int) player.getPosition().y;
-
-                // Add world data to response
-                response.worldSeed = multiplayerWorld.getConfig().getSeed();
-                response.worldName = CreatureCaptureGame.MULTIPLAYER_WORLD_NAME;
-                response.worldData = multiplayerWorld;  // Serialize relevant world data
-
-                connectedPlayers.put(connection.getID(), player.getUsername());
-                broadcastNewPlayer(player);
-                sendExistingPlayers(connection);
-
-            } else {
-                response.success = false;
-                response.message = "Login failed. Incorrect username or password.";
+            // Get player data
+            ServerPlayer player = playerManager.getPlayer(username);
+            if (player == null) {
+                GameLogger.error("Cannot broadcast join - player not found: " + username);
+                return;
             }
 
-            networkServer.sendToTCP(connection.getID(), response);
+            // Create join message
+            NetworkProtocol.PlayerJoined joinMessage = new NetworkProtocol.PlayerJoined();
+            joinMessage.username = username;
+            joinMessage.x = player.getPosition().x;
+            joinMessage.y = player.getPosition().y;
+            joinMessage.direction = player.getDirection();
+            joinMessage.isMoving = player.isMoving();
+            joinMessage.timestamp = System.currentTimeMillis();
+
+            // Broadcast to all connected clients except the joining player
+            synchronized (networkServer.getConnections()) {
+                for (Connection conn : networkServer.getConnections()) {
+                    if (conn.getID() != connection.getID()) {
+                        try {
+                            conn.sendTCP(joinMessage);
+                            GameLogger.info("Sent join message to connection " + conn.getID() +
+                                " for player: " + username);
+                        } catch (Exception e) {
+                            GameLogger.error("Failed to send join message to connection " +
+                                conn.getID() + ": " + e.getMessage());
+                        }
+                    }
+                }
+            }
+
+            // Send system message about player joining
+            NetworkProtocol.ChatMessage systemMessage = new NetworkProtocol.ChatMessage();
+            systemMessage.sender = "System";
+            systemMessage.content = username + " has joined the game";
+            systemMessage.type = NetworkProtocol.ChatType.SYSTEM;
+            systemMessage.timestamp = System.currentTimeMillis();
+
+            networkServer.sendToAllTCP(systemMessage);
+            GameLogger.info("Broadcast join message for player: " + username);
 
         } catch (Exception e) {
-            GameLogger.error("Error during login: " + e.getMessage());
-            // Send error response
+            GameLogger.error("Error broadcasting player join: " + e.getMessage());
+            e.printStackTrace();
         }
+    }
+
+    private boolean authenticateUser(String username, String password) {
+        // Retrieve the user's stored password hash from the database
+        String storedHash = databaseManager.getPasswordHash(username);
+        if (storedHash == null) {
+            GameLogger.error("Authentication failed: Username '" + username + "' does not exist.");
+            return false;
+        }
+
+        // Compare the provided password with the stored hash
+        return PasswordUtils.verifyPassword(password, storedHash);
+    }
+
+
+
+    private void sendLoginFailure(Connection connection, String message) {
+        NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
+        response.success = false;
+        response.message = message;
+        networkServer.sendToTCP(connection.getID(), response);
     }
 
     public PlayerManager getPlayerManager() {
         return playerManager;
     }
 
-    /**
-     * Sets up the network listener to handle incoming connections, received objects,
-     * and disconnections.
-     */
-    private void setupNetworkListener() {
+    private void setupNetworkListener() {// In setupNetworkListener()
+        networkServer.addListener(new Listener() {
+            @Override
+            public void received(Connection connection, Object object) {
+                if (object instanceof NetworkProtocol.Keepalive) {
+                    // Echo keepalive back
+                    connection.sendTCP(object);
+                    return;
+                }
+                // Rest of your message handling...
+            }
+        });
         networkServer.addListener(new Listener() {
             @Override
             public void connected(Connection connection) {
-                handlePlayerConnect(connection);
-            }
-
-            @Override
-            public void disconnected(Connection connection) {
                 try {
-                    handlePlayerDisconnect(connection);
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
+                    GameLogger.info("New connection attempt from: " + connection.getRemoteAddressTCP());
+
+                    // Create and store connection state
+                    ConnectionState state = new ConnectionState();
+                    state.lastKeepAliveReceived = System.currentTimeMillis();
+                    connectionStates.put(connection.getID(), state);
+                    // Check max players
+                    if (playerManager.getOnlinePlayers().size() >= config.getMaxPlayers()) {
+                        GameLogger.info("Connection rejected: Max players reached");
+                        sendConnectionResponse(connection, false, "Server is full");
+                        scheduler.schedule(() -> connection.close(), 100, TimeUnit.MILLISECONDS);
+                        return;
+                    }
+
+                    // Send success response
+                    NetworkProtocol.ConnectionResponse response = new NetworkProtocol.ConnectionResponse();
+                    response.success = true;
+                    response.message = "Connection established";
+                    connection.sendTCP(response);
+
+                    GameLogger.info("Connection " + connection.getID() + " established - awaiting authentication");
+
+                    // Set authentication timeout
+                    scheduler.schedule(() -> {
+                        if (!connectedPlayers.containsKey(connection.getID())) {
+                            GameLogger.info("Authentication timeout for connection: " + connection.getID());
+                            connection.close();
+                        }
+                    }, AUTH_TIMEOUT, TimeUnit.MILLISECONDS);
+
+                } catch (Exception e) {
+                    GameLogger.error("Error handling connection: " + e.getMessage());
+                    connection.close();
                 }
             }
 
             @Override
             public void received(Connection connection, Object object) {
-                handleNetworkMessage(connection, object);
+                GameLogger.error("Received message : " + object.toString());
+                try {
+                    if (object instanceof NetworkProtocol.LoginRequest) {
+                        handleLoginRequest(connection, (NetworkProtocol.LoginRequest) object);
+                    } else if (object instanceof NetworkProtocol.RegisterRequest) {
+                        handleRegisterRequest(connection, (NetworkProtocol.RegisterRequest) object);
+                    } else if (!connectedPlayers.containsKey(connection.getID())) {
+                        GameLogger.error("Received unauthorized message from: " + connection.getID());
+                    } else if (object instanceof NetworkProtocol.ServerInfoRequest) {
+                        handleServerInfoRequest(connection, (NetworkProtocol.ServerInfoRequest) object);
+                    }  else if (object instanceof NetworkProtocol.Logout) {
+
+                        handleLogout(connection, (NetworkProtocol.Logout) object);
+                    }  else {
+                        handleNetworkMessage(connection, object);
+                    }
+                } catch (Exception e) {
+                    GameLogger.error("Error handling message: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
+
+            @Override
+            public void disconnected(Connection connection) {
+                // Remove connection state
+                connectionStates.remove(connection.getID());
+                handlePlayerDisconnect(connection);
             }
         });
+    }
+
+    private void handleLogout(Connection connection, NetworkProtocol.Logout logout) {
+        String username = connectedPlayers.get(connection.getID());
+        if (username != null && username.equals(logout.username)) {
+            try {
+                // Save final state
+                ServerPlayer player = playerManager.getPlayer(username);
+                if (player != null) {
+                    PlayerData finalState = player.getData();
+                    WorldData worldData = worldManager.getCurrentWorld();
+                    if (worldData != null) {
+                        worldData.savePlayerData(username, finalState);
+                        worldManager.saveWorld(worldData);
+                    }
+                }
+
+                // Clean up connection
+                handlePlayerDisconnect(connection);
+
+                // Send acknowledgment
+                NetworkProtocol.LogoutResponse response = new NetworkProtocol.LogoutResponse();
+                response.success = true;
+                connection.sendTCP(response);
+
+            } catch (Exception e) {
+                GameLogger.error("Error handling logout: " + e.getMessage());
+                NetworkProtocol.LogoutResponse response = new NetworkProtocol.LogoutResponse();
+                response.success = false;
+                response.message = "Error saving state";
+                connection.sendTCP(response);
+            }
+        }
+    }
+
+
+
+    private void sendConnectionResponse(Connection connection, boolean success, String message) {
+        NetworkProtocol.ConnectionResponse response = new NetworkProtocol.ConnectionResponse();
+        response.success = success;
+        response.message = message;
+
+        try {
+            connection.sendTCP(response);
+        } catch (Exception e) {
+            GameLogger.error("Error sending connection response: " + e.getMessage());
+        }
     }
 
 
@@ -721,53 +1103,16 @@ public class GameServer {
             message.timestamp = System.currentTimeMillis();
         }
 
-        //        GameLogger.info(STR."Server received chat message from: \{message.sender} content: \{message.content}");
-
-        // Broadcast to all connected clients except sender
         for (Connection conn : networkServer.getConnections()) {
             if (conn.getID() != connection.getID()) {
                 try {
                     networkServer.sendToTCP(conn.getID(), message);
                 } catch (Exception e) {
-                    //                    GameLogger.info(STR."Failed to broadcast message to client \{conn.getID()}: \{e.getMessage()}");
                 }
             }
         }
     }
 
-    private void sendExistingPlayers(Connection newConnection) {
-        NetworkProtocol.PlayerPosition existingPlayers = new NetworkProtocol.PlayerPosition();
-        for (ServerPlayer player : playerManager.getOnlinePlayers()) {
-            NetworkProtocol.PlayerUpdate playerState = new NetworkProtocol.PlayerUpdate();
-            playerState.username = player.getUsername();
-            playerState.x = player.getPosition().x;
-            playerState.y = player.getPosition().y;
-            playerState.direction = player.getDirection();
-            playerState.isMoving = player.isMoving();
-            existingPlayers.players.put(player.getUsername(), playerState);
-        }
-        networkServer.sendToTCP(newConnection.getID(), existingPlayers);
-    }
-
-
-    private void broadcastNewPlayer(ServerPlayer newPlayer) {
-        NetworkProtocol.PlayerJoined joinMessage = new NetworkProtocol.PlayerJoined();
-        joinMessage.username = newPlayer.getUsername();
-        joinMessage.x = newPlayer.getPosition().x;
-        joinMessage.y = newPlayer.getPosition().y;
-        joinMessage.direction = newPlayer.getDirection();
-        joinMessage.isMoving = newPlayer.isMoving();
-        joinMessage.inventoryItems = newPlayer.getInventoryItems().toArray(new ItemData[0]);
-
-        // Send to all except the new player
-        networkServer.sendToAllExceptTCP(
-            Integer.parseInt(newPlayer.getSessionId()),
-            joinMessage
-        );
-
-        GameLogger.info("Broadcasted new player join: " + newPlayer.getUsername() +
-            " at (" + joinMessage.x + "," + joinMessage.y + ")");
-    }
 
     private void sendRegistrationResponse(Connection connection, boolean success, String message) {
         NetworkProtocol.RegisterResponse response = new NetworkProtocol.RegisterResponse();
@@ -825,28 +1170,6 @@ public class GameServer {
         }
     }
 
-
-    private void saveWorldData(String worldName, WorldData worldData) {
-        storageSystem.saveWorld(worldData);
-    }
-
-    private void savePlayerData(String username, PlayerData playerData) {
-        storageSystem.savePlayerData(username, playerData);
-    }
-
-    // Update existing load methods
-    private WorldData loadWorldData(String worldName) {
-        return storageSystem.loadWorld(worldName);
-    }
-
-    private PlayerData loadPlayerData(String username) {
-        return storageSystem.loadPlayerData(username);
-    }
-
-
-    /**
-     * Starts the GameServer by initializing components, binding ports, and loading plugins.
-     */
     public void start() {
         try {
             GameLogger.info("Starting server...");
@@ -875,11 +1198,16 @@ public class GameServer {
             NetworkProtocol.registerClasses(networkServer.getKryo());
             GameLogger.info("Network classes registered");
 
-            // Start network server
             networkServer.start();
-            networkServer.bind(config.getTcpPort(), config.getUdpPort());
 
+            initializePeriodicTasks();
+
+            broadcastPlayerStates();
+
+            monitorConnections();
+            networkServer.bind(config.getTcpPort(), config.getUdpPort());
             running = true;
+
             GameLogger.info("Server started successfully on TCP port " + config.getTcpPort() +
                 " and UDP port " + config.getUdpPort());
             GameLogger.info("Maximum players: " + config.getMaxPlayers());
@@ -891,12 +1219,23 @@ public class GameServer {
         }
     }
 
-    /**
-     * Checks if a specific port is available for binding.
-     *
-     * @param port The port number to check.
-     * @return True if the port is available; false otherwise.
-     */
+    private void initializePeriodicTasks() {
+        // Schedule connection cleanup
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                for (Connection conn : networkServer.getConnections()) {
+                    ConnectionState state = connectionStates.get(conn.getID());
+                    if (state != null &&
+                        System.currentTimeMillis() - state.lastKeepAliveReceived > CONNECTION_TIMEOUT) {
+                        handlePlayerDisconnect(conn);
+                    }
+                }
+            } catch (Exception e) {
+                GameLogger.error("Error in periodic tasks: " + e.getMessage());
+            }
+        }, CLEANUP_INTERVAL, CLEANUP_INTERVAL, TimeUnit.MILLISECONDS);
+    }
+
     private boolean isPortAvailable(int port) {
         try (ServerSocket ss = new ServerSocket(port)) {
             ss.setReuseAddress(true);
@@ -906,10 +1245,6 @@ public class GameServer {
         }
     }
 
-    /**
-     * Stops the GameServer gracefully by saving all world data, disconnecting players,
-     * unloading plugins, and shutting down all components.
-     */
     public void stop() {
         if (!running) return;
         running = false;
@@ -937,11 +1272,8 @@ public class GameServer {
                 }
             } catch (Exception e) {
                 GameLogger.info("Error disconnecting player " + player.getUsername() + ": " + e.getMessage());
-                e.printStackTrace();
             }
         });
-
-        // Shutdown other components
         pluginManager.disablePlugins();
         eventManager.shutdown();
         storage.shutdown();
@@ -949,63 +1281,31 @@ public class GameServer {
             networkServer.stop();
         }
 
-
-        // Existing shutdown code...
-
-        // Dispose of textures
         GameLogger.info("Server shutdown complete.");
-    }
-
-    private final Map<Integer, ServerConnection> activeConnections = new ConcurrentHashMap<>();
-
-    private class ServerConnection {
-        final Connection connection;
-        String username;
-        long connectTime;
-        JConsoleContext.ConnectionState state;
-
-        ServerConnection(Connection connection) {
-            this.connection = connection;
-            this.connectTime = System.currentTimeMillis();
-            this.state = JConsoleContext.ConnectionState.CONNECTING;
-        }
-    }
-
-    private void handlePlayerConnect(Connection connection) {
-        try {
-            GameLogger.info("New connection attempt from: " + connection.getRemoteAddressTCP());
-
-            if (playerManager.getOnlinePlayers().size() >= config.getMaxPlayers()) {
-                GameLogger.info("Connection rejected: Max players reached");
-                NetworkProtocol.ConnectionResponse response = new NetworkProtocol.ConnectionResponse();
-                response.success = false;
-                response.message = "Server is full";
-                connection.sendTCP(response);
-                connection.close();
-                return;
-            }
-
-            // Add to active connections
-            ServerConnection serverConn = new ServerConnection(connection);
-            activeConnections.put(connection.getID(), serverConn);
-
-            // Send successful connection response
-            NetworkProtocol.ConnectionResponse response = new NetworkProtocol.ConnectionResponse();
-            response.success = true;
-            response.message = "Connected successfully";
-            connection.sendTCP(response);
-
-            GameLogger.info("Connection " + connection.getID() + " established");
-
-        } catch (Exception e) {
-            GameLogger.error("Error handling connection: " + e.getMessage());
-            connection.close();
-        }
     }
 
 
     private void handleNetworkMessage(Connection connection, Object object) {
         try {
+            if (object instanceof NetworkProtocol.Keepalive) {
+                // Update the connection state's last keepalive time
+                ConnectionState state = connectionStates.get(connection.getID());
+                if (state != null) {
+                    state.lastKeepAliveReceived = System.currentTimeMillis();
+                }
+                // Echo keepalive back to client
+                connection.sendTCP(object);
+                return;
+            }
+            if (object instanceof NetworkProtocol.PlayerUpdate) {
+                NetworkProtocol.PlayerUpdate update = (NetworkProtocol.PlayerUpdate) object;
+                if (validateUpdate(update)) {
+                    pendingUpdates.offer(update);
+                }
+                handlePlayerUpdate(connection, update);
+                return;
+            }
+            GameLogger.info("Server received message: " + object.getClass().getName());
             if (object instanceof NetworkProtocol.LoginRequest) {
                 handleLoginRequest(connection, (NetworkProtocol.LoginRequest) object);
             } else if (object instanceof NetworkProtocol.RegisterRequest) {
@@ -1019,24 +1319,12 @@ public class GameServer {
             } else if (object instanceof NetworkProtocol.WildPokemonSpawn) {
                 handlePokemonSpawn(connection, (NetworkProtocol.WildPokemonSpawn) object);
             }
-            if (object instanceof NetworkProtocol.PlayerUpdate) {
-                GameLogger.info("Received PlayerUpdate for " + ((NetworkProtocol.PlayerUpdate) object).username);
-                handlePlayerUpdate(connection, (NetworkProtocol.PlayerUpdate) object);  // Update player position locally
-            } else {
-                // Handle other message types as needed
-                //                System.out
-                //                    .println(STR."Received unknown message type: \{object.getClass().getName()}");
-            }
 
-            // Optionally, fire network events for plugins
-            // eventManager.fireEvent(new NetworkMessageEvent(connection.getID(), object));
         } catch (Exception e) {
-            //            System.out
-            //                .println(STR."Error handling network message: \{e.getMessage()}");
+            GameLogger.error("Error handling network message: " + e.getMessage());
             e.printStackTrace();
         }
     }
-
 
     private void handleInventoryUpdate(Connection connection, NetworkProtocol.InventoryUpdate update) {
         String username = connectedPlayers.get(connection.getID());
@@ -1061,70 +1349,31 @@ public class GameServer {
         }
     }
 
-    private void handlePlayerDisconnect(Connection connection) throws IOException {
-        String username = connectedPlayers.remove(connection.getID());
-        if (username != null) {
-            // Save final state
-            ServerPlayer player = playerManager.getPlayer(username);
-            if (player != null) {
-                PlayerData finalState = player.getData();
-                WorldData worldData = worldManager.getWorld(CreatureCaptureGame.MULTIPLAYER_WORLD_NAME);
-                if (worldData != null) {
-                    worldData.savePlayerData(username, finalState); // FIX PLEASE LOL CODE:YEAH
-                    worldManager.saveWorld(worldData);
-                    GameLogger.info("Saved final state for disconnected player: " + username);
-                }
-            }
-
-            // Notify other clients
-            NetworkProtocol.PlayerLeft leftMessage = new NetworkProtocol.PlayerLeft();
-            leftMessage.username = username;
-            networkServer.sendToAllExceptTCP(connection.getID(), leftMessage);
-        }
-    }
-
-
-    private boolean shouldSavePlayerData(ServerPlayer player) {
-        // Save data every 30 seconds or when position changed significantly
-        long currentTime = System.currentTimeMillis();
-        if (currentTime - player.getLastSaveTime() > 30000) {
-            player.updateLastSaveTime(currentTime);
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Initiates the shutdown process of the server.
-     */
     public void shutdown() {
         stop();
     }
 
-    /**
-     * Checks if the server is currently running.
-     *
-     * @return True if the server is running, false otherwise.
-     */
-    public boolean isRunning() {
-        return running;
-    }
-
-    /**
-     * Retrieves the server configuration.
-     *
-     * @return The ServerConfig instance.
-     */
     public ServerConnectionConfig getConfig() {
         return config;
     }
 
-    /**
-     * Retrieves the WorldManager instance.
-     *
-     * @return The WorldManager instance.
-     */
-    public WorldManager getWorldManager() {
-        return worldManager;
+    private class ConnectionState {
+        long lastKeepAliveReceived = System.currentTimeMillis();
+        String username;
+        boolean authenticated;
+        int failedKeepalives = 0;
+    }
+
+    private class ServerConnection {
+        final Connection connection;
+        String username;
+        long connectTime;
+        JConsoleContext.ConnectionState state;
+
+        ServerConnection(Connection connection) {
+            this.connection = connection;
+            this.connectTime = System.currentTimeMillis();
+            this.state = JConsoleContext.ConnectionState.CONNECTING;
+        }
     }
 }

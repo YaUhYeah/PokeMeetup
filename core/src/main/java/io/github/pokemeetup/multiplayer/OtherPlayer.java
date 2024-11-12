@@ -2,154 +2,87 @@ package io.github.pokemeetup.multiplayer;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.g2d.*;
+import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
-import io.github.pokemeetup.pokemon.Pokemon;
-import io.github.pokemeetup.pokemon.PokemonParty;
 import io.github.pokemeetup.system.Player;
-import io.github.pokemeetup.system.data.PokemonData;
 import io.github.pokemeetup.system.gameplay.PlayerAnimations;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
 import io.github.pokemeetup.utils.GameLogger;
 
-import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Represents another player in the multiplayer game.
- * Handles synchronization of position, movement, direction, and inventory based on network updates.
- */
 public class OtherPlayer {
-    private static final float LERP_ALPHA = 0.2f;
-    private static final float ANIMATION_FRAME_DURATION = 0.25f / 4;
-    private static final float RUN_ANIMATION_FRAME_DURATION = 0.1f;
-
     private final String username;
     private final Inventory inventory;
     private final PlayerAnimations animations;
     private final Object positionLock = new Object();
     private final Object inventoryLock = new Object();
     private final AtomicBoolean isMoving;
+    private final Vector2 targetPosition = new Vector2();
     private final AtomicBoolean wantsToRun;
     private Vector2 position;
-    private Vector2 targetPosition;
     private String direction;
+    private static final float INTERPOLATION_SPEED = 10f;
     private float stateTime;
     private BitmapFont font;
 
-    private PokemonParty pokemonParty;
-    private Map<UUID, Pokemon> ownedPokemon;
 
-    /**
-     * Constructs an OtherPlayer instance.
-     *
-     * @param username The username of the other player.
-     * @param x        The initial X position.
-     * @param y        The initial Y position.
-     * @param atlas    The TextureAtlas containing player textures.
-     */
-    public OtherPlayer(String username, float x, float y, TextureAtlas atlas) {
+    public OtherPlayer(String username, float x, float y) {
         this.username = (username != null && !username.isEmpty()) ? username : "Unknown";
         this.position = new Vector2(x, y);
-        this.targetPosition = new Vector2(x, y);
         this.inventory = new Inventory();
         this.direction = "down";
         this.isMoving = new AtomicBoolean(false);
         this.wantsToRun = new AtomicBoolean(false);
         this.stateTime = 0;
-        this.pokemonParty = new PokemonParty();
-        this.ownedPokemon = new HashMap<>();
         this.animations = new PlayerAnimations();
 
         GameLogger.info("Created OtherPlayer: " + this.username + " at (" + x + ", " + y + ")");
     }
 
-    public void updatePokemon(NetworkProtocol.PokemonUpdate update) {
-        // Get or create the Pokemon
-        Pokemon pokemon = ownedPokemon.get(update.uuid);
-        if (pokemon == null) {
-            pokemon = update.data.toPokemon();
-            if (pokemon != null) {
-                pokemon.setUuid(update.uuid);
-                ownedPokemon.put(update.uuid, pokemon);
-            } else {
-                GameLogger.error("Failed to create Pokemon from update data");
-                return;
-            }
-        }
+    private final Vector2 velocity = new Vector2();
 
-        // Update Pokemon state
-        pokemon.setPosition(new Vector2(update.x, update.y));
-        pokemon.setCurrentHp(update.data.getBaseHp());
-        // Update other volatile stats as needzed
-    }
+    public void updateFromNetwork(NetworkProtocol.PlayerUpdate update) {
+        if (update == null) return;
 
-    public void updateParty(List<PokemonData> partyData) {
-        pokemonParty.clearParty();
-        for (PokemonData data : partyData) {
-            Pokemon pokemon = ownedPokemon.get(data.getUuid());
-            if (pokemon == null) {
-                pokemon = data.toPokemon();
-                if (pokemon != null) {
-                    pokemon.setUuid(data.getUuid());
-                    ownedPokemon.put(data.getUuid(), pokemon);
-                }
+        targetPosition.set(update.x, update.y);
+        this.direction = update.direction;
+        this.isMoving.set(update.isMoving);
+        this.wantsToRun.set(update.wantsToRun);
+
+        // Calculate velocity
+        if (update.isMoving) {
+            float dx = update.x - position.x;
+            float dy = update.y - position.y;
+            float distance = Vector2.len(dx, dy);
+
+            if (distance > 0) {
+                velocity.set(dx / distance, dy / distance);
+                velocity.scl(update.wantsToRun ? (float) 1.75 : 1);
             }
-            if (pokemon != null) {
-                pokemonParty.addPokemon(pokemon);
-            }
+        } else {
+            velocity.setZero();
         }
     }
-
-    /**
-     * Updates the OtherPlayer's state each frame.
-     *
-     * @param delta The time elapsed since the last frame.
-     */
-    public void update(float delta) {
-        synchronized (positionLock) {
-            // Interpolate position smoothly towards targetPosition
-            if (!position.epsilonEquals(targetPosition, 0.1f)) {
-                // Increase LERP_ALPHA dynamically to reach target position faster
-                float dynamicLerpAlpha = LERP_ALPHA + Math.min(0.5f, position.dst(targetPosition) * 0.01f);
-                position.lerp(targetPosition, dynamicLerpAlpha);
-            }
+    public void update(float deltaTime) {
+        if (!position.epsilonEquals(targetPosition, 0.1f)) {
+            interpolationProgress = Math.min(1.0f, interpolationProgress + deltaTime * INTERPOLATION_SPEED);
+            position.x = MathUtils.lerp(position.x, targetPosition.x, interpolationProgress);
+            position.y = MathUtils.lerp(position.y, targetPosition.y, interpolationProgress);
+            isMoving.set(!position.epsilonEquals(targetPosition, 0.1f));
+        } else {
+            interpolationProgress = 0f;
+            isMoving.set(false);
         }
 
-        // Only advance animation state if moving
         if (isMoving.get()) {
-            stateTime += delta;
+            stateTime += deltaTime;
         }
     }
+    private float interpolationProgress;
 
-    public void updateFromNetwork(NetworkProtocol.PlayerUpdate netUpdate) {
-        if (netUpdate == null) {
-            GameLogger.error("Received null PlayerUpdate for OtherPlayer: " + username);
-            return;
-        }
 
-        // Synchronize position based on server-provided tile position
-        synchronized (positionLock) {
-            // Convert tile coordinates to pixel coordinates if necessary
-            float pixelX = netUpdate.x;
-            float pixelY = netUpdate.y;
-
-            // Set target position to smoothly interpolate towards
-            targetPosition.set(pixelX, pixelY);
-
-            direction = (netUpdate.direction != null) ? netUpdate.direction : "down";
-            isMoving.set(netUpdate.isMoving);
-            wantsToRun.set(netUpdate.wantsToRun);
-        }
-
-        GameLogger.info("OtherPlayer " + username + " updated from network: Position=(" + netUpdate.x + ", " + netUpdate.y + "), Direction=" + direction);
-    }
-
-    /**
-     * Renders the OtherPlayer on the screen.
-     *
-     * @param batch The SpriteBatch used for rendering.
-     */
     public void render(SpriteBatch batch) {
         TextureRegion currentFrame = animations.getCurrentFrame(
             direction,
@@ -159,23 +92,25 @@ public class OtherPlayer {
         );
 
         if (currentFrame == null) {
-            GameLogger.error("OtherPlayer " + username + " has null currentFrame. Check PlayerAnimations.");
+            GameLogger.error("OtherPlayer " + username + " has null currentFrame");
             return;
         }
 
         synchronized (positionLock) {
-            batch.draw(currentFrame, position.x, position.y,
-                Player.FRAME_WIDTH, Player.FRAME_HEIGHT);
+            batch.draw(currentFrame,
+                position.x,
+                position.y,
+                Player.FRAME_WIDTH,
+                Player.FRAME_HEIGHT
+            );
+
+
         }
 
         renderUsername(batch);
     }
 
-    /**
-     * Renders the OtherPlayer's username above their character.
-     *
-     * @param batch The SpriteBatch used for rendering.
-     */
+
     private void renderUsername(SpriteBatch batch) {
         if (username == null || username.isEmpty()) return;
 
@@ -189,10 +124,6 @@ public class OtherPlayer {
                 position.y + Player.FRAME_HEIGHT + 15);
         }
     }
-
-    /**
-     * Ensures that the font is loaded and ready for rendering.
-     */
     private void ensureFontLoaded() {
         if (font == null) {
             try {
@@ -201,30 +132,17 @@ public class OtherPlayer {
                 GameLogger.error("Loaded font for OtherPlayer: " + username);
             } catch (Exception e) {
                 GameLogger.error("Failed to load font for OtherPlayer: " + username + " - " + e.getMessage());
-                font = new BitmapFont(); // Fallback to default font
+                font = new BitmapFont();
             }
         }
     }
 
-    /**
-     * Disposes of resources used by OtherPlayer.
-     */
     public void dispose() {
-        if (font != null) {
-            font.dispose();
-            font = null;
-            GameLogger.error("Disposed font for OtherPlayer: " + username);
-        }
+
         animations.dispose();
         GameLogger.error(
             ("Disposed animations for OtherPlayer: " + username));
     }
-
-    /**
-     * Gets the current position of the OtherPlayer.
-     *
-     * @return A copy of the position vector.
-     */
     public Vector2 getPosition() {
         synchronized (positionLock) {
             return new Vector2(position);
@@ -235,121 +153,51 @@ public class OtherPlayer {
         this.position = position;
     }
 
-    // Getters with appropriate synchronization
-
-    /**
-     * Gets the OtherPlayer's Inventory.
-     *
-     * @return The Inventory instance.
-     */
     public Inventory getInventory() {
         synchronized (inventoryLock) {
             return inventory;
         }
     }
 
-    /**
-     * Gets the username of the OtherPlayer.
-     *
-     * @return The username string.
-     */
     public String getUsername() {
         return username;
     }
 
-    /**
-     * Gets the direction the OtherPlayer is facing.
-     *
-     * @return The direction string.
-     */
     public String getDirection() {
         synchronized (positionLock) {
             return direction;
         }
     }
 
-    /**
-     * Checks if the OtherPlayer is currently moving.
-     *
-     * @return True if moving, false otherwise.
-     */
     public boolean isMoving() {
         return isMoving.get();
     }
 
-    /**
-     * Checks if the OtherPlayer wants to run.
-     *
-     * @return True if wants to run, false otherwise.
-     */
     public boolean isWantsToRun() {
         return wantsToRun.get();
     }
 
-    /**
-     * Gets the current X position of the OtherPlayer.
-     *
-     * @return The X coordinate.
-     */
     public float getX() {
         synchronized (positionLock) {
             return position.x;
         }
     }
 
-    /**
-     * Sets the OtherPlayer's X position.
-     *
-     * @param x The new X position.
-     */
-
-    /**
-     * Sets the X position of the OtherPlayer.
-     *
-     * @param x The new X coordinate.
-     */
     public void setX(float x) {
         synchronized (positionLock) {
             this.position.x = x;
         }
     }
 
-    /**
-     * Gets the current Y position of the OtherPlayer.
-     *
-     * @return The Y coordinate.
-     */
     public float getY() {
         synchronized (positionLock) {
             return position.y;
         }
     }
-
-    /**
-     * Sets the Y position of the OtherPlayer.
-     *
-     * @param y The new Y coordinate.
-     */
     public void setY(float y) {
         synchronized (positionLock) {
             this.position.y = y;
         }
-    }
-
-    /**
-     * Gets the target position of the OtherPlayer.
-     * This is used for interpolating the player's movement.
-     *
-     * @return A copy of the target position Vector2.
-     */
-    public Vector2 getTargetPosition() {
-        synchronized (positionLock) {
-            return new Vector2(targetPosition);
-        }
-    }
-
-    public void setTargetPosition(Vector2 targetPosition) {
-        this.targetPosition = targetPosition;
     }
 
 }

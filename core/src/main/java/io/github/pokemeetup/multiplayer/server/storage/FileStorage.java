@@ -9,6 +9,8 @@ import io.github.pokemeetup.utils.storage.JsonConfig;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -60,6 +62,18 @@ public class FileStorage implements StorageSystem {
 
         // Add any other necessary serializers for multiplayer data
     }
+    private void createWorldBackup(String worldName) {
+        try {
+            Path worldFile = worldsDir.resolve(worldName + "/world.json");
+            Path backupDir = worldsDir.resolve(worldName + "/backups");
+            Files.createDirectories(backupDir);
+            Path backupFile = backupDir.resolve("world_backup.json"); // fixed name
+            Files.copy(worldFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
+            GameLogger.info("Created backup of world: " + worldName + " at " + backupFile.toAbsolutePath());
+        } catch (Exception e) {
+            GameLogger.error("Failed to create backup of world: " + worldName + " - " + e.getMessage());
+        }
+    }
 
     @Override
     public void initialize() throws IOException {
@@ -68,7 +82,9 @@ public class FileStorage implements StorageSystem {
         Files.createDirectories(playersDir);
 
         // Load existing multiplayer data
-        loadExistingData();
+        loadExistingData();   worldCache.forEach((worldName, data) -> {
+            createWorldBackup(worldName);
+        });
 
         GameLogger.info("Multiplayer storage initialized");
     }
@@ -140,46 +156,64 @@ public class FileStorage implements StorageSystem {
         return null;
     }
 
-    @Override
+    private boolean backupCreated = false;
     public void saveWorldData(String worldName, WorldData data) throws IOException {
-        Path file = worldsDir.resolve(worldName + ".json");
+        Path worldFile = worldsDir.resolve(worldName + "/world.json");
+        Path backupDir = worldsDir.resolve(worldName + "/backups");
 
-        // Create backup if file exists
-        if (Files.exists(file)) {
-            Path backup = file.resolveSibling(worldName + ".bak");
-            Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+        try {
+            Files.createDirectories(worldFile.getParent());
+            Files.createDirectories(backupDir);
+            if (Files.exists(worldFile)) {
+                Path backup = backupDir.resolve("world_backup.json");
+                Files.copy(worldFile, backup, StandardCopyOption.REPLACE_EXISTING);
+                GameLogger.info("Created backup of world: " + worldName);
+            }
+
+            String jsonData = JsonConfig.getInstance().prettyPrint(data);
+            Files.writeString(worldFile, jsonData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+            worldCache.put(worldName, data);
+
+            GameLogger.info("Saved world: " + worldName +
+                " Time: " + data.getWorldTimeInMinutes() +
+                " Played: " + data.getPlayedTime() +
+                " Day Length: " + data.getDayLength() +
+                " to: " + worldFile.toAbsolutePath());
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to save world: " + worldName + " - " + e.getMessage());
+            throw e;
         }
-
-        String jsonData = json.prettyPrint(data);
-        Files.writeString(file, jsonData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-        worldCache.put(worldName, data);
-
-        GameLogger.info("Saved multiplayer world: " + worldName);
     }
+
 
     @Override
     public WorldData loadWorldData(String worldName) {
-        // Check cache first
         WorldData cached = worldCache.get(worldName);
         if (cached != null) {
             return cached;
         }
 
         try {
-            Path file = worldsDir.resolve(worldName + ".json");
-            if (Files.exists(file)) {
-                String jsonData = Files.readString(file);
-                WorldData data = json.fromJson(WorldData.class, jsonData);
+            Path worldFile = worldsDir.resolve(worldName + "/world.json");
+            if (Files.exists(worldFile)) {
+                String jsonData = Files.readString(worldFile);
+                WorldData data = JsonConfig.getInstance().fromJson(WorldData.class, jsonData);
                 if (data != null) {
                     worldCache.put(worldName, data);
+                    GameLogger.info("Loaded world data: " + worldName +
+                        " Time: " + data.getWorldTimeInMinutes() +
+                        " Played: " + data.getPlayedTime());
                 }
                 return data;
             }
         } catch (IOException e) {
-            GameLogger.error("Error loading multiplayer world: " + worldName + " - " + e.getMessage());
+            GameLogger.error("Error loading world: " + worldName + " - " + e.getMessage());
         }
         return null;
     }
+
 
     @Override
     public void clearCache() {

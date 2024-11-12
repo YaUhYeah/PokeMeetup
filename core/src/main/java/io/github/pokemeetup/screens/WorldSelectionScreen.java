@@ -24,6 +24,7 @@ import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.storage.JsonConfig;
 
 import java.io.IOException;
 import java.text.SimpleDateFormat;
@@ -40,8 +41,7 @@ public class WorldSelectionScreen implements Screen {
     private static final float MIN_INFO_PANEL_WIDTH = 200f;
     private final CreatureCaptureGame game;
     private final Stage stage;
-    private Skin skin;
-    // UI Components
+    private final Skin skin;
     private Table mainTable;
     private ScrollPane worldListScroll;
     private Table worldListTable;
@@ -52,55 +52,35 @@ public class WorldSelectionScreen implements Screen {
     private TextButton createButton;
     private TextButton deleteButton;
     private TextButton backButton;
-    // Tabs and Sorting
     private ButtonGroup<TextButton> tabGroup;
     private String currentTab = "All";
     private ButtonGroup<TextButton> sortGroup;
     private String currentSort = "Name";
-    // Thumbnails
     private Map<String, Texture> worldThumbnails = new HashMap<>();
-    private Player thumbnailPlayer; // Player used for thumbnail rendering
-
     private float screenWidth;
     private float screenHeight;
-    private Table contentTable; // Add this field
-
-    // Username Input
-    private TextField usernameField;
-
-    // TextureAtlas for placeholder and error images
-    private final TextureAtlas atlas;
+    private Table contentTable;
     private TextureRegion placeholderRegion;
 
     public WorldSelectionScreen(CreatureCaptureGame game) {
         this.game = game;
         this.stage = new Stage(new ScreenViewport());
 
-        // Load the TextureAtlas
+        TextureAtlas atlas;
         try {
             atlas = new TextureAtlas(Gdx.files.internal("Skins/uiskin.atlas"));
-            GameLogger.info("TextureAtlas 'uiskin.atlas' loaded successfully.");
         } catch (Exception e) {
             GameLogger.error("Failed to load TextureAtlas 'uiskin.atlas': " + e.getMessage());
             throw new RuntimeException("TextureAtlas loading failed.", e);
         }
 
-        // Create the Skin with the atlas
         skin = new Skin(atlas);
-
-        // Optionally, add any custom drawables not present in the atlas
-        // createDrawable("custom-drawable", Color.CYAN, 10);
-
-        // Load the skin JSON
         try {
             skin.load(Gdx.files.internal("Skins/uiskin.json"));
-            GameLogger.info("Skin JSON 'uiskin.json' loaded successfully.");
         } catch (Exception e) {
             GameLogger.error("Failed to load skin JSON 'uiskin.json': " + e.getMessage());
             throw new RuntimeException("Skin JSON loading failed.", e);
         }
-
-        // Verify all required drawables are present
         List<String> requiredDrawables = Arrays.asList(
             "default-round", "default-round-down", "default-rect",
             "default-window", "default-scroll", "default-round-large",
@@ -113,14 +93,11 @@ public class WorldSelectionScreen implements Screen {
         for (String drawableName : requiredDrawables) {
             if (!skin.has(drawableName, Drawable.class)) {
                 GameLogger.error("Missing drawable in skin: " + drawableName);
-            } else {
-                GameLogger.info("Drawable present in skin: " + drawableName);
             }
         }
 
         Gdx.input.setInputProcessor(stage);
 
-        // Proceed with UI creation
         createUI();
         updateScreenSizes();
         refreshWorldList();
@@ -289,7 +266,6 @@ public class WorldSelectionScreen implements Screen {
     }
 
 
-
     private void resetWorldEntryStyles() {
         for (Actor actor : worldListTable.getChildren()) {
             if (actor instanceof Table) {
@@ -429,7 +405,6 @@ public class WorldSelectionScreen implements Screen {
         mainTable.row();
 
 
-        // Bottom buttons
         Table buttonTable = new Table();
 
         createButton = new TextButton("Create New World", skin);
@@ -440,7 +415,6 @@ public class WorldSelectionScreen implements Screen {
         playButton.setDisabled(true);
         deleteButton.setDisabled(true);
 
-        // Adjust button sizes and font scales
         float fontScale = 1.2f;
         createButton.getLabel().setFontScale(fontScale);
         playButton.getLabel().setFontScale(fontScale);
@@ -455,18 +429,13 @@ public class WorldSelectionScreen implements Screen {
 
         mainTable.add(buttonTable).colspan(4).pad(10);
 
-        // Add the main table to the stage
         stage.addActor(mainTable);
 
-        // Initialize placeholder and error regions from atlas
         placeholderRegion = TextureManager.ui.findRegion("placeholder-image");
-
-        // Add listeners after UI components are initialized
         addTabListeners();
         addSortListeners();
         addButtonListeners();
 
-        // Set initial selections
         tabGroup.getButtons().get(0).setChecked(true);
         sortGroup.getButtons().get(0).setChecked(true);
     }
@@ -634,30 +603,6 @@ public class WorldSelectionScreen implements Screen {
         }
     }
 
-    private void createDrawable(String name, Color color, int cornerRadius) {
-        Pixmap pixmap;
-        if (cornerRadius > 0) {
-            pixmap = new Pixmap(cornerRadius * 2 + 1, cornerRadius * 2 + 1, Pixmap.Format.RGBA8888);
-            pixmap.setColor(color);
-            pixmap.fillCircle(cornerRadius, cornerRadius, cornerRadius);
-            pixmap.fillRectangle(cornerRadius, 0, 1, cornerRadius * 2 + 1);
-            pixmap.fillRectangle(0, cornerRadius, cornerRadius * 2 + 1, 1);
-        } else {
-            pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
-            pixmap.setColor(color);
-            pixmap.fill();
-        }
-
-        Texture texture = new Texture(pixmap);
-        if (cornerRadius > 0) {
-            NinePatch patch = new NinePatch(new TextureRegion(texture), cornerRadius, cornerRadius, cornerRadius, cornerRadius);
-            skin.add(name, patch);
-        } else {
-            skin.add(name, new TextureRegion(texture));
-        }
-        pixmap.dispose();
-    }
-
     private long getSeedFromWorld(WorldData world) {
         if (world == null) return System.currentTimeMillis();
 
@@ -671,46 +616,184 @@ public class WorldSelectionScreen implements Screen {
         return config.getSeed();
     }
 
+    private void validateWorldConfig() {
+        if (selectedWorld == null) {
+            throw new IllegalStateException("No world selected");
+        }
+
+        // First check if world has valid config
+        if (selectedWorld.getConfig() == null) {
+            GameLogger.info("No config found for world: " + selectedWorld.getName());
+
+            try {
+                // Try to load existing config first
+                WorldData worldData = JsonConfig.loadWorldData(selectedWorld.getName());
+                if (worldData != null && worldData.getConfig() != null) {
+                    selectedWorld.setConfig(worldData.getConfig());
+                    GameLogger.info("Loaded existing config for world: " + selectedWorld.getName());
+                } else {
+                    // Create new config only if no existing config found
+                    WorldData.WorldConfig newConfig = new WorldData.WorldConfig(selectedWorld.getConfig() != null ?
+                        selectedWorld.getConfig().getSeed() : System.currentTimeMillis());
+                    newConfig.setTreeSpawnRate(0.15f);
+                    newConfig.setPokemonSpawnRate(0.05f);
+                    selectedWorld.setConfig(newConfig);
+                    GameLogger.info("Created new config for world: " + selectedWorld.getName());
+                }
+
+                // Save immediately to ensure config persistence
+                game.getWorldManager().saveWorld(selectedWorld);
+                selectedWorld.setDirty(true);
+
+            } catch (Exception e) {
+                GameLogger.error("Failed to validate/create world config: " + e.getMessage());
+                throw new RuntimeException("Failed to handle world config", e);
+            }
+        }
+    }
+
+    private World initializeWorldDirectly(WorldData worldData) throws IOException {
+        try {
+            if (worldData == null) {
+                throw new IOException("WorldData cannot be null");
+            }
+
+            // Validate config before initialization
+            if (worldData.getConfig() == null) {
+                validateWorldConfig();
+            }
+
+            WorldData.WorldConfig config = worldData.getConfig();
+            if (config == null) {
+                throw new IllegalStateException("World config is null after validation");
+            }
+
+            // Create BiomeManager with the world's seed
+            long seed = config.getSeed();
+            BiomeManager biomeManager = new BiomeManager(seed);
+            GameLogger.info("Created BiomeManager for world: " + worldData.getName() + " with seed: " + seed);
+
+            // Initialize World
+            World world = new World(
+                worldData.getName(),
+                World.WORLD_SIZE,
+                World.WORLD_SIZE,
+                seed,
+                GameClientSingleton.getSinglePlayerInstance(),
+                biomeManager
+            );
+
+            // Load initial chunks synchronously first
+            world.loadChunksAroundPositionSynchronously(
+                new Vector2(World.DEFAULT_X_POSITION, World.DEFAULT_Y_POSITION),
+                INITIAL_LOAD_RADIUS
+            );
+
+            // Get existing player data if available
+            String existingUsername = worldData.getPlayers().isEmpty() ?
+                DEFAULT_PLAYER_NAME :
+                worldData.getPlayers().keySet().iterator().next();
+            PlayerData existingPlayerData = worldData.getPlayerData(existingUsername);
+
+            // Only create a temporary player if no existing player data
+            if (existingPlayerData == null) {
+                GameLogger.info("No existing player data found, creating temporary player");
+                Player tempPlayer = new Player(
+                    World.DEFAULT_X_POSITION,
+                    World.DEFAULT_Y_POSITION,
+                    world,
+                    existingUsername
+                );
+                world.setPlayer(tempPlayer);
+            } else {
+                GameLogger.info("Found existing player data for: " + existingUsername);
+                // Create player with existing data
+                Player player = new Player(
+                    (int)existingPlayerData.getX(),
+                    (int)existingPlayerData.getY(),
+                    world,
+                    existingUsername
+                );
+                // Apply saved data including inventory
+                existingPlayerData.applyToPlayer(player);
+                world.setPlayer(player);
+                GameLogger.info("Restored player state including inventory with " +
+                    (existingPlayerData.getInventoryItems() != null ?
+                        existingPlayerData.getInventoryItems().size() : 0) + " items");
+            }
+
+            return world;
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to initialize world: " + e.getMessage());
+            throw new IOException("Failed to initialize world: " + e.getMessage(), e);
+        }
+    }
+
     public void loadSelectedWorld(String username) {
         try {
-            // Ensure config exists before loading
-            if (selectedWorld.getConfig() == null) {
-                long seed = System.currentTimeMillis();
-                WorldData.WorldConfig config = new WorldData.WorldConfig(seed);
-                config.setTreeSpawnRate(0.15f);
-                config.setPokemonSpawnRate(0.05f);
-                selectedWorld.setConfig(config);
-                game.getWorldManager().saveWorld(selectedWorld);
-                GameLogger.info("Created new config for world before loading: " + selectedWorld.getName());
-            }
+            GameLogger.info("Starting world load: " + selectedWorld.getName());
 
-            // Initialize World directly without using game.initializeWorld
-            World world = initializeWorldDirectly(selectedWorld);
+            // Validate world data and config
+            validateWorldConfig();
 
+            // Get or create player data before world initialization
             PlayerData playerData = selectedWorld.getPlayerData(username);
+            boolean isNewPlayer = false;
 
             if (playerData == null) {
+                isNewPlayer = true;
                 playerData = new PlayerData(username);
+                playerData.setX(World.DEFAULT_X_POSITION);
+                playerData.setY(World.DEFAULT_Y_POSITION);
                 selectedWorld.savePlayerData(username, playerData);
-                game.getWorldManager().saveWorld(selectedWorld);
+                GameLogger.info("Created new player data for: " + username);
+            } else {
+                GameLogger.info("Found existing player data for: " + username +
+                    " with " + playerData.getInventoryItems().size() + " inventory items");
             }
+
+            // Save the current state if needed
+            if (game.getCurrentWorld() != null) {
+                game.saveGame();
+            }
+
+            // Initialize World with existing config
+            World world = initializeWorldDirectly(selectedWorld);
+            Player player = world.getPlayer();
+
+            if (!isNewPlayer) {
+                GameLogger.info("Applying saved player data");
+                // Make sure to apply the data again to ensure nothing was lost in initialization
+                playerData.applyToPlayer(player);
+                // Verify inventory was properly restored
+                if (player.getInventory() != null) {
+                    GameLogger.info("Restored inventory with " +
+                        player.getInventory().getAllItems().size() + " items");
+                }
+            }
+
+            // Initialize game world state
             game.initializeWorld(world.getName(), false);
 
+            // Ensure resources are initialized
+            player.initializeResources();
+
+            // Create and transition to game screen
             AudioManager.getInstance().fadeOutMenuMusic();
             game.setScreen(new GameScreen(
                 game,
-                username, // Use the provided username
+                username,
                 GameClientSingleton.getSinglePlayerInstance(),
                 selectedWorld.getName()
             ));
             dispose();
+
         } catch (Exception e) {
-            showError("Failed to load world: " + e.getMessage());
             GameLogger.error("Failed to load world: " + e.getMessage());
+            showError("Failed to load world: " + e.getMessage());
         }
     }
-
-
     private void showDeleteConfirmDialog() {
         Dialog dialog = new Dialog("Delete World", skin) {
             @Override
@@ -804,6 +887,7 @@ public class WorldSelectionScreen implements Screen {
         infoPanel.add(usernameLabel).row();
     }
 
+    @SuppressWarnings("DefaultLocale")
     private String formatPlayedTime(long millis) {
         long seconds = millis / 1000;
         long minutes = seconds / 60;
@@ -820,15 +904,6 @@ public class WorldSelectionScreen implements Screen {
     private String formatDate(long timestamp) {
         if (timestamp == 0) return "Never";
         return new SimpleDateFormat("MMM d, yyyy HH:mm").format(new Date(timestamp));
-    }
-
-    private void generateMissingThumbnails() {
-        for (WorldData world : game.getWorldManager().getWorlds().values()) {
-            FileHandle thumbnailFile = Gdx.files.local("thumbnails/" + world.getName() + ".png");
-            if (!thumbnailFile.exists()) {
-                generateWorldThumbnail(world);
-            }
-        }
     }
 
 
@@ -908,9 +983,7 @@ public class WorldSelectionScreen implements Screen {
 
         } catch (Exception e) {
             GameLogger.error("Failed to generate thumbnail: " + e.getMessage());
-            e.printStackTrace();
         } finally {
-            // Clean up resources
             if (batch != null) batch.dispose();
             if (fbo != null) fbo.dispose();
             if (tempWorld != null) tempWorld.dispose();
@@ -920,8 +993,6 @@ public class WorldSelectionScreen implements Screen {
     private Pixmap flipPixmap(Pixmap src) {
         final int width = src.getWidth();
         final int height = src.getHeight();
-
-        // Create new Pixmap for flipped image
         Pixmap flipped = new Pixmap(width, height, src.getFormat());
 
         for (int x = 0; x < width; x++) {
@@ -930,8 +1001,6 @@ public class WorldSelectionScreen implements Screen {
                 flipped.drawPixel(x, height - y - 1, pixel);
             }
         }
-
-        // Don't dispose the source Pixmap here - let the caller handle it
         return flipped;
     }
 
@@ -945,7 +1014,6 @@ public class WorldSelectionScreen implements Screen {
     @Override
     public void show() {
         AudioManager.getInstance().playMenuMusic();
-        generateMissingThumbnails(); // Generate missing thumbnails
         Gdx.app.postRunnable(this::refreshWorldList);
     }
 
@@ -985,104 +1053,9 @@ public class WorldSelectionScreen implements Screen {
     public void dispose() {
         stage.dispose();
         skin.dispose();
-        // atlas.dispose(); // Removed to prevent disposing shared resources
         for (Texture texture : worldThumbnails.values()) {
             texture.dispose();
         }
     }
 
-    private World initializeWorldDirectly(WorldData worldData) throws IOException {
-        try {
-            // Ensure we have valid world data
-            if (worldData == null) {
-                throw new IOException("WorldData cannot be null");
-            }
-
-            // Get seed from config or create new config if needed
-            if (worldData.getConfig() == null) {
-                WorldData.WorldConfig config = new WorldData.WorldConfig(System.currentTimeMillis());
-                config.setTreeSpawnRate(0.15f);
-                config.setPokemonSpawnRate(0.05f);
-                worldData.setConfig(config);
-                GameLogger.info("Created new config for world: " + worldData.getName());
-            }
-
-            long seed = worldData.getConfig().getSeed();
-
-            // Create BiomeManager with the world's seed
-            BiomeManager biomeManager = new BiomeManager( seed);
-            GameLogger.info("Created BiomeManager with seed: " + seed);
-
-            // Initialize the World instance
-            World world = new World(
-                worldData.getName(),
-                World.WORLD_SIZE,
-                World.WORLD_SIZE,
-                seed,
-                GameClientSingleton.getSinglePlayerInstance(),
-                biomeManager
-            );
-            GameLogger.info("Created World instance: " + worldData.getName());
-
-            // Get existing player data or create new
-            String username = worldData.getPlayers().isEmpty() ?
-                DEFAULT_PLAYER_NAME :
-                worldData.getPlayers().keySet().iterator().next();
-
-            PlayerData existingPlayerData = worldData.getPlayerData(username);
-
-            // Only create new player data if none exists
-            Player player;
-            if (existingPlayerData != null) {
-                GameLogger.info("Found existing player data for: " + username);
-                // Create player with saved position
-                player = new Player(
-                    (int) existingPlayerData.getX(),
-                    (int) existingPlayerData.getY(),
-                    world,
-                    username
-                );
-                // Apply saved data
-                existingPlayerData.applyToPlayer(player);
-                GameLogger.info("Applied existing player data from save");
-            } else {
-                GameLogger.info("No existing player data found, creating new player: " + username);
-                // Create new player at default position
-                player = new Player(
-                    World.DEFAULT_X_POSITION,
-                    World.DEFAULT_Y_POSITION,
-                    world,
-                    username
-                );
-                // Create and save new player data
-                PlayerData newPlayerData = new PlayerData(username);
-                newPlayerData.updateFromPlayer(player);
-                worldData.savePlayerData(username, newPlayerData);
-            }
-
-            // Set player in world
-            world.setPlayer(player);
-
-            // Load initial chunks synchronously
-            world.loadChunksAroundPositionSynchronously(
-                new Vector2(player.getTileX(), player.getTileY()),
-                World.INITIAL_LOAD_RADIUS
-            );
-
-            GameLogger.info("World initialization complete with player at: " +
-                player.getTileX() + "," + player.getTileY());
-
-            return world;
-
-        } catch (Exception e) {
-            GameLogger.error("Failed to initialize world: " + e.getMessage());
-            throw new IOException("Failed to initialize world: " + e.getMessage(), e);
-        }
-    }
-
-    private interface ThumbnailGenerationCallback {
-        void onSuccess(Texture thumbnail);
-
-        void onFailure(Exception e);
-    }
 }

@@ -2,23 +2,28 @@ package io.github.pokemeetup.pokemon.data;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.files.FileHandle;
-import com.badlogic.gdx.utils.Json;
 import com.badlogic.gdx.utils.JsonReader;
 import com.badlogic.gdx.utils.JsonValue;
+import com.google.gson.Gson;
+import io.github.pokemeetup.FileSystemDelegate;
 import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.pokemon.attacks.Move;
+import io.github.pokemeetup.pokemon.attacks.MoveLoader;
 import io.github.pokemeetup.utils.GameLogger;
+import io.github.pokemeetup.utils.storage.GameFileSystem;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.io.IOException;
+import java.util.*;
 
 public class PokemonDatabase {
-    private static final String POKEMON_DATA_FILE = "data/pokemon.json";
+    private static final String POKEMON_DATA_FILE = "Data/pokemon.json";  // Capital D
+    private static final String MOVE_DATA_FILE = "Data/moves.json";      // Capital D
     private static final Map<String, PokemonTemplate> pokemonTemplates = new HashMap<>();
     private static final Map<String, BaseStats> pokemonStats = new HashMap<>();
     private static boolean isInitialized = false;
+
+    // Map to store all moves loaded from moves.json
+    private static Map<String, Move> allMoves = new HashMap<>();
 
     public static PokemonTemplate getTemplate(String name) {
         if (!isInitialized) {
@@ -27,76 +32,128 @@ public class PokemonDatabase {
         return pokemonTemplates.get(name);
     }
 
-    public static void initialize() {
-        if (isInitialized) return;
 
-        try {
-            FileHandle file = Gdx.files.internal(POKEMON_DATA_FILE);
-            if (!file.exists()) {
-                GameLogger.error("Pokemon data file not found: " + POKEMON_DATA_FILE);
+        public static void initialize() {
+            if (isInitialized) {
                 return;
             }
 
-            JsonReader reader = new JsonReader();
-            JsonValue root = reader.parse(file);
-            JsonValue pokemonArray = root.get("pokemon");
+            try {
+                GameLogger.info("Initializing Pokemon Database...");
+                FileSystemDelegate delegate = GameFileSystem.getInstance().getDelegate();
 
-            if (pokemonArray == null) {
-                GameLogger.error("Invalid pokemon.json format - missing 'pokemon' array");
-                return;
-            }
-
-            for (JsonValue pokemonValue = pokemonArray.child; pokemonValue != null; pokemonValue = pokemonValue.next) {
+                // First load moves
                 try {
-                    String name = pokemonValue.getString("name");
-                    if (name == null || name.isEmpty()) {
-                        GameLogger.error("Pokemon entry missing name");
-                        continue;
+                    String movesJson = delegate.readString(MOVE_DATA_FILE);
+                    GameLogger.info("Loaded moves.json content (length: " + movesJson.length() + ")");
+
+                    // Load moves using updated MoveLoader
+                    allMoves.putAll(MoveLoader.loadMovesFromJson(movesJson));
+                    GameLogger.info("Successfully loaded " + allMoves.size() + " moves");
+
+                    // Log first few moves for verification
+                    int count = 0;
+                    for (Map.Entry<String, Move> entry : allMoves.entrySet()) {
+                        if (count++ < 3) {
+                            GameLogger.info("Loaded move: " + entry.getKey() + " (" +
+                                entry.getValue().getType() + ", Power: " +
+                                entry.getValue().getPower() + ")");
+                        }
+                    }
+                } catch (Exception e) {
+                    GameLogger.error("Failed to load moves: " + e.getMessage());
+                    throw e;
+                }
+
+                // Then load Pokemon data
+                try {
+                    String pokemonJson = delegate.readString(POKEMON_DATA_FILE);
+                    GameLogger.info("Loaded pokemon.json content (length: " + pokemonJson.length() + ")");
+
+                    JsonReader reader = new JsonReader();
+                    JsonValue root = reader.parse(pokemonJson);
+                    JsonValue pokemonArray = root.get("pokemon");
+
+                    if (pokemonArray == null) {
+                        throw new RuntimeException("Invalid pokemon.json format - missing 'pokemon' array");
                     }
 
-                    Pokemon.PokemonType primaryType = Pokemon.PokemonType.valueOf(pokemonValue.getString("primaryType"));
-                    Pokemon.PokemonType secondaryType = getSecondaryType(pokemonValue);
+                    int pokemonCount = 0;
+                    for (JsonValue pokemonValue = pokemonArray.child;
+                         pokemonValue != null;
+                         pokemonValue = pokemonValue.next) {
+                        try {
+                            String name = pokemonValue.getString("name");
+                            if (name == null || name.isEmpty()) {
+                                continue;
+                            }
 
-                    List<MoveTemplate> moves = loadMoves(pokemonValue.get("moves"));
+                            Pokemon.PokemonType primaryType = Pokemon.PokemonType.valueOf(
+                                pokemonValue.getString("primaryType").toUpperCase());
+                            Pokemon.PokemonType secondaryType = getSecondaryType(pokemonValue);
+                            List<MoveEntry> moves = loadPokemonMoves(pokemonValue.get("moves"));
 
-                    BaseStats stats = new BaseStats(
-                        name,
-                        pokemonValue.getInt("baseHp"),
-                        pokemonValue.getInt("baseAttack"),
-                        pokemonValue.getInt("baseDefense"),
-                        pokemonValue.getInt("baseSpAtk"),
-                        pokemonValue.getInt("baseSpDef"),
-                        pokemonValue.getInt("baseSpeed"),
-                        primaryType,
-                        secondaryType,
-                        moves
-                    );
-                    pokemonStats.put(name, stats);
+                            BaseStats stats = new BaseStats(
+                                name,
+                                pokemonValue.getInt("baseHp"),
+                                pokemonValue.getInt("baseAttack"),
+                                pokemonValue.getInt("baseDefense"),
+                                pokemonValue.getInt("baseSpAtk"),
+                                pokemonValue.getInt("baseSpDef"),
+                                pokemonValue.getInt("baseSpeed"),
+                                primaryType,
+                                secondaryType,
+                                moves
+                            );
+                            pokemonStats.put(name, stats);
 
-                    // Create and populate PokemonTemplate
-                    PokemonTemplate template = new PokemonTemplate();
-                    template.name = name;
-                    template.primaryType = primaryType;
-                    template.secondaryType = secondaryType;
-                    template.baseStats = stats;
-                    template.moves = moves;
-                    // Optionally set width and height if available
-                    template.width = pokemonValue.getFloat("width", 1.0f); // Default to 1.0f if not specified
-                    template.height = pokemonValue.getFloat("height", 1.0f);
+                            // Create template
+                            PokemonTemplate template = new PokemonTemplate();
+                            template.name = name;
+                            template.primaryType = primaryType;
+                            template.secondaryType = secondaryType;
+                            template.baseStats = stats;
+                            template.moves = moves;
+                            template.width = pokemonValue.getFloat("width", 1.0f);
+                            template.height = pokemonValue.getFloat("height", 1.0f);
 
-                    pokemonTemplates.put(name, template);
+                            pokemonTemplates.put(name, template);
+                            pokemonCount++;
 
-                    GameLogger.info("Loaded Pokemon: " + name);
+                            // Log first few Pokemon for verification
+                            if (pokemonCount <= 3) {
+                                GameLogger.info("Loaded Pokemon: " + name + " (" +
+                                    primaryType + (secondaryType != null ? "/" + secondaryType : "") +
+                                    ") with " + moves.size() + " moves");
+                            }
+
+                        } catch (Exception e) {
+                            GameLogger.error("Error loading Pokemon entry: " + e.getMessage());
+                        }
+                    }
+
+                    GameLogger.info("Successfully loaded " + pokemonCount + " Pokemon");
+                    isInitialized = true;
+
                 } catch (Exception e) {
-                    GameLogger.error("Error loading Pokemon entry: " + e.getMessage());
+                    GameLogger.error("Failed to load Pokemon data: " + e.getMessage());
+                    throw e;
                 }
+
+            } catch (Exception e) {
+                GameLogger.error("Pokemon database initialization failed: " + e.getMessage());
+                e.printStackTrace();
+                throw new RuntimeException("Failed to initialize Pokemon database", e);
             }
-
-            isInitialized = true;
-            GameLogger.info("Pokemon database initialized with " + pokemonStats.size() + " Pokemon");
-
-        } catch (Exception e) {
-            GameLogger.error("Error loading Pokemon database: " + e.getMessage());
+        }
+    private static void loadAllMoves() {
+        try {
+            // Assuming moves.json is located in the assets/data directory
+            String movesJsonPath = Gdx.files.internal("Data/moves.json").file().getAbsolutePath();
+            allMoves = MoveLoader.loadMoves(movesJsonPath);
+            GameLogger.info("Loaded " + allMoves.size() + " moves from moves.json");
+        } catch (IOException e) {
+            GameLogger.error("Error loading moves: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -126,20 +183,14 @@ public class PokemonDatabase {
         return stats;
     }
 
-    private static List<MoveTemplate> loadMoves(JsonValue movesArray) {
-        List<MoveTemplate> moves = new ArrayList<>();
+    private static List<MoveEntry> loadPokemonMoves(JsonValue movesArray) {
+        List<MoveEntry> moves = new ArrayList<>();
         if (movesArray != null && movesArray.isArray()) {
             for (JsonValue moveValue = movesArray.child; moveValue != null; moveValue = moveValue.next) {
                 try {
-                    moves.add(new MoveTemplate(
-                        moveValue.getString("name"),
-                        Pokemon.PokemonType.valueOf(moveValue.getString("type")),
-                        moveValue.getInt("power"),
-                        moveValue.getInt("accuracy"),
-                        moveValue.getInt("pp"),
-                        moveValue.getInt("maxPp"),
-                        moveValue.getBoolean("isSpecial")
-                    ));
+                    String moveName = moveValue.getString("name");
+                    int level = moveValue.getInt("level");
+                    moves.add(new MoveEntry(moveName, level));
                 } catch (Exception e) {
                     GameLogger.error("Error loading move: " + e.getMessage());
                 }
@@ -154,7 +205,7 @@ public class PokemonDatabase {
             if (pokemonValue.has("secondaryType")) {
                 String secondaryType = pokemonValue.getString("secondaryType", "").trim();
                 if (!secondaryType.isEmpty()) {
-                    return Pokemon.PokemonType.valueOf(secondaryType);
+                    return Pokemon.PokemonType.valueOf(secondaryType.toUpperCase());
                 }
             }
         } catch (Exception e) {
@@ -162,8 +213,6 @@ public class PokemonDatabase {
         }
         return null;
     }
-
-
     public static Pokemon createPokemon(String name, int level) {
         if (!isInitialized) {
             initialize();
@@ -189,21 +238,8 @@ public class PokemonDatabase {
 
             builder.withStats(hp, attack, defense, spAtk, spDef, speed);
 
-            // Add initial moves (up to 4)
-            List<Move> startingMoves = new ArrayList<>();
-            int moveCount = Math.min(template.moves.size(), 4);
-            for (int i = 0; i < moveCount; i++) {
-                MoveTemplate moveTemplate = template.moves.get(i);
-                startingMoves.add(new Move(
-                    moveTemplate.name,
-                    moveTemplate.type,
-                    moveTemplate.power,
-                    moveTemplate.accuracy,
-                    moveTemplate.pp,
-                    moveTemplate.isSpecial,
-                    ""  // Description can be added if needed
-                ));
-            }
+            // Assign moves based on level
+            List<Move> startingMoves = getMovesForLevel(template.moves, level);
             builder.withMoves(startingMoves);
 
             return builder.build();
@@ -212,6 +248,84 @@ public class PokemonDatabase {
             GameLogger.error("Error creating Pokemon: " + e.getMessage());
             return null;
         }
+    }
+    public static List<Move> getMovesForLevel(List<MoveEntry> moveEntries, int level) {
+        List<Move> moves = new ArrayList<>();
+
+        try {
+            // Create case-insensitive map of moves
+            Map<String, Move> moveMap = new HashMap<>();
+            for (Map.Entry<String, Move> entry : allMoves.entrySet()) {
+                moveMap.put(entry.getKey().toLowerCase(), entry.getValue());
+            }
+
+            // Filter moves learned at or before given level
+            List<MoveEntry> learnedMoves = new ArrayList<>();
+            for (MoveEntry entry : moveEntries) {
+                if (entry.level <= level) {
+                    learnedMoves.add(entry);
+                }
+            }
+
+            // Sort by level ascending
+            learnedMoves.sort(Comparator.comparingInt(e -> e.level));
+
+            // Get most recent 4 moves
+            int movesToAdd = Math.min(learnedMoves.size(), 4);
+            for (int i = learnedMoves.size() - movesToAdd; i < learnedMoves.size(); i++) {
+                MoveEntry moveEntry = learnedMoves.get(i);
+                String moveName = moveEntry.name.toLowerCase(); // Convert to lowercase for comparison
+
+                Move move = moveMap.get(moveName);
+                if (move != null) {
+                    moves.add(cloneMove(move));
+                    GameLogger.info("Added move: " + moveEntry.name + " (Level " + moveEntry.level + ")");
+                } else {
+                    // Log available moves when not found
+                    GameLogger.error("Move not found: " + moveEntry.name);
+                    GameLogger.error("Available moves: " + String.join(", ", moveMap.keySet()));
+                }
+            }
+
+        } catch (Exception e) {
+            GameLogger.error("Error loading moves: " + e.getMessage());
+            e.printStackTrace();
+        }
+
+        return moves;
+    }
+    public static Move cloneMove(Move move) {
+        // Clone the MoveEffect if present
+        Move.MoveEffect clonedEffect = null;
+        if (move.getEffect() != null) {
+            clonedEffect = cloneMoveEffect(move.getEffect());
+        }
+
+        return new Move.Builder(move.getName(), move.getType())
+            .power(move.getPower())
+            .accuracy(move.getAccuracy())
+            .pp(move.getPp())
+            .special(move.isSpecial())
+            .description(move.getDescription())
+            .effect(clonedEffect)
+            .build();
+    }
+
+    private static Move.MoveEffect cloneMoveEffect(Move.MoveEffect effect) {
+        Move.MoveEffect clonedEffect = new Move.MoveEffect();
+        clonedEffect.setEffectType(effect.getEffectType());
+        clonedEffect.setChance(effect.getChance());
+        clonedEffect.setAnimation(effect.getAnimation());
+        clonedEffect.setSound(effect.getSound());
+        clonedEffect.setStatusEffect(effect.getStatusEffect());
+        clonedEffect.setDuration(effect.getDuration());
+        clonedEffect.setStatModifiers(new HashMap<>(effect.getStatModifiers()));
+        return clonedEffect;
+    }
+
+
+    public static Move getMoveByName(String moveName) {
+        return allMoves.get(moveName);
     }
 
     private static int calculateStat(int base, int level, boolean isHp) {
@@ -225,11 +339,21 @@ public class PokemonDatabase {
         }
     }
 
+    public static class MoveEntry {
+        public final String name;
+        public final int level;
+
+        public MoveEntry(String name, int level) {
+            this.name = name;
+            this.level = level;
+        }
+    }
+
     public static class PokemonTemplate {
         public Pokemon.PokemonType primaryType;
         public Pokemon.PokemonType secondaryType;
         public BaseStats baseStats;
-        public List<MoveTemplate> moves;
+        public List<MoveEntry> moves; // List of moves with levels
         String name;
         float width;
         float height;
@@ -245,12 +369,12 @@ public class PokemonDatabase {
         public final int baseSpeed;
         public final Pokemon.PokemonType primaryType;
         public final Pokemon.PokemonType secondaryType; // Can be null
-        public final List<MoveTemplate> moves;
+        public final List<MoveEntry> moves; // List of moves with levels
 
         public BaseStats(String name, int baseHp, int baseAttack, int baseDefense,
                          int baseSpAtk, int baseSpDef, int baseSpeed,
                          Pokemon.PokemonType primaryType, Pokemon.PokemonType secondaryType,
-                         List<MoveTemplate> moves) {
+                         List<MoveEntry> moves) {
             this.name = name;
             this.baseHp = baseHp;
             this.baseAttack = baseAttack;
@@ -264,24 +388,4 @@ public class PokemonDatabase {
         }
     }
 
-    public static class MoveTemplate {
-        public final String name;
-        public final Pokemon.PokemonType type;
-        public final int power;
-        public final int accuracy;
-        public final int pp;
-        public final int maxPp;
-        public final boolean isSpecial;
-
-        public MoveTemplate(String name, Pokemon.PokemonType type, int power, int accuracy,
-                            int pp, int maxPp, boolean isSpecial) {
-            this.name = name;
-            this.type = type;
-            this.power = power;
-            this.accuracy = accuracy;
-            this.pp = pp;
-            this.maxPp = maxPp;
-            this.isSpecial = isSpecial;
-        }
-    }
 }

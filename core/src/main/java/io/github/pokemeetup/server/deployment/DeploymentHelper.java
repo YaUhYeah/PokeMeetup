@@ -2,6 +2,7 @@ package io.github.pokemeetup.server.deployment;
 
 import com.badlogic.gdx.utils.Json;
 import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
+import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -9,121 +10,235 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
+import java.util.*;
+
+import static io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType.*;
 
 public class DeploymentHelper {
     public static void createServerDeployment(Path deploymentDir) throws IOException {
+        System.out.println("Creating server deployment in: " + deploymentDir.toAbsolutePath());
+
         // Create directory structure
         createDirectory(deploymentDir);
         createDirectory(Paths.get(deploymentDir.toString(), "config"));
         createDirectory(Paths.get(deploymentDir.toString(), "plugins"));
         createDirectory(Paths.get(deploymentDir.toString(), "worlds"));
         createDirectory(Paths.get(deploymentDir.toString(), "logs"));
+        createDirectory(Paths.get(deploymentDir.toString(), "server/data"));
+       // Check if we're running from JAR or development environment
+        Path serverJar;
+        if (isRunningFromJar()) {
+            // When running from JAR, use the current JAR
+            serverJar = getCurrentJarPath();
+            System.out.println("Running from JAR: " + serverJar);
+        } else {
+            // In development, look for the JAR in build directory
+            serverJar = Paths.get("server.jar");
+            System.out.println("Running in development mode, looking for: " + serverJar);
+        }
 
-        // Copy server jar
-        Path serverJar = Paths.get("build/libs/pokemon-meetup-server.jar");
-        Files.copy(serverJar, Paths.get(deploymentDir.toString(), "server.jar"));
+        if (Files.exists(serverJar)) {
+            Files.copy(serverJar, Paths.get(deploymentDir.toString(), "server.jar"));
+            System.out.println("Copied server JAR successfully");
+        } else {
+            System.out.println("Warning: Server JAR not found at: " + serverJar);
+            // Continue anyway as we might be in development mode
+        }
+
+        // Create configurations
+        createDefaultConfig(deploymentDir);
+        createBiomesConfig(deploymentDir);
 
         // Create start scripts
-        createStartScript(deploymentDir, "start.bat", "@echo off\njava -jar server.jar");
-        createStartScript(deploymentDir, "start.sh", "#!/bin/bash\njava -jar server.jar");
+        createStartScripts(deploymentDir);
 
         // Make shell script executable on Unix
-        Paths.get(deploymentDir.toString(), "start.sh").toFile().setExecutable(true);
-
-        // Create default config
-        createDefaultConfig(deploymentDir);
+        Path startSh = Paths.get(deploymentDir.toString(), "start.sh");
+        if (Files.exists(startSh)) {
+            startSh.toFile().setExecutable(true);
+        }
 
         // Create README
         createReadme(deploymentDir);
+
+        System.out.println("Server deployment completed successfully");
+    }
+
+    private static boolean isRunningFromJar() {
+        String className = DeploymentHelper.class.getName().replace('.', '/');
+        String classJar = DeploymentHelper.class.getResource("/" + className + ".class").toString();
+        return classJar.startsWith("jar:");
+    }
+
+    private static Path getCurrentJarPath() {
+        try {
+            return Paths.get(DeploymentHelper.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        } catch (Exception e) {
+            return Paths.get("server.jar");
+        }
     }
 
     private static void createDirectory(Path dir) throws IOException {
         if (!Files.exists(dir)) {
             Files.createDirectories(dir);
+            System.out.println("Created directory: " + dir);
         }
     }
 
-    private static void createStartScript(Path deploymentDir, String filename, String baseCommand) throws IOException {
-        Path scriptPath = Paths.get(deploymentDir.toString(), filename);
-        StringBuilder script = new StringBuilder();
-        boolean isWindows = filename.endsWith(".bat");
+    private static void createBiomesConfig(Path deploymentDir) throws IOException {
+        // Create biomes configuration
+        List<Map<String, Object>> biomes = new ArrayList<>();
 
-        if (isWindows) {
-            script.append("@echo off\n")
-                .append("setlocal enabledelayedexpansion\n\n")
-                .append(":: Set Java path if needed\n")
-                .append("set JAVA_HOME=\n")
-                .append("if defined JAVA_HOME (\n")
-                .append("    set JAVA=\"%JAVA_HOME%/bin/java\"\n")
-                .append(") else (\n")
-                .append("    set JAVA=java\n")
-                .append(")\n\n")
-                .append(":: Set memory options\n")
-                .append("set MIN_MEMORY=1G\n")
-                .append("set MAX_MEMORY=4G\n\n")
-                .append(":: Set Java options\n")
-                .append("set JAVA_OPTS=-Xms%MIN_MEMORY% -Xmx%MAX_MEMORY% ")
-                .append("-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 ")
-                .append("-XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC ")
-                .append("-XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 ")
-                .append("-XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M ")
-                .append("-XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 ")
-                .append("-XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 ")
-                .append("-XX:G1MixedGCLiveThresholdPercent=90 ")
-                .append("-XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 ")
-                .append("-XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 ")
-                .append("-Dfile.encoding=UTF-8\n\n")
-                .append(":: Start server\n")
-                .append("echo Starting Pokemon Meetup Server...\n")
-                .append("%JAVA% %JAVA_OPTS% -jar server.jar\n")
-                .append("pause\n");
-        } else {
-            script.append("#!/bin/bash\n\n")
-                .append("# Set Java path if needed\n")
-                .append("if [ -n \"$JAVA_HOME\" ]; then\n")
-                .append("    JAVA=\"$JAVA_HOME/bin/java\"\n")
-                .append("else\n")
-                .append("    JAVA=\"java\"\n")
-                .append("fi\n\n")
-                .append("# Set memory options\n")
-                .append("MIN_MEMORY=\"1G\"\n")
-                .append("MAX_MEMORY=\"4G\"\n\n")
-                .append("# Set Java options\n")
-                .append("JAVA_OPTS=\"-Xms$MIN_MEMORY -Xmx$MAX_MEMORY \\\n")
-                .append("    -XX:+UseG1GC \\\n")
-                .append("    -XX:+ParallelRefProcEnabled \\\n")
-                .append("    -XX:MaxGCPauseMillis=200 \\\n")
-                .append("    -XX:+UnlockExperimentalVMOptions \\\n")
-                .append("    -XX:+DisableExplicitGC \\\n")
-                .append("    -XX:+AlwaysPreTouch \\\n")
-                .append("    -XX:G1NewSizePercent=30 \\\n")
-                .append("    -XX:G1MaxNewSizePercent=40 \\\n")
-                .append("    -XX:G1HeapRegionSize=8M \\\n")
-                .append("    -XX:G1ReservePercent=20 \\\n")
-                .append("    -XX:G1HeapWastePercent=5 \\\n")
-                .append("    -XX:G1MixedGCCountTarget=4 \\\n")
-                .append("    -XX:InitiatingHeapOccupancyPercent=15 \\\n")
-                .append("    -XX:G1MixedGCLiveThresholdPercent=90 \\\n")
-                .append("    -XX:G1RSetUpdatingPauseTimePercent=5 \\\n")
-                .append("    -XX:SurvivorRatio=32 \\\n")
-                .append("    -XX:+PerfDisableSharedMem \\\n")
-                .append("    -XX:MaxTenuringThreshold=1 \\\n")
-                .append("    -Dfile.encoding=UTF-8\"\n\n")
-                .append("# Start server\n")
-                .append("echo \"Starting Pokemon Meetup Server...\"\n")
-                .append("$JAVA $JAVA_OPTS -jar server.jar \"$@\" >> logs/latest.log 2>&1 &\n\n")
-                .append("echo $! > server.pid\n")
-                .append("tail -f logs/latest.log\n");
+        // Define each biome
+        for (BiomeType type : BiomeType.values()) {
+            Map<String, Object> biome = new HashMap<>();
+            biome.put("name", type.name().toLowerCase());
+            biome.put("type", type.name());
+            biome.put("allowedTileTypes", Arrays.asList(1, 2, 3));
+
+            // Create tile distribution
+            Map<String, Double> distribution = new HashMap<>();
+            switch (type) {
+                case DESERT:
+                    distribution.put("1", 85.0);
+                    distribution.put("2", 10.0);
+                    distribution.put("3", 5.0);
+                    break;
+                case FOREST:
+                    distribution.put("1", 60.0);
+                    distribution.put("2", 30.0);
+                    distribution.put("3", 10.0);
+                    break;
+                case SNOW:
+                    distribution.put("1", 75.0);
+                    distribution.put("2", 20.0);
+                    distribution.put("3", 5.0);
+                    break;
+                case HAUNTED:
+                    distribution.put("1", 65.0);
+                    distribution.put("2", 25.0);
+                    distribution.put("3", 10.0);
+                    break;
+                default:
+                    distribution.put("1", 70.0);
+                    distribution.put("2", 20.0);
+                    distribution.put("3", 10.0);
+                    break;
+            }
+            biome.put("tileDistribution", distribution);
+
+            // Add spawn configuration
+            List<String> spawnableObjects = new ArrayList<>();
+            Map<String, Double> spawnChances = new HashMap<>();
+
+            switch (type) {
+                case FOREST:
+                    spawnableObjects.add("TREE");
+                    spawnChances.put("TREE", 0.7);
+                    break;
+                case DESERT:
+                    spawnableObjects.add("CACTUS");
+                    spawnChances.put("CACTUS", 0.4);
+                    break;
+                case SNOW:
+                    spawnableObjects.add("SNOW_TREE");
+                    spawnChances.put("SNOW_TREE", 0.5);
+                    break;
+                case HAUNTED:
+                    spawnableObjects.add("HAUNTED_TREE");
+                    spawnChances.put("HAUNTED_TREE", 0.6);
+                    break;
+            }
+
+            biome.put("spawnableObjects", spawnableObjects);
+            biome.put("spawnChances", spawnChances);
+
+            biomes.add(biome);
+        }
+        // Write biomes configuration to both server data and config directories
+        Json json = new Json();
+        String biomesJson = json.prettyPrint(biomes);
+
+        // Save to server/data directory
+        Path serverDataPath = Paths.get(deploymentDir.toString(), "config/biomes.json");
+        Files.write(serverDataPath, biomesJson.getBytes(StandardCharsets.UTF_8));
+
+        // Also save to config directory for reference
+        Path configPath = Paths.get(deploymentDir.toString(), "config/biomes.json");
+        Files.write(configPath, biomesJson.getBytes(StandardCharsets.UTF_8));
+
+    }
+
+
+
+    // Helper method to create both start scripts
+    private static void createStartScripts(Path deploymentDir) throws IOException {
+        // Create Windows batch file
+        try {
+            createWindowsScript(deploymentDir);
+            System.out.println("Created start.bat successfully");
+        } catch (IOException e) {
+            throw new IOException("Failed to create start.bat: " + e.getMessage());
         }
 
-        // Write script file
-        Files.write(scriptPath, Arrays.asList(script.toString().split("\n")), StandardCharsets.UTF_8,
-            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        // Create Unix shell script
+        try {
+            createUnixScript(deploymentDir);
+            System.out.println("Created start.sh successfully");
+        } catch (IOException e) {
+            throw new IOException("Failed to create start.sh: " + e.getMessage());
+        }
+    }
 
-        // Make shell script executable on Unix systems
-        if (!isWindows) {
-            scriptPath.toFile().setExecutable(true, false);
+    // Create Windows batch script
+    private static void createWindowsScript(Path deploymentDir) throws IOException {
+        String batScript =
+            "@echo off\n" +
+                "setlocal enabledelayedexpansion\n\n" +
+                ":: Set Java path if needed\n" +
+                "set JAVA_HOME=\n" +
+                "if defined JAVA_HOME (\n" +
+                "    set JAVA=\"%JAVA_HOME%/bin/java\"\n" +
+                ") else (\n" +
+                "    set JAVA=java\n" +
+                ")\n\n" +
+                ":: Set memory options\n" +
+                "set MIN_MEMORY=1G\n" +
+                "set MAX_MEMORY=4G\n\n" +
+                ":: Start server\n" +
+                "echo Starting Pokemon Meetup Server...\n" +
+                "%JAVA% -Xms%MIN_MEMORY% -Xmx%MAX_MEMORY% -jar server.jar\n" +
+                "pause\n";
+
+        Path batPath = Paths.get(deploymentDir.toString(), "start.bat");
+        Files.write(batPath, batScript.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // Create Unix shell script
+    private static void createUnixScript(Path deploymentDir) throws IOException {
+        String shScript =
+            "#!/bin/bash\n\n" +
+                "# Set Java path if needed\n" +
+                "if [ -n \"$JAVA_HOME\" ]; then\n" +
+                "    JAVA=\"$JAVA_HOME/bin/java\"\n" +
+                "else\n" +
+                "    JAVA=\"java\"\n" +
+                "fi\n\n" +
+                "# Set memory options\n" +
+                "MIN_MEMORY=\"1G\"\n" +
+                "MAX_MEMORY=\"4G\"\n\n" +
+                "# Start server\n" +
+                "echo \"Starting Pokemon Meetup Server...\"\n" +
+                "$JAVA -Xms$MIN_MEMORY -Xmx$MAX_MEMORY -jar server.jar\n";
+
+        Path shPath = Paths.get(deploymentDir.toString(), "start.sh");
+        Files.write(shPath, shScript.getBytes(StandardCharsets.UTF_8));
+
+        // Make shell script executable
+        try {
+            shPath.toFile().setExecutable(true);
+        } catch (SecurityException e) {
+            System.out.println("Warning: Could not make start.sh executable: " + e.getMessage());
         }
     }
 
@@ -166,4 +281,5 @@ public class DeploymentHelper {
         Path readmeFile = Paths.get(deploymentDir.toString(), "README.md");
         Files.write(readmeFile, Arrays.asList(readme.split("\n")), StandardCharsets.UTF_8);
     }
+
 }

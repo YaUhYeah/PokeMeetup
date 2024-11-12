@@ -13,7 +13,7 @@ public class NetworkedWorldObject {
     protected ObjectType type;
     protected boolean isDirty;
     protected Map<String, Object> additionalData;
-    protected String textureName; // Serializable identifier
+    protected String textureName;
 
     public NetworkedWorldObject() {
         this.id = UUID.randomUUID().toString();
@@ -38,23 +38,6 @@ public class NetworkedWorldObject {
         this.additionalData.putAll(update.data);
         isDirty = false;
     }
-
-    public static NetworkedWorldObject createFromUpdate(NetworkProtocol.WorldObjectUpdate update) {
-        NetworkedWorldObject obj = null;
-
-        if (update.objectType == ObjectType.TREE) {
-            obj = new NetworkedTree(update.x, update.y, update.textureName);
-        } else if (update.objectType == ObjectType.POKEBALL) {
-            obj = new NetworkedPokeball(update.x, update.y, update.textureName);
-        }
-        // Add other object types as needed
-
-        if (obj != null) {
-            obj.updateFromNetwork(update);
-        }
-        return obj;
-    }
-
 
     public String getId() {
         return id;
@@ -98,18 +81,6 @@ public class NetworkedWorldObject {
 
     public Map<String, Object> getAdditionalData() {
         return additionalData;
-    }
-
-    public void setAdditionalData(Map<String, Object> additionalData) {
-        this.additionalData = additionalData;
-    }
-
-    public String getTextureName() {
-        return textureName;
-    }
-
-    public void setTextureName(String textureName) {
-        this.textureName = textureName;
     }
 
     public enum ObjectType {

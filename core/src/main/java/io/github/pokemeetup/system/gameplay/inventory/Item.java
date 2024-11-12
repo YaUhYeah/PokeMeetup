@@ -2,10 +2,20 @@ package io.github.pokemeetup.system.gameplay.inventory;
 
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import io.github.pokemeetup.utils.GameLogger;
+import io.github.pokemeetup.utils.TextureManager;
 
 import java.util.UUID;
 
-public class Item {
+public class Item { public static boolean verifyTexture(String itemId) {
+    String textureKey = itemId.toLowerCase() + "_item";
+    TextureRegion texture = TextureManager.items.findRegion(textureKey);
+    if (texture == null) {
+        GameLogger.error("Missing texture for item: " + textureKey);
+        return false;
+    }
+    return true;
+}
+
     public static final int MAX_STACK_SIZE = 64;
     private UUID uuid; // Unique identifier for each Item instance
     private String name;
@@ -25,7 +35,7 @@ public class Item {
             // Log error but don't crash
             GameLogger.error("Failed to find template for item: " + name);
             this.iconName = "missing";
-            this.icon = ItemManager.getTexture("missing");
+            this.icon = TextureManager.items.findRegion("stick_item");
         }
         this.count = 1;
     }
@@ -59,6 +69,14 @@ public class Item {
         this.uuid = other.uuid; // Preserve UUID
     }
 
+    public void decrementCount(int amount) {
+        if (amount < 0) {
+            GameLogger.error("Attempted to decrement by negative amount: " + amount);
+            return;
+        }
+        this.count = Math.max(0, this.count - amount);
+    }
+
     public UUID getUuid() {
         return uuid;
     }
@@ -76,11 +94,7 @@ public class Item {
         this.count = Math.min(count, MAX_STACK_SIZE);
     }
 
-    /**
-     * Checks if the item stack is empty.
-     *
-     * @return True if count is 0 or less, false otherwise.
-     */
+
     public boolean isEmpty() {
         return this.count <= 0;
     }
@@ -106,9 +120,24 @@ public class Item {
         return iconName;
     }
 
+    public void setIcon(TextureRegion icon) {
+        if (icon == null) {
+            GameLogger.error("Attempted to set null icon for item: " + name);
+            return;
+        }
+        this.icon = icon;
+        GameLogger.info("Set icon for item: " + name);
+    }
+
     public TextureRegion getIcon() {
         if (icon == null) {
-            icon = ItemManager.getTexture(iconName);
+            // Try to load from TextureManager
+            icon = TextureManager.items.findRegion(name.toLowerCase() + "_item");
+            if (icon != null) {
+                GameLogger.info("Loaded icon for " + name + " from TextureManager");
+            } else {
+                GameLogger.error("Could not find icon for " + name);
+            }
         }
         return icon;
     }

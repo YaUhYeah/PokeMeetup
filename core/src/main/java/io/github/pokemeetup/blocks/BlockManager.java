@@ -9,7 +9,7 @@ import io.github.pokemeetup.system.gameplay.overworld.Chunk;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.storage.BlockSaveData;
+import io.github.pokemeetup.system.data.BlockSaveData;
 
 import java.util.List;
 import java.util.Map;

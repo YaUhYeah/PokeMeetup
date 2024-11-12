@@ -11,9 +11,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
-/**
- * Handles the animation state and rendering for Pokémon despawn effects.
- */
 public class PokemonDespawnAnimation {
     private static final float DESPAWN_DURATION = 1.0f; // Total animation time in seconds
     private static final float SPARKLE_DURATION = 0.3f; // Duration for each sparkle

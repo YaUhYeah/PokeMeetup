@@ -2,6 +2,9 @@
   "BitmapFont": {
     "default-font": {
       "file": "default.fnt"
+    },
+    "default": {
+      "file": "default.fnt"
     }
   },
   "Color": {
@@ -184,4 +187,6 @@
       "wrapWidth": 150
     }
   }
+
+
 }

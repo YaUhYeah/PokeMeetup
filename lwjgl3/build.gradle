@@ -1,6 +1,9 @@
+// LWJGL3 build.gradle
+
 buildscript {
   repositories {
     gradlePluginPortal()
+    mavenCentral()
   }
   dependencies {
     if (enableGraalNative == 'true') {
@@ -8,6 +11,7 @@ buildscript {
     }
   }
 }
+
 plugins {
   id "io.github.fourlastor.construo" version "1.4.1"
   id "application"
@@ -17,15 +21,17 @@ plugins {
 
 sourceSets.main.resources.srcDirs += [ rootProject.file('assets').path ]
 
-
-import io.github.fourlastor.construo.Target
-
 mainClassName = 'io.github.pokemeetup.lwjgl3.Lwjgl3Launcher'
 application.setMainClass(mainClassName)
 java.sourceCompatibility = 8
 java.targetCompatibility = 8
+
 if (JavaVersion.current().isJava9Compatible()) {
   compileJava.options.release.set(8)
+}
+
+configurations {
+  serverImplementation
 }
 
 dependencies {
@@ -41,6 +47,10 @@ dependencies {
     implementation "io.github.berstanio:gdx-svmhelper-extension-box2d:$graalHelperVersion"
   }
 
+  // Server dependencies
+  serverImplementation project(':core')
+  serverImplementation "com.google.code.gson:gson:2.8.9"
+  serverImplementation "com.h2database:h2:2.1.214"
 }
 
 def os = System.properties['os.name'].toLowerCase()
@@ -49,307 +59,122 @@ run {
   workingDir = rootProject.file('assets').path
   setIgnoreExitValue(true)
 
-  if (os.contains('mac')) jvmArgs += "-XstartOnFirstThread"
+  if (os.contains('mac')) {
+    jvmArgs += "-XstartOnFirstThread"
+  }
+}
+// Add/update these tasks in your build.gradle
+
+tasks.register('buildCore', GradleBuild) {
+  group = 'build'
+  description = 'Builds the core project'
+
+  dir = project(':core').projectDir
+  tasks = ['jar']
 }
 
-jar {
-// sets the name of the .jar file this produces to the name of the game or app, with the version after.
-  archiveFileName.set("${appName}-${projectVersion}.jar")
-  duplicatesStrategy = DuplicatesStrategy.INCLUDE
-// the duplicatesStrategy matters starting in Gradle 7.0; this setting works.
-  duplicatesStrategy(DuplicatesStrategy.EXCLUDE)
-  dependsOn configurations.runtimeClasspath
-  from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
-// these "exclude" lines remove some unnecessary duplicate files in the output JAR.
-  exclude('META-INF/INDEX.LIST', 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA')
-  dependencies {
-    exclude('META-INF/INDEX.LIST', 'META-INF/maven/**')
-  }
-// setting the manifest makes the JAR runnable.
+tasks.register('serverJar', Jar) {
+  group = 'build'
+  description = 'Creates the server JAR'
+
+  // Make sure core is built first
+  dependsOn buildCore
+
+  archiveFileName = 'server.jar'
+  destinationDirectory = file("${buildDir}/server")
+
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
   manifest {
-    attributes 'Main-Class': project.mainClassName
+    attributes(
+      'Main-Class': 'io.github.pokemeetup.server.deployment.ServerLauncher',
+      'Implementation-Title': 'Pokemon Meetup Server',
+      'Implementation-Version': project.version
+    )
   }
-// this last step may help on some OSes that need extra instruction to make runnable JARs.
-  doLast {
-    file(archiveFile).setExecutable(true, false)
-  }
-}
 
-construo {
-  // name of the executable
-  name.set(appName)
-  // human-readable name, used for example in the `.app` name for macOS
-  humanName.set(appName)
-  // Optional, defaults to project version property
-  version.set("$projectVersion")
+  // Include the core project's compiled classes directly
+  from project(':core').sourceSets.main.output
+  from sourceSets.main.output
 
-  targets.configure {
-    create("linuxX64", Target.Linux) {
-      architecture.set(Target.Architecture.X86_64)
-      jdkUrl.set("https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.12%2B7/OpenJDK17U-jdk_x64_linux_hotspot_17.0.12_7.tar.gz")
-    }
-    create("macM1", Target.MacOs) {
-      architecture.set(Target.Architecture.AARCH64)
-      jdkUrl.set("https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.12%2B7/OpenJDK17U-jdk_aarch64_mac_hotspot_17.0.12_7.tar.gz")
-      // macOS needs an identifier
-      identifier.set("io.github.pokemeetup." + appName)
-      // Optional: icon for macOS
-      macIcon.set(project.file("icons/logo.icns"))
-    }
-    create("macX64", Target.MacOs) {
-      architecture.set(Target.Architecture.X86_64)
-      jdkUrl.set("https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.12%2B7/OpenJDK17U-jdk_x64_mac_hotspot_17.0.12_7.tar.gz")
-      // macOS needs an identifier
-      identifier.set("io.github.pokemeetup." + appName)
-      // Optional: icon for macOS
-      macIcon.set(project.file("icons/logo.icns"))
-    }
-    create("winX64", Target.Windows) {
-      architecture.set(Target.Architecture.X86_64)
-      jdkUrl.set("https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.12%2B7/OpenJDK17U-jdk_x64_windows_hotspot_17.0.12_7.zip")
-    }
-  }
-}
-
-// Equivalent to the jar task; here for compatibility with gdx-setup.
-tasks.register('dist') {
-  dependsOn 'jar'
-}
-
-distributions {
-  main {
-    contents {
-      into('libs') {
-        project.configurations.runtimeClasspath.files.findAll { file ->
-          file.getName() != project.tasks.jar.outputs.files.singleFile.name
-        }.each { file ->
-          exclude file.name
+  // Include runtime dependencies
+  from {
+    configurations.runtimeClasspath.collect {
+      if (it.isDirectory()) {
+        it
+      } else {
+        zipTree(it).matching {
+          // Don't include signature files from dependencies
+          exclude 'META-INF/*.SF'
+          exclude 'META-INF/*.DSA'
+          exclude 'META-INF/*.RSA'
+          exclude 'META-INF/MANIFEST.MF'
         }
       }
     }
   }
 }
 
-startScripts.dependsOn(':lwjgl3:jar')
-startScripts.classpath = project.tasks.jar.outputs.files
+tasks.register('deployServer', Copy) {
+  group = 'deployment'
+  description = 'Creates a complete server deployment'
+
+  dependsOn serverJar
+
+  from("${buildDir}/server/server.jar")
+  into("${buildDir}/deploy")
+
+  doLast {
+    def deployDir = file("${buildDir}/deploy")
+
+    // Create start scripts
+    new File(deployDir, 'start.bat').text = '''@echo off
+java -Xms1G -Xmx4G -jar server.jar
+pause
+'''
+
+    def shFile = new File(deployDir, 'start.sh')
+    shFile.text = '''#!/bin/bash
+java -Xms1G -Xmx4G -jar server.jar
+'''
+    shFile.setExecutable(true, false)
+
+    // Create needed directories
+    file("${buildDir}/deploy/logs").mkdirs()
+    file("${buildDir}/deploy/plugins").mkdirs()
+    file("${buildDir}/deploy/worlds").mkdirs()
+    file("${buildDir}/deploy/config").mkdirs()
+
+    println """
+        Server deployed to: ${buildDir}/deploy
+        To start the server:
+        - Windows: Run start.bat
+        - Linux/Mac: Run ./start.sh
+        """
+  }
+}
+
+jar {
+  archiveFileName = "${appName}-${projectVersion}.jar"
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+  from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+
+  manifest {
+    attributes 'Main-Class': project.mainClassName
+  }
+
+  exclude('META-INF/INDEX.LIST', 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA')
+
+  doLast {
+    archiveFile.get().asFile.setExecutable(true, false)
+  }
+}
+
+tasks.register('dist') {
+  dependsOn 'jar'
+}
 
 if (enableGraalNative == 'true') {
   apply from: file("nativeimage.gradle")
-}
-
-// Create a separate task for building the server JAR
-tasks.register('serverJar', Jar) {
-  group = 'build'
-  description = 'Assembles a jar archive containing the server classes and its dependencies.'
-
-  // Set the base name for the JAR
-  archiveBaseName = 'pokemon-meetup-server'
-  archiveVersion = project.version
-
-  // Include the main class for the server
-  manifest {
-    attributes(
-      'Main-Class': 'io.github.pokemeetup.server.deployment.ServerLauncher',
-      'Implementation-Title': 'Pokemon Meetup Server',
-      'Implementation-Version': project.version,
-      'Enable-Preview': 'true'
-    )
-  }
-
-  // Include all runtime dependencies
-  from {
-    configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
-  }
-
-  // Include your compiled classes
-  from sourceSets.main.output
-
-  // Exclude unnecessary files
-  exclude 'META-INF/*.RSA', 'META-INF/*.SF', 'META-INF/*.DSA'
-  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-}
-task serverDist(type: Zip) {
-  group = 'distribution'
-  description = 'Assembles a distributable server package'
-
-  archiveBaseName = 'pokemon-meetup-server'
-  archiveClassifier = ''
-
-  from {
-    configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
-  }
-
-  from('src/main/resources') {
-    include 'config/**'
-    include 'plugins/**'
-  }
-
-  // Include server-specific files
-  from('server') {
-    include 'README.md'
-    include 'config/**'
-  }
-
-  from(sourceSets.main.output)
-
-  // Create directories in distribution
-  into('plugins') {}
-  into('worlds') {}
-  into('logs') {}
-
-  // Create start scripts
-  doLast {
-    def deployDir = new File(destinationDirectory.get().asFile, archiveBaseName.get())
-    deployDir.mkdirs()
-
-    // Create Windows start script
-    new File(deployDir, 'start.bat').text = """@echo off
-setlocal enabledelayedexpansion
-
-set MIN_MEMORY=1G
-set MAX_MEMORY=4G
-
-java -Xms%MIN_MEMORY% -Xmx%MAX_MEMORY% ^
-    -XX:+UseG1GC ^
-    -XX:+ParallelRefProcEnabled ^
-    -jar pokemon-meetup-server.jar
-pause
-"""
-
-    // Create Unix start script
-    def unixScript = new File(deployDir, 'start.sh')
-    unixScript.text = """#!/bin/bash
-
-MIN_MEMORY="1G"
-MAX_MEMORY="4G"
-
-java -Xms\$MIN_MEMORY -Xmx\$MAX_MEMORY \\
-    -XX:+UseG1GC \\
-    -XX:+ParallelRefProcEnabled \\
-    -jar pokemon-meetup-server.jar
-"""
-    unixScript.setExecutable(true, false)
-  }
-}
-
-// Default server configuration
-task createDefaultConfig() {
-  doLast {
-    def configDir = new File(projectDir, 'server/config')
-    configDir.mkdirs()
-
-    def configFile = new File(configDir, 'server.json')
-    if (!configFile.exists()) {
-      configFile.text = """{
-  "serverIP": "0.0.0.0",
-  "tcpPort": 54555,
-  "udpPort": 54777,
-  "serverName": "Pokemon Meetup Server",
-  "allowRegistration": true,
-  "maxPlayers": 100,
-  "worldSeed": ${System.currentTimeMillis()},
-  "backupInterval": 3600
-}"""
-    }
-  }
-}
-
-// Update the server distribution task to include the server JAR
-tasks.named('serverDist', Zip) {
-  group = 'distribution'
-  description = 'Assembles a distributable server package'
-
-  dependsOn serverJar
-  duplicatesStrategy = DuplicatesStrategy.INCLUDE
-
-  archiveBaseName = 'pokemon-meetup-server'
-  archiveVersion = project.version
-
-  // Include the server JAR
-  from(serverJar) {
-    into('/')
-  }
-
-  // Include resources
-  from('src/main/resources') {
-    include 'config/**'
-    include 'plugins/**'
-    into('/')
-  }
-
-  // Include server-specific files
-  from('server') {
-    include 'README.md'
-    include 'config/**'
-    into('/')
-  }
-
-  // Create required directories
-  into('/') {
-    from('server') {
-      include 'plugins/**'
-      include 'worlds/**'
-      include 'logs/**'
-    }
-  }
-
-  // Add start scripts
-  doLast {
-    def deployDir = destinationDirectory.get().asFile
-
-    // Windows start script
-    new File(deployDir, 'pokemon-meetup-server/start.bat').text = '''@echo off
-setlocal enabledelayedexpansion
-
-set MIN_MEMORY=1G
-set MAX_MEMORY=4G
-
-java -Xms%MIN_MEMORY% -Xmx%MAX_MEMORY% ^
-    -XX:+UseG1GC ^
-    -XX:+ParallelRefProcEnabled ^
-    --enable-preview ^
-    -jar pokemon-meetup-server.jar
-pause
-'''
-
-    // Unix start script
-    def unixScript = new File(deployDir, 'pokemon-meetup-server/start.sh')
-    unixScript.text = '''#!/bin/bash
-
-MIN_MEMORY="1G"
-MAX_MEMORY="4G"
-
-java -Xms$MIN_MEMORY -Xmx$MAX_MEMORY \\
-    -XX:+UseG1GC \\
-    -XX:+ParallelRefProcEnabled \\
-    --enable-preview \\
-    -jar pokemon-meetup-server.jar
-'''
-    unixScript.setExecutable(true, false)
-
-    // Create empty directories
-    new File(deployDir, 'pokemon-meetup-server/plugins').mkdirs()
-    new File(deployDir, 'pokemon-meetup-server/worlds').mkdirs()
-    new File(deployDir, 'pokemon-meetup-server/logs').mkdirs()
-    new File(deployDir, 'pokemon-meetup-server/config').mkdirs()
-  }
-}
-
-// Create a task to run the server directly
-tasks.register('runServer', JavaExec) {
-  group = 'application'
-  description = 'Runs the server'
-
-  dependsOn serverJar
-
-  classpath = files(serverJar.archiveFile)
-  mainClass = 'io.github.pokemeetup.server.deployment.ServerLauncher'
-
-  jvmArgs = [
-    '-Xms1G',
-    '-Xmx4G',
-    '-XX:+UseG1GC',
-    '-XX:+ParallelRefProcEnabled',
-    '--enable-preview'
-  ]
 }

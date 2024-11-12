@@ -10,12 +10,21 @@ import io.github.pokemeetup.utils.GameLogger;
 
 
 public class ServerConfigManager {
+    private static final String CONFIG_DIR = "configs";
+    private static final String CONFIG_FILE = "servers.json";
     private static ServerConfigManager instance;
     private Array<ServerConnectionConfig> servers;
 
-    private static final String CONFIG_DIR = "configs";
-    private static final String CONFIG_FILE = "servers.json";
-
+    public static ServerConnectionConfig getDefaultServerConfig() {
+        return new ServerConnectionConfig(
+            "localhost",
+            54555,
+            54556,
+            "Default Server",
+            true,
+            100
+        );
+    }
     private ServerConfigManager() {
         servers = new Array<>();
         ensureConfigDirectory();
@@ -32,6 +41,7 @@ public class ServerConfigManager {
         }
         return instance;
     }
+
 
     public Array<ServerConnectionConfig> getServers() {
         return servers;
@@ -55,6 +65,7 @@ public class ServerConfigManager {
             GameLogger.info("Failed to create config directory: " + e.getMessage());
         }
     }
+
     private void loadServers() {
         try {
             FileHandle file = Gdx.files.local(CONFIG_DIR + "/" + CONFIG_FILE);
@@ -82,14 +93,15 @@ public class ServerConfigManager {
 
     private void addDefaultServer() {
         servers.add(new ServerConnectionConfig(
-            "127.0.0.1",
-            55555,
-            55556,
+            "103.6.171.157",
+            54555,
+            54556,
             "Local Server",
             true,
             100
         ));
     }
+
     public void saveConfigurations() {
         try {
             FileHandle configFile = Gdx.files.local("configs/servers.json");
@@ -99,7 +111,9 @@ public class ServerConfigManager {
         } catch (Exception e) {
 //            GameLogger.info(STR."error saving server configuration: \{e.getMessage()}");
         }
-    }    public void removeServer(ServerConnectionConfig server) {
+    }
+
+    public void removeServer(ServerConnectionConfig server) {
         if (servers.removeValue(server, false)) {
             saveServers();
             GameLogger.info("Removed server: " + server.getServerName());

@@ -34,7 +34,7 @@ dependencies {
 }
 
 android {
-  namespace 'io.github.pokemeetup.android'
+  namespace 'io.github.pokemeetup'
   compileSdkVersion 33
 
   compileOptions {
@@ -68,7 +68,7 @@ android {
   }
 
   defaultConfig {
-    applicationId "io.github.pokemeetup.android"
+    applicationId "io.github.pokemeetup"
     minSdkVersion 24
     targetSdkVersion 33
     versionCode 1
@@ -89,6 +89,10 @@ android {
       assets.srcDirs = ['../assets']  // Point to root assets folder
       jniLibs.srcDirs = ['libs']
     }
+  }
+  aaptOptions {
+    ignoreAssetsPattern "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
+    noCompress "json"  // Add this line to prevent json compression
   }
 }
 

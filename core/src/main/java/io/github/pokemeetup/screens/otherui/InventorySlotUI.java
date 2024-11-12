@@ -1,286 +1,391 @@
-package io.github.pokemeetup.screens.otherui;
+    package io.github.pokemeetup.screens.otherui;
 
-import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.Input;
-import com.badlogic.gdx.scenes.scene2d.*;
-import com.badlogic.gdx.scenes.scene2d.ui.*;
-import com.badlogic.gdx.scenes.scene2d.utils.*;
-import io.github.pokemeetup.screens.InventoryScreen;
-import io.github.pokemeetup.system.data.ItemData;
-import io.github.pokemeetup.system.gameplay.inventory.Inventory;
-import io.github.pokemeetup.system.gameplay.inventory.Item;
-import io.github.pokemeetup.system.gameplay.inventory.secureinventories.InventorySlotData;
-import io.github.pokemeetup.system.gameplay.inventory.secureinventories.InventorySlotDataObserver;
-import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+    import com.badlogic.gdx.Gdx;
+    import com.badlogic.gdx.Input;
+    import com.badlogic.gdx.graphics.g2d.TextureAtlas;
+    import com.badlogic.gdx.graphics.g2d.TextureRegion;
+    import com.badlogic.gdx.scenes.scene2d.*;
+    import com.badlogic.gdx.scenes.scene2d.ui.*;
+    import com.badlogic.gdx.scenes.scene2d.utils.*;
+    import com.badlogic.gdx.utils.Align;
+    import io.github.pokemeetup.screens.InventoryScreen;
+    import io.github.pokemeetup.system.data.ItemData;
+    import io.github.pokemeetup.system.gameplay.inventory.Inventory;
+    import io.github.pokemeetup.system.gameplay.inventory.Item;
+    import io.github.pokemeetup.system.gameplay.inventory.secureinventories.InventorySlotData;
+    import io.github.pokemeetup.system.gameplay.inventory.secureinventories.InventorySlotDataObserver;
+    import io.github.pokemeetup.utils.GameLogger;
+    import io.github.pokemeetup.utils.TextureManager;
 
-import java.util.Objects;
-import java.util.UUID;
-import java.util.function.Consumer;
+    import java.util.UUID;
 
-public class InventorySlotUI extends Table implements InventorySlotDataObserver {
-    private final InventorySlotData slotData;
-    private final Image itemImage;
-    private final Label countLabel;
-    private final InventoryScreen inventoryScreen;
-    private final Consumer<InventorySlotData> onChange;
-    private final Skin skin;
+    public class InventorySlotUI extends Table implements InventorySlotDataObserver {
+        private static final long CLICK_COOLDOWN = 250; // 250ms cooldown between clicks
+        private static final int SLOT_SIZE = 40;
+        private static final int ITEM_SIZE = 32;
+        private final InventorySlotData slotData;
+        private final InventoryScreen inventoryScreen;
+        private final Skin skin;
+        private Image itemImage;
+        private Label countLabel;
+        private long lastClickTime = 0;
+        private boolean isProcessingClick = false;
 
-    public InventorySlotUI(InventorySlotData slotData, Skin skin, Consumer<InventorySlotData> onChange, InventoryScreen inventoryScreen) {
-        this.slotData = slotData;
-        this.skin = skin;
-        this.inventoryScreen = inventoryScreen;
-        this.onChange = onChange;
-        this.setTouchable(Touchable.enabled);
+        public InventorySlotUI(InventorySlotData slotData, Skin skin, InventoryScreen inventoryScreen) {
+            this.slotData = slotData;
+            this.skin = skin;
+            this.inventoryScreen = inventoryScreen;
+            this.setTouchable(Touchable.enabled);
 
-        // Initialize slot background
-        setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("slot_normal")));
-        slotData.addObserver(this);
+            // Set the background of the slot
+            setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("slot_normal")));
+            slotData.addObserver(this);
 
-        // Initialize UI components
-        itemImage = new Image();
-        itemImage.setSize(32, 32);
-        countLabel = new Label("", skin);
-        countLabel.setVisible(false);
+            // Initialize UI components
+            setupUI();
 
-        // Layout setup
-        add(itemImage).size(32).center();
-        add(countLabel).bottom().right();
+            // Setup input listeners and visual effects
+            setupInput();
+            addHoverEffects();
+            updateVisuals();
 
-        // Setup input listeners and visual effects
-        setupInput();
-        addHoverEffects();
-        updateVisuals();
-    }
+            // Remove the redundant InputListener here
+        }
 
-    private void setupInput() {
-        addListener(new InputListener() {
-            @Override
-            public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
-                boolean isShiftPressed = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
-                if (button == Input.Buttons.LEFT) {
-                    if (isShiftPressed) {
-                        handleShiftClick();
-                    } else {
-                        handleLeftClick();
+        public void forceUpdate() {
+            GameLogger.info("Force updating slot " + slotData.getSlotIndex());
+
+            // Clear existing visuals
+            clearVisuals();
+
+            if (slotData != null && !slotData.isEmpty()) {
+                ItemData item = slotData.getItemData();
+                if (item != null) {
+                    GameLogger.info("Forcing update for item: " + item.getItemId() +
+                        " x" + item.getCount());
+                    updateVisuals();
+                }
+            }
+
+            invalidate();
+            validate();
+        }
+
+        public int getSlotIndex() {
+            return slotData != null ? slotData.getSlotIndex() : -1;
+        }
+
+        public InventorySlotData getSlotData() {
+            return slotData;
+        }
+
+        private void setupUI() {
+            clear();
+
+            // Create stack for layering
+            Stack stack = new Stack();
+            stack.setSize(SLOT_SIZE, SLOT_SIZE);
+
+            // Background (already set on table)
+
+            // Item image
+            itemImage = new Image();
+            itemImage.setSize(ITEM_SIZE, ITEM_SIZE);
+            Table imageContainer = new Table();
+            imageContainer.add(itemImage).size(ITEM_SIZE);
+            stack.add(imageContainer);
+
+            // Count label
+            countLabel = new Label("", skin);
+            countLabel.setAlignment(Align.bottomRight);
+            Table labelContainer = new Table();
+            labelContainer.add(countLabel).expand().right().bottom().pad(4);
+            stack.add(labelContainer);
+
+            add(stack).size(SLOT_SIZE);
+        }
+
+        private void setupInput() {
+            addListener(new InputListener() {
+                @Override
+                public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                    boolean isShiftPressed = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
+                    if (button == Input.Buttons.LEFT) {
+                        if (isShiftPressed) {
+                            handleShiftClick();
+                        } else {
+                            handleLeftClick();
+                        }
+                    } else if (button == Input.Buttons.RIGHT) {
+                        handleRightClick();
                     }
-                } else if (button == Input.Buttons.RIGHT) {
-//                    handleRightClick();
+                    return true; // Consume the event
                 }
-                return true; // Indicate that we have handled the event
-            }
-        });
-    }
-
-    private void handleLeftClick() {
-        Item heldItem = inventoryScreen.getHeldItem();
-        if (heldItem == null || heldItem.isEmpty()) {
-            if (pickUpItem()) {
-                updateVisuals();
-            }
-        } else {
-            if (handleItemPlacement(heldItem)) {
-                updateVisuals();
-            }
-        }
-    }
-
-
-    private void handleRightClick() {
-        Item heldItem = inventoryScreen.getHeldItem();
-        if (heldItem == null || heldItem.isEmpty()) {
-            pickUpHalf(); // When no item is held, pick up half
-        } else {
-            placeOneItem(); // When holding an item, place one
-        }
-        updateVisuals();
-    }
-
-
-    private void placeOneItem() {
-        Item heldItem = inventoryScreen.getHeldItem();
-        if (heldItem == null || heldItem.isEmpty()) return;
-
-        if (slotData.isEmpty()) {
-            // Place one item in empty slot
-            slotData.setItem(heldItem.getName(), 1, heldItem.getUuid());
-            heldItem.setCount(heldItem.getCount() - 1);
-
-            if (heldItem.getCount() <= 0) {
-                inventoryScreen.clearHeldItem();
-            }
-        } else if (slotData.getItemId().equals(heldItem.getName()) &&
-            slotData.getCount() < Item.MAX_STACK_SIZE) {
-            // Add one to existing stack if there's room
-            slotData.setItem(slotData.getItemId(), slotData.getCount() + 1, slotData.getItem().getUuid());
-            heldItem.setCount(heldItem.getCount() - 1);
-
-            if (heldItem.getCount() <= 0) {
-                inventoryScreen.clearHeldItem();
-            }
+            });
         }
 
-        notifyChange();
-    }
+        private void handleLeftClick() {
+            synchronized (inventoryScreen.getInventory().getInventoryLock()) {
+                try {
+                    Item heldItem = inventoryScreen.getHeldItem();
+                    int slotIndex = slotData.getSlotIndex();
+                    Inventory inventory = inventoryScreen.getInventory();
+                    ItemData slotItemData = inventory.getItemAt(slotIndex);
 
-    private void handleShiftClick() {
-        Item slotItem = slotData.getItem();
-        if (slotItem == null || slotItem.isEmpty()) {
-            return; // Nothing to shift-click
-        }
+                    // PICKUP
+                    if (heldItem == null && slotItemData != null) {
+                        // Create held item from slot item data
+                        Item newHeldItem = new Item(slotItemData.getItemId());
+                        newHeldItem.setCount(slotItemData.getCount());
+                        newHeldItem.setUuid(slotItemData.getUuid());
 
-        // Attempt to move the entire stack to another inventory area
-//        if (inventoryScreen.transferItemToOtherInventory(slotData)) {
-//            notifyChange();
-//            updateVisuals();
-//        }
-    }
+                        // Remove item from inventory slot
+                        inventory.setItemAt(slotIndex, null);
 
-    private boolean pickUpItem() {
-        if (!slotData.isEmpty()) {
-            Item currentItem = slotData.getItem().copy();
-            inventoryScreen.setHeldItem(currentItem);
-            slotData.clear();
-            notifyChange();
-            return true;
-        }
-        return false;
-    }
+                        // Update held item
+                        inventoryScreen.setHeldItem(newHeldItem);
 
-    private boolean handleItemPlacement(Item heldItem) {
-        if (heldItem == null || heldItem.isEmpty()) return false;
+                        GameLogger.info("Picked up item: " + newHeldItem.getName() + " x" + newHeldItem.getCount());
 
-        if (slotData.isEmpty()) {
-            // Place item in empty slot
-            slotData.setItem(heldItem.getName(), heldItem.getCount(), heldItem.getUuid());
-            inventoryScreen.clearHeldItem();
-            notifyChange();
-            return true;
-        } else if (slotData.getItemId().equals(heldItem.getName())) {
-            // Try to stack items
-            int totalCount = slotData.getCount() + heldItem.getCount();
-            if (totalCount <= Item.MAX_STACK_SIZE) {
-                slotData.setItem(heldItem.getName(), totalCount, slotData.getItem().getUuid());
-                inventoryScreen.clearHeldItem();
-                notifyChange();
-                return true;
-            } else {
-                // Handle stack overflow
-                int remaining = totalCount - Item.MAX_STACK_SIZE;
-                slotData.setItem(heldItem.getName(), Item.MAX_STACK_SIZE, slotData.getItem().getUuid());
-                heldItem.setCount(remaining);
-                inventoryScreen.setHeldItem(heldItem);
-                notifyChange();
-                return true;
+                    }
+                    // PLACE/STACK
+                    else if (heldItem != null) {
+                        // Empty slot - place
+                        if (slotItemData == null) {
+                            // Place held item into slot
+                            ItemData newItemData = new ItemData(heldItem.getName(), heldItem.getCount(), heldItem.getUuid());
+                            inventory.setItemAt(slotIndex, newItemData);
+
+                            // Clear held item
+                            inventoryScreen.setHeldItem(null);
+
+                            GameLogger.info("Placed item: " + newItemData.getItemId() + " x" + newItemData.getCount());
+
+                        }
+                        // Stack same items
+                        else if (slotItemData.getItemId().equals(heldItem.getName())) {
+                            int totalCount = slotItemData.getCount() + heldItem.getCount();
+                            if (totalCount <= Item.MAX_STACK_SIZE) {
+                                // Stack items
+                                ItemData newStack = new ItemData(slotItemData.getItemId(), totalCount, slotItemData.getUuid());
+                                inventory.setItemAt(slotIndex, newStack);
+
+                                // Clear held item
+                                inventoryScreen.setHeldItem(null);
+
+                                GameLogger.info("Stacked items to: " + newStack.getCount());
+
+                            } else {
+                                // Stack up to max, keep remaining in held item
+                                int spaceLeft = Item.MAX_STACK_SIZE - slotItemData.getCount();
+                                if (spaceLeft > 0) {
+                                    ItemData newSlotItem = new ItemData(slotItemData.getItemId(), Item.MAX_STACK_SIZE, slotItemData.getUuid());
+                                    inventory.setItemAt(slotIndex, newSlotItem);
+
+                                    // Update held item count
+                                    heldItem.setCount(heldItem.getCount() - spaceLeft);
+                                    inventoryScreen.setHeldItem(heldItem);
+
+                                    GameLogger.info("Partially stacked items, slot now has: " + newSlotItem.getCount() + ", held item remaining: " + heldItem.getCount());
+
+                                } else {
+                                    // Can't stack any more
+                                }
+                            }
+                        }
+                        // Swap different items
+                        else {
+                            // Swap items
+                            ItemData newSlotItemData = new ItemData(heldItem.getName(), heldItem.getCount(), heldItem.getUuid());
+                            inventory.setItemAt(slotIndex, newSlotItemData);
+
+                            // Set held item to the item previously in the slot
+                            Item newHeldItem = new Item(slotItemData.getItemId());
+                            newHeldItem.setCount(slotItemData.getCount());
+                            newHeldItem.setUuid(slotItemData.getUuid());
+                            inventoryScreen.setHeldItem(newHeldItem);
+
+                            GameLogger.info("Swapped items");
+
+                        }
+                    }
+
+                } catch (Exception e) {
+                    GameLogger.error("Error handling left click: " + e.getMessage());
+                    e.printStackTrace();
+                }
             }
-        } else {
-            // Swap items
-            Item currentItem = slotData.getItem();
-            slotData.setItem(heldItem.getName(), heldItem.getCount(), heldItem.getUuid());
-            inventoryScreen.setHeldItem(currentItem);
-            notifyChange();
-            return true;
         }
-    }
 
-    private void pickUpHalf() {
-        synchronized (inventoryScreen.getInventory()) {
-            if (slotData.isEmpty()) return;
-
-            int originalCount = slotData.getCount();
-            int halfCount = Math.max(1, originalCount / 2);
-            int remainingCount = originalCount - halfCount;
-
-            GameLogger.info("Splitting stack: original=" + originalCount +
-                ", taking=" + halfCount + ", remaining=" + remainingCount);
-
-            // Create new item with new UUID
-            Item newHeldItem = new Item(slotData.getItemId());
-            newHeldItem.setCount(halfCount);
-            newHeldItem.setUuid(UUID.randomUUID());
-
-            // First clear the slot
-            slotData.clear();
-
-            // Then set remaining amount if any
-            if (remainingCount > 0) {
-                slotData.setItem(slotData.getItemId(), remainingCount, UUID.randomUUID());
-            }
-
-            // Finally set held item
-            inventoryScreen.setHeldItem(newHeldItem);
-
-            // Only notify once at the end
-            inventoryScreen.getInventory().validateAndRepair();
+        private void handleShiftClick() {
         }
-    }
 
-    private void notifyChange() {
-        if (onChange != null) {
+
+
+        private boolean handleRightClick() {
+            if (isProcessingClick) return false;
+            isProcessingClick = true;
+
             try {
-                // Get count before
-                int beforeCount = inventoryScreen.getInventory().getAllItems().stream()
-                    .filter(Objects::nonNull)
-                    .mapToInt(ItemData::getCount)
-                    .sum();
+                Inventory inventory = inventoryScreen.getInventory();
+                synchronized (inventory.getInventoryLock()) {
+                    Item heldItem = inventoryScreen.getHeldItem();
+                    ItemData currentSlotItem = slotData.getItemData();
 
-                // Only notify once
-                onChange.accept(slotData);
+                    GameLogger.info("Right click - Held item: " + (heldItem != null ? heldItem.getName() + " x" + heldItem.getCount() : "null") +
+                        ", Slot item: " + (currentSlotItem != null ? currentSlotItem.getItemId() + " x" + currentSlotItem.getCount() : "null"));
 
-                // Don't update inventory again - the change notification should handle it
-                // Remove: inventory.update();
+                    if (heldItem == null) {
+                        // Split stack
+                        if (currentSlotItem != null && currentSlotItem.getCount() > 1) {
+                            int splitAmount = (currentSlotItem.getCount() + 1) / 2;
 
-                // Log for verification
-                int afterCount = inventoryScreen.getInventory().getAllItems().stream()
-                    .filter(Objects::nonNull)
-                    .mapToInt(ItemData::getCount)
-                    .sum();
+                            // Update current slot
+                            ItemData remainingStack = new ItemData(
+                                currentSlotItem.getItemId(),
+                                currentSlotItem.getCount() - splitAmount,
+                                currentSlotItem.getUuid()
+                            );
+                            inventory.setItemAt(slotData.getSlotIndex(), remainingStack);
 
-                if (beforeCount != afterCount) {
-                    GameLogger.info("Item count changed: " + beforeCount + " -> " + afterCount);
+                            // Create held item with split amount
+                            Item splitStack = new Item(currentSlotItem.getItemId());
+                            splitStack.setCount(splitAmount);
+                            splitStack.setUuid(UUID.randomUUID());
+                            inventoryScreen.setHeldItem(splitStack);
+
+                            GameLogger.info("Split stack: Slot has " + remainingStack.getCount() +
+                                ", Holding " + splitStack.getCount());
+                            return true;
+                        }
+                    } else {
+                        // Place single item
+                        if (currentSlotItem == null ||
+                            (currentSlotItem.getItemId().equals(heldItem.getName()) &&
+                                currentSlotItem.getCount() < Item.MAX_STACK_SIZE)) {
+
+                            if (currentSlotItem == null) {
+                                // Create new stack of 1
+                                ItemData newStack = new ItemData(
+                                    heldItem.getName(),
+                                    1,
+                                    UUID.randomUUID()
+                                );
+                                inventory.setItemAt(slotData.getSlotIndex(), newStack);
+                            } else {
+                                // Add 1 to existing stack
+                                ItemData updatedStack = new ItemData(
+                                    currentSlotItem.getItemId(),
+                                    currentSlotItem.getCount() + 1,
+                                    currentSlotItem.getUuid()
+                                );
+                                inventory.setItemAt(slotData.getSlotIndex(), updatedStack);
+                            }
+
+                            // Update held item
+                            heldItem.setCount(heldItem.getCount() - 1);
+                            if (heldItem.getCount() <= 0) {
+                                inventoryScreen.setHeldItem(null);
+                            } else {
+                                inventoryScreen.setHeldItem(heldItem);
+                            }
+
+                            GameLogger.info("Placed single item. Remaining held: " +
+                                (heldItem.getCount() <= 0 ? "none" : heldItem.getCount()));
+                            return true;
+                        }
+                    }
                 }
-            } catch (Exception e) {
-                GameLogger.error("Error in notifyChange: " + e.getMessage());
+            } finally {
+                isProcessingClick = false;
             }
+            return false;
         }
-    }
+        private void addHoverEffects() {
+            addListener(new InputListener() {
+                @Override
+                public void enter(InputEvent event, float x, float y, int pointer, Actor fromActor) {
+                    setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("slot_selected")));
+                }
 
-    private void addHoverEffects() {
-        addListener(new InputListener() {
-            @Override
-            public void enter(InputEvent event, float x, float y, int pointer, Actor fromActor) {
-                setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("slot_selected")));
-            }
+                @Override
+                public void exit(InputEvent event, float x, float y, int pointer, Actor toActor) {
+                    setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("slot_normal")));
+                }
+            });
+        }
 
-            @Override
-            public void exit(InputEvent event, float x, float y, int pointer, Actor toActor) {
-                setBackground(new TextureRegionDrawable(TextureManager.ui.findRegion("slot_normal")));
-            }
-        });
-    }
 
-    @Override
-    public void onSlotDataChanged() {
-        updateVisuals();
-    }
-
-    public void updateVisuals() {
-        if (!slotData.isEmpty()) {
-            Item item = slotData.getItem();
-            if (item != null && !item.isEmpty()) {
-                itemImage.setDrawable(new TextureRegionDrawable(item.getIcon()));
-                countLabel.setVisible(true);
-                countLabel.setText(String.valueOf(item.getCount()));
-                itemImage.setVisible(true);
-            } else {
+        private void clearVisuals() {
+            if (itemImage != null) {
                 itemImage.setDrawable(null);
                 itemImage.setVisible(false);
+            }
+            if (countLabel != null) {
+                countLabel.setText("");
                 countLabel.setVisible(false);
             }
-        } else {
-            itemImage.setDrawable(null);
-            itemImage.setVisible(false);
-            countLabel.setVisible(false);
+        }
+
+        @Override
+        public void onSlotDataChanged() {
+            updateVisuals();
+        }
+
+        public void updateVisuals() {
+            try {
+                GameLogger.info("Updating visuals for slot " + slotData.getSlotIndex());
+                clearVisuals();
+
+                if (slotData == null || slotData.isEmpty()) {
+                    GameLogger.info("Slot " + slotData.getSlotIndex() + " is empty");
+                    return;
+                }
+
+                ItemData item = slotData.getItemData();
+                if (item == null) {
+                    GameLogger.error("ItemData is null for slot " + slotData.getSlotIndex());
+                    return;
+                }
+
+                // Get texture
+                TextureRegion texture = TextureManager.items.findRegion(item.getItemId().toLowerCase() + "_item");
+                if (texture == null) {
+                    texture = TextureManager.items.findRegion(item.getItemId().toLowerCase());
+                    if (texture == null) {
+                        GameLogger.error("Could not find texture for item: " + item.getItemId());
+                        // Log available textures
+                        for (TextureAtlas.AtlasRegion region : TextureManager.items.getRegions()) {
+                            GameLogger.info("Available texture: " + region.name);
+                        }
+                        return;
+                    }
+                }
+
+                if (itemImage == null) {
+                    itemImage = new Image();
+                    add(itemImage).size(32);
+                }
+
+                itemImage.setDrawable(new TextureRegionDrawable(texture));
+                itemImage.setVisible(true);
+                itemImage.setSize(32, 32);
+
+                if (item.getCount() > 1) {
+                    if (countLabel == null) {
+                        countLabel = new Label("", skin);
+                        add(countLabel).expand().right().bottom().pad(4);
+                    }
+                    countLabel.setText(String.valueOf(item.getCount()));
+                    countLabel.setVisible(true);
+                }
+
+                GameLogger.info("Successfully updated visuals for slot " + slotData.getSlotIndex() +
+                    " with item " + item.getItemId() + " x" + item.getCount());
+
+            } catch (Exception e) {
+                GameLogger.error("Error updating slot visuals: " + e.getMessage());
+                e.printStackTrace();
+            }
         }
     }
-}

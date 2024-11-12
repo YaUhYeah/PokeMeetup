@@ -2,30 +2,54 @@ package io.github.pokemeetup.utils.storage;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.files.FileHandle;
+import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Json;
 import com.badlogic.gdx.utils.JsonValue;
 import com.badlogic.gdx.utils.JsonWriter;
 import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.pokemon.attacks.LearnableMove;
+import io.github.pokemeetup.pokemon.attacks.Move;
+import io.github.pokemeetup.pokemon.data.PokemonDatabase;
 import io.github.pokemeetup.system.data.*;
+import io.github.pokemeetup.system.gameplay.inventory.Inventory;
+import io.github.pokemeetup.system.gameplay.inventory.Item;
+import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.*;
 
-/**
- * JsonConfig class handles the serialization and deserialization of various data classes
- * such as PokemonData, PlayerData, WorldData, ItemData, LearnableMove, and BlockSaveData.
- * It utilizes the libGDX Json utility with custom serializers to ensure data integrity.
- */
 public class JsonConfig {
     private static final String SINGLE_PLAYER_DIR = "worlds/singleplayer/";
     private static Json instance;
 
-    /**
-     * Singleton instance of Json with custom serializers.
-     *
-     * @return the singleton Json instance
-     */
+    public static WorldData loadWorldData(String worldName) {
+        try {
+            FileHandle worldDir = Gdx.files.local(SINGLE_PLAYER_DIR + worldName);
+            FileHandle worldFile = worldDir.child("world.json");
+
+            if (!worldFile.exists()) {
+                GameLogger.error("World file not found: " + worldFile.path());
+                return null;
+            }
+
+            String jsonContent = worldFile.readString();
+            Json json = getInstance();
+            WorldData worldData = json.fromJson(WorldData.class, jsonContent);
+
+            // Log the loaded time values
+            GameLogger.info(String.format("Loaded time values - Time: %.2f, Played: %d, DayLength: %.2f",
+                worldData.getWorldTimeInMinutes(),
+                worldData.getPlayedTime(),
+                worldData.getDayLength()));
+
+            return worldData;
+
+        } catch (Exception e) {
+            GameLogger.error("Error loading world data: " + e.getMessage());
+            return null;
+        }
+    }
+
     public static synchronized Json getInstance() {
         if (instance == null) {
             instance = new Json();
@@ -35,343 +59,39 @@ public class JsonConfig {
         return instance;
     }
 
-    /**
-     * Sets up custom serializers for various classes.
-     *
-     * @param json the Json instance to configure
-     */
+
     private static void setupSerializers(Json json) {
-        // Serializer for UUID
-        json.setSerializer(UUID.class, new Json.Serializer<UUID>() {
-            @Override
-            public void write(Json json, UUID uuid, Class knownType) {
-                json.writeValue(uuid != null ? uuid.toString() : null);
-            }
-
-            @Override
-            public UUID read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) {
-                    return null;
-                }
-                String uuidStr = jsonData.asString();
-                if (uuidStr == null || uuidStr.isEmpty()) {
-                    return null;
-                }
-                try {
-                    return UUID.fromString(uuidStr);
-                } catch (Exception e) {
-                    GameLogger.error("Error parsing UUID: " + e.getMessage());
-                    return null;
-                }
-            }
-        });
-
-        // Serializer for PokemonData.MoveData
-        json.setSerializer(PokemonData.MoveData.class, new Json.Serializer<PokemonData.MoveData>() {
-            @Override
-            public void write(Json json, PokemonData.MoveData move, Class knownType) {
-                if (move == null) {
-                    json.writeValue(null);
-                    return;
-                }
-
-                json.writeObjectStart();
-                json.writeValue("name", move.name);
-                json.writeValue("type", move.type != null ? move.type.name() : null);
-                json.writeValue("power", move.power);
-                json.writeValue("accuracy", move.accuracy);
-                json.writeValue("pp", move.pp);
-                json.writeValue("maxPp", move.maxPp);
-                json.writeValue("isSpecial", move.isSpecial);
-                json.writeObjectEnd();
-            }
-
-            @Override
-            public PokemonData.MoveData read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) {
-                    return null;
-                }
-
-                PokemonData.MoveData move = new PokemonData.MoveData();
-                move.name = jsonData.getString("name", "Unknown Move");
-                try {
-                    String typeStr = jsonData.getString("type", "NORMAL");
-                    move.type = typeStr != null ? Pokemon.PokemonType.valueOf(typeStr) : Pokemon.PokemonType.NORMAL;
-                } catch (IllegalArgumentException e) {
-                    GameLogger.error("Invalid move type for move " + move.name + ", setting to NORMAL");
-                    move.type = Pokemon.PokemonType.NORMAL;
-                }
-                move.power = jsonData.getInt("power", 0);
-                move.accuracy = jsonData.getInt("accuracy", 100);
-                move.pp = jsonData.getInt("pp", 10);
-                move.maxPp = jsonData.getInt("maxPp", move.pp);
-                move.isSpecial = jsonData.getBoolean("isSpecial", false);
-
-                return move;
-            }
-        });
-
-        // Serializer for LearnableMove
-        json.setSerializer(LearnableMove.class, new Json.Serializer<LearnableMove>() {
-            @Override
-            public void write(Json json, LearnableMove move, Class knownType) {
-                if (move == null) {
-                    json.writeValue(null);
-                    return;
-                }
-
-                json.writeObjectStart();
-                json.writeValue("moveName", move.getMoveName());
-                json.writeValue("levelLearned", move.getLevelLearned());
-                json.writeValue("isStartingMove", move.isStartingMove());
-                json.writeValue("moveType", move.getMoveType() != null ? move.getMoveType().name() : null);
-                json.writeValue("power", move.getPower());
-                json.writeValue("accuracy", move.getAccuracy());
-                json.writeValue("pp", move.getPp());
-                json.writeValue("description", move.getDescription());
-                json.writeObjectEnd();
-            }
-
-            @Override
-            public LearnableMove read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) {
-                    return null;
-                }
-
-                LearnableMove move = new LearnableMove();
-                move.setMoveName(jsonData.getString("moveName", "Unknown Move"));
-                move.setLevelLearned(jsonData.getInt("levelLearned", 1));
-                move.setStartingMove(jsonData.getBoolean("isStartingMove", false));
-                try {
-                    String typeStr = jsonData.getString("moveType", "NORMAL");
-                    move.setMoveType(typeStr != null ? Pokemon.PokemonType.valueOf(typeStr) : Pokemon.PokemonType.NORMAL);
-                } catch (IllegalArgumentException e) {
-                    GameLogger.error("Invalid moveType for LearnableMove " + move.getMoveName() + ", setting to NORMAL");
-                    move.setMoveType(Pokemon.PokemonType.NORMAL);
-                }
-                move.setPower(jsonData.getInt("power", 0));
-                move.setAccuracy(jsonData.getInt("accuracy", 100));
-                move.setPp(jsonData.getInt("pp", 10));
-                move.setDescription(jsonData.getString("description", "No description available"));
-
-                return move;
-            }
-        });
-
-        // Serializer for ItemData
-        json.setSerializer(ItemData.class, new Json.Serializer<ItemData>() {
-            @Override
-            public void write(Json json, ItemData item, Class knownType) {
-                if (item == null) {
-                    json.writeValue(null);
-                    return;
-                }
-
-                json.writeObjectStart();
-                json.writeValue("itemId", item.getItemId());
-                json.writeValue("count", item.getCount());
-                json.writeValue("uuid", item.getUuid() != null ? item.getUuid().toString() : null);
-                json.writeObjectEnd();
-            }
-
-            @Override
-            public ItemData read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) {
-                    return null;
-                }
-
-                String itemId = jsonData.getString("itemId", "UnknownItem");
-                int count = jsonData.getInt("count", 1);
-                UUID uuid = null;
-                try {
-                    String uuidStr = jsonData.getString("uuid", null);
-                    if (uuidStr != null) {
-                        uuid = UUID.fromString(uuidStr);
-                    }
-                } catch (Exception e) {
-                    GameLogger.error("Invalid UUID for ItemData, generating new one");
-                }
-
-                ItemData itemData = new ItemData(itemId, count, uuid);
-                if (itemData.getUuid() == null) {
-                    itemData.setUuid(UUID.randomUUID());
-                }
-                return itemData;
-            }
-        });
-
-        // Serializer for PlayerData
-        json.setSerializer(PlayerData.class, new Json.Serializer<PlayerData>() {
-            @Override
-            public void write(Json json, PlayerData player, Class knownType) {
-                if (player == null) {
-                    json.writeValue(null);
-                    return;
-                }
-
-                json.writeObjectStart();
-
-                // Core Player Data
-                json.writeValue("username", player.getUsername());
-                json.writeValue("x", player.getX());
-                json.writeValue("y", player.getY());
-                json.writeValue("direction", player.getDirection());
-                json.writeValue("isMoving", player.isMoving());
-                json.writeValue("wantsToRun", player.isWantsToRun());
-
-                // Inventory Items
-                json.writeArrayStart("inventoryItems");
-                if (player.getInventoryItems() != null) {
-                    for (ItemData item : player.getInventoryItems()) {
-                        json.writeValue(item);
-                    }
-                }
-                json.writeArrayEnd();
-
-                // Party Pokemon
-                json.writeArrayStart("partyPokemon");
-                if (player.getPartyPokemon() != null) {
-                    for (PokemonData pokemon : player.getPartyPokemon()) {
-                        json.writeValue(pokemon);
-                    }
-                }
-                json.writeArrayEnd();
-
-                // Stored Pokemon
-                json.writeArrayStart("storedPokemon");
-                if (player.getStoredPokemon() != null) {
-                    for (PokemonData pokemon : player.getStoredPokemon()) {
-                        json.writeValue(pokemon);
-                    }
-                }
-                json.writeArrayEnd();
-
-                json.writeObjectEnd();
-            }
-
-            @Override
-            public PlayerData read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) {
-                    return null;
-                }
-
-                PlayerData player = new PlayerData();
-                player.setUsername(jsonData.getString("username", "Player"));
-
-                // Core Player Data
-                player.setX(jsonData.getFloat("x", 0f));
-                player.setY(jsonData.getFloat("y", 0f));
-                player.setDirection(jsonData.getString("direction", "down"));
-                player.setMoving(jsonData.getBoolean("isMoving", false));
-                player.setWantsToRun(jsonData.getBoolean("wantsToRun", false));
-
-                // Inventory Items
-                JsonValue inventoryArray = jsonData.get("inventoryItems");
-                if (inventoryArray != null && inventoryArray.isArray()) {
-                    List<ItemData> inventoryItems = new ArrayList<>();
-                    for (JsonValue itemValue = inventoryArray.child; itemValue != null; itemValue = itemValue.next) {
-                        ItemData item = json.readValue(ItemData.class, itemValue);
-                        inventoryItems.add(item);
-                    }
-                    player.setInventoryItems(inventoryItems);
-                }
-
-                // Party Pokemon
-                JsonValue partyArray = jsonData.get("partyPokemon");
-                if (partyArray != null && partyArray.isArray()) {
-                    List<PokemonData> partyPokemon = new ArrayList<>();
-                    for (JsonValue pokemonValue = partyArray.child; pokemonValue != null; pokemonValue = pokemonValue.next) {
-                        PokemonData pokemon = json.readValue(PokemonData.class, pokemonValue);
-                        partyPokemon.add(pokemon);
-                    }
-                    player.setPartyPokemon(partyPokemon);
-                }
-
-                // Stored Pokemon
-                JsonValue storedArray = jsonData.get("storedPokemon");
-                if (storedArray != null && storedArray.isArray()) {
-                    List<PokemonData> storedPokemon = new ArrayList<>();
-                    for (JsonValue pokemonValue = storedArray.child; pokemonValue != null; pokemonValue = pokemonValue.next) {
-                        PokemonData pokemon = json.readValue(PokemonData.class, pokemonValue);
-                        storedPokemon.add(pokemon);
-                    }
-                    player.setStoredPokemon(storedPokemon);
-                }
-
-                return player;
-            }
-        });
-
-        // Serializer for WorldData
+        // World data serializer
         json.setSerializer(WorldData.class, new Json.Serializer<WorldData>() {
             @Override
             public void write(Json json, WorldData world, Class knownType) {
-                if (world == null) {
-                    json.writeValue(null);
-                    return;
+                json.writeObjectStart();
+                synchronized (world.getTimeLock()) {
+                    json.writeValue("worldTimeInMinutes", Double.valueOf(world.getWorldTimeInMinutes()));
+                    json.writeValue("playedTime", Long.valueOf(world.getPlayedTime()));
+                    json.writeValue("dayLength", Float.valueOf(world.getDayLength()));
                 }
-
-                try {
-                    json.writeObjectStart();
-
-                    // Write time values directly in the serializer
-                    world.writeTimeValues(json); // Update internal state
-                    json.writeValue("worldTimeInMinutes", world.getWorldTimeInMinutes());
-                    json.writeValue("playedTime", world.getPlayedTime());
-                    json.writeValue("dayLength", world.getDayLength());
-
-                    // Write other fields
-                    json.writeValue("name", world.getName());
-                    json.writeValue("lastPlayed", world.getLastPlayed());
-
-                    // Write players map
-                    json.writeObjectStart("players");
-                    Map<String, PlayerData> players = world.getPlayersMap();
-                    if (players != null) {
-                        for (Map.Entry<String, PlayerData> entry : players.entrySet()) {
-                            if (entry.getKey() != null) {
-                                json.writeValue(entry.getKey(), entry.getValue());
-                            }
-                        }
-                    }
-                    json.writeObjectEnd();
-
-                    json.writeValue("pokemonData", world.getPokemonData());
-                    json.writeValue("blockData", world.getBlockData());
-                    json.writeValue("config", world.getConfig());
-
-                    String username = world.getUsername();
-                    if (username != null && !username.trim().isEmpty()) {
-                        json.writeValue("username", username);
-                    }
-
-                    json.writeObjectEnd();
-
-                    GameLogger.info("Successfully wrote world data with time values");
-
-                } catch (Exception e) {
-                    GameLogger.error("Error serializing WorldData: " + e.getMessage());
-                    e.printStackTrace();
-                    throw new RuntimeException("Failed to serialize WorldData", e);
-                }
+                json.writeValue("name", world.getName());
+                json.writeValue("lastPlayed", world.getLastPlayed());
+                json.writeValue("config", world.getConfig());
+                json.writeValue("players", world.getPlayersMap());
+                json.writeValue("pokemonData", world.getPokemonData());
+                json.writeValue("blockData", world.getBlockData());
+                json.writeObjectEnd();
             }
 
             @Override
             public WorldData read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) {
-                    return null;
-                }
-
                 try {
                     WorldData world = new WorldData();
 
-                    // Read time values with proper type conversion
+                    // Handle time values with proper type conversion
                     JsonValue timeValue = jsonData.get("worldTimeInMinutes");
                     if (timeValue != null) {
                         if (timeValue.isDouble()) {
                             world.setWorldTimeInMinutes(timeValue.asDouble());
                         } else if (timeValue.isNumber()) {
-                            world.setWorldTimeInMinutes((double)timeValue.asLong());
+                            world.setWorldTimeInMinutes((double) timeValue.asLong());
                         } else {
                             world.setWorldTimeInMinutes(480.0); // Default to 8:00 AM
                         }
@@ -387,231 +107,326 @@ public class JsonConfig {
                         world.setDayLength(dayLengthValue.asFloat());
                     }
 
-                    // Read basic fields
                     world.setName(jsonData.getString("name", ""));
                     world.setLastPlayed(jsonData.getLong("lastPlayed", System.currentTimeMillis()));
 
-                    // Read players
+                    // Handle config with validation
+                    WorldData.WorldConfig config = json.readValue(WorldData.WorldConfig.class,
+                        jsonData.get("config"));
+                    if (config == null) {
+                        config = new WorldData.WorldConfig(System.currentTimeMillis());
+                        config.setTreeSpawnRate(0.15f);
+                        config.setPokemonSpawnRate(0.05f);
+                    }
+                    world.setConfig(config);
+
+                    // Handle players map with validation
                     JsonValue playersObject = jsonData.get("players");
                     if (playersObject != null && playersObject.isObject()) {
                         HashMap<String, PlayerData> players = new HashMap<>();
-                        for (JsonValue playerEntry = playersObject.child; playerEntry != null; playerEntry = playerEntry.next) {
+                        for (JsonValue playerEntry = playersObject.child;
+                             playerEntry != null;
+                             playerEntry = playerEntry.next) {
+
                             String username = playerEntry.name;
                             if (username != null && !username.trim().isEmpty()) {
                                 PlayerData playerData = json.readValue(PlayerData.class, playerEntry);
-                                players.put(username, playerData);
+                                if (playerData != null) {
+                                    // Validate inventory
+                                    validatePlayerInventory(playerData);
+                                    // Validate Pokemon data
+                                    validatePlayerPokemon(playerData);
+                                    players.put(username, playerData);
+                                }
                             }
                         }
                         world.setPlayersMap(players);
                     }
 
-                    // Read other data
-                    JsonValue pokemonDataValue = jsonData.get("pokemonData");
-                    if (pokemonDataValue != null && !pokemonDataValue.isNull()) {
-                        PokemonData pokemonData = json.readValue(PokemonData.class, pokemonDataValue);
-                        world.setPokemonData(pokemonData);
+                    // Read pokemon data with validation
+                    PokemonData pokemonData = json.readValue(PokemonData.class,
+                        jsonData.get("pokemonData"));
+                    if (pokemonData == null) {
+                        pokemonData = new PokemonData();
                     }
+                    world.setPokemonData(pokemonData);
 
-                    JsonValue blockDataValue = jsonData.get("blockData");
-                    if (blockDataValue != null && !blockDataValue.isNull()) {
-                        BlockSaveData blockData = json.readValue(BlockSaveData.class, blockDataValue);
-                        world.setBlockData(blockData);
-                    }
-
-                    JsonValue configValue = jsonData.get("config");
-                    if (configValue != null && !configValue.isNull()) {
-                        WorldData.WorldConfig config = json.readValue(WorldData.WorldConfig.class, configValue);
-                        world.setConfig(config);
-                    }
-
-                    GameLogger.info("Successfully loaded world data with time values - " +
-                        "World Time: " + world.getWorldTimeInMinutes() +
-                        " Played Time: " + world.getPlayedTime() +
-                        " Day Length: " + world.getDayLength());
+                    // Read block data with validation
+                    BlockSaveData blockData = json.readValue(BlockSaveData.class,
+                        jsonData.get("blockData"));
+                    world.setBlockData(blockData);
 
                     return world;
 
                 } catch (Exception e) {
-                    GameLogger.error("Error deserializing WorldData: " + e.getMessage());
-                    e.printStackTrace();
-                    throw new RuntimeException("Failed to deserialize WorldData", e);
+                    GameLogger.error("Failed to deserialize WorldData: " + e.getMessage());
+                    throw new RuntimeException("WorldData deserialization failed", e);
                 }
             }
         });
-        json.setSerializer(BlockSaveData.class, new Json.Serializer<BlockSaveData>() {
+
+        // PlayerData serializer with proper inventory handling
+        json.setSerializer(PlayerData.class, new Json.Serializer<PlayerData>() {
             @Override
-            public void write(Json json, BlockSaveData blockData, Class knownType) {
-                if (blockData == null) {
-                    json.writeValue(null);
-                    return;
-                }
-
+            public void write(Json json, PlayerData playerData, Class knownType) {
                 json.writeObjectStart();
+                json.writeValue("username", playerData.getUsername());
+                json.writeValue("x", playerData.getX());
+                json.writeValue("y", playerData.getY());
+                json.writeValue("direction", playerData.getDirection());
+                json.writeValue("isMoving", playerData.isMoving());
+                json.writeValue("wantsToRun", playerData.isWantsToRun());
 
-                // Serialize placedBlocks map
-                json.writeObjectStart("placedBlocks");
-                if (blockData.getPlacedBlocks() != null) {
-                    for (Map.Entry<String, List<BlockSaveData.BlockData>> entry : blockData.getPlacedBlocks().entrySet()) {
-                        String chunkKey = entry.getKey();
-                        List<BlockSaveData.BlockData> blocks = entry.getValue();
-
-                        json.writeArrayStart(chunkKey);
-                        for (BlockSaveData.BlockData block : blocks) {
-                            json.writeValue(block);
+                // Write inventory items with validation
+                json.writeArrayStart("inventoryItems");
+                if (playerData.getInventoryItems() != null) {
+                    for (ItemData item : playerData.getInventoryItems()) {
+                        if (item != null && item.isValid()) {
+                            json.writeValue(item);
+                        } else {
+                            json.writeValue(null);
                         }
-                        json.writeArrayEnd();
                     }
                 }
-                json.writeObjectEnd();
+                json.writeArrayEnd();
+
+                // Write Pokemon party with validation
+                json.writeArrayStart("partyPokemon");
+                if (playerData.getPartyPokemon() != null) {
+                    for (PokemonData pokemon : playerData.getPartyPokemon()) {
+                        json.writeValue(pokemon);
+                    }
+                }
+                json.writeArrayEnd();
 
                 json.writeObjectEnd();
             }
 
             @Override
-            public BlockSaveData read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) {
-                    return null;
-                }
+            public PlayerData read(Json json, JsonValue jsonData, Class type) {
+                try {
+                    PlayerData playerData = new PlayerData();
+                    playerData.setUsername(jsonData.getString("username", "Player"));
+                    playerData.setX(jsonData.getFloat("x", 0f));
+                    playerData.setY(jsonData.getFloat("y", 0f));
+                    playerData.setDirection(jsonData.getString("direction", "down"));
+                    playerData.setMoving(jsonData.getBoolean("isMoving", false));
+                    playerData.setWantsToRun(jsonData.getBoolean("wantsToRun", false));
 
-                BlockSaveData blockData = new BlockSaveData();
+                    // Read and validate inventory
 
-                // Deserialize placedBlocks map
-                JsonValue placedBlocksObject = jsonData.get("placedBlocks");
-                if (placedBlocksObject != null && placedBlocksObject.isObject()) {
-                    for (JsonValue chunkEntry = placedBlocksObject.child; chunkEntry != null; chunkEntry = chunkEntry.next) {
-                        String chunkKey = chunkEntry.name;
-                        List<BlockSaveData.BlockData> blocks = new ArrayList<>();
-                        if (chunkEntry.isArray()) {
-                            for (JsonValue blockValue = chunkEntry.child; blockValue != null; blockValue = blockValue.next) {
-                                BlockSaveData.BlockData block = json.readValue(BlockSaveData.BlockData.class, blockValue);
-                                blocks.add(block);
+                    List<ItemData> inventory = new ArrayList<>(Inventory.INVENTORY_SIZE);
+                    for (int i = 0; i < Inventory.INVENTORY_SIZE; i++) {
+                        inventory.add(null);
+                    }
+
+                    JsonValue inventoryArray = jsonData.get("inventoryItems");
+                    if (inventoryArray != null && inventoryArray.isArray()) {
+                        int index = 0;
+                        for (JsonValue itemValue = inventoryArray.child;
+                             itemValue != null && index < Inventory.INVENTORY_SIZE;
+                             itemValue = itemValue.next, index++) {
+
+                            ItemData item = json.readValue(ItemData.class, itemValue);
+                            if (item != null && item.isValid()) {
+                                if (item.getUuid() == null) {
+                                    item.setUuid(UUID.randomUUID());
+                                }
+                                inventory.set(index, item);
                             }
                         }
-                        blockData.getPlacedBlocks().put(chunkKey, blocks);
                     }
-                }
+                    playerData.setInventoryItems(inventory);
 
-                return blockData;
+
+                    // Read and validate Pokemon party
+                    List<PokemonData> party = new ArrayList<>(6);
+                    for (int i = 0; i < 6; i++) {
+                        party.add(null);
+                    }
+
+                    JsonValue partyArray = jsonData.get("partyPokemon");
+                    if (partyArray != null && partyArray.isArray()) {
+                        int index = 0;
+                        for (JsonValue pokemonValue = partyArray.child;
+                             pokemonValue != null && index < 6;
+                             pokemonValue = pokemonValue.next, index++) {
+
+                            PokemonData pokemon = json.readValue(PokemonData.class, pokemonValue);
+                            if (pokemon != null && pokemon.getName() != null) {
+                                if (pokemon.getUuid() == null) {
+                                    pokemon.setUuid(UUID.randomUUID());
+                                }
+                                party.set(index, pokemon);
+                            }
+                        }
+                    }
+                    playerData.setPartyPokemon(party);
+                    return playerData;
+
+                } catch (Exception e) {
+                    GameLogger.error("Failed to deserialize PlayerData: " + e.getMessage());
+                    throw new RuntimeException("PlayerData deserialization failed", e);
+                }
             }
         });
-
-        // Serializer for BlockSaveData.BlockData
-        json.setSerializer(BlockSaveData.BlockData.class, new Json.Serializer<BlockSaveData.BlockData>() {
+        json.setSerializer(ItemData.class, new Json.Serializer<ItemData>() {
             @Override
-            public void write(Json json, BlockSaveData.BlockData blockData, Class knownType) {
-                if (blockData == null) {
+            public void write(Json json, ItemData itemData, Class knownType) {
+                if (itemData == null) {
                     json.writeValue(null);
                     return;
                 }
 
-                json.writeObjectStart();
-                json.writeValue("type", blockData.type);
-                json.writeValue("x", blockData.x);
-                json.writeValue("y", blockData.y);
-                json.writeObjectStart("extraData");
-                if (blockData.extraData != null) {
-                    for (Map.Entry<String, Object> entry : blockData.extraData.entrySet()) {
-                        json.writeValue(entry.getKey(), entry.getValue());
-                    }
+                try {
+                    json.writeObjectStart();
+                    json.writeValue("itemId", itemData.getItemId());
+                    json.writeValue("count", itemData.getCount());
+                    json.writeValue("uuid", itemData.getUuid() != null ?
+                        itemData.getUuid().toString() : UUID.randomUUID().toString());
+                    json.writeObjectEnd();
+                } catch (Exception e) {
+                    GameLogger.error("Error serializing ItemData: " + e.getMessage());
+                    throw e;
                 }
-                json.writeObjectEnd();
-                json.writeObjectEnd();
             }
 
             @Override
-            public BlockSaveData.BlockData read(Json json, JsonValue jsonData, Class type) {
+            public ItemData read(Json json, JsonValue jsonData, Class type) {
                 if (jsonData == null || jsonData.isNull()) {
                     return null;
                 }
 
-                BlockSaveData.BlockData block = new BlockSaveData.BlockData();
-                block.type = jsonData.getString("type", "UnknownBlock");
-                block.x = jsonData.getInt("x", 0);
-                block.y = jsonData.getInt("y", 0);
+                try {
+                    ItemData itemData = new ItemData();
 
-                JsonValue extraDataValue = jsonData.get("extraData");
-                if (extraDataValue != null && extraDataValue.isObject()) {
-                    Map<String, Object> extraData = new HashMap<>();
-                    for (JsonValue entry = extraDataValue.child; entry != null; entry = entry.next) {
-                        extraData.put(entry.name, entry.asString());
+                    // Read and validate itemId
+                    String itemId = jsonData.getString("itemId", null);
+                    if (itemId == null || itemId.trim().isEmpty()) {
+                        return null;
                     }
-                    block.extraData = extraData;
-                } else {
-                    block.extraData = new HashMap<>();
+                    itemData.setItemId(itemId);
+
+                    // Validate the item exists in ItemManager
+                    if (!ItemManager.isInitialized() || ItemManager.getItem(itemId) == null) {
+                        GameLogger.error("Invalid item ID during deserialization: " + itemId);
+                        return null;
+                    }
+
+                    // Read count with validation
+                    int count = jsonData.getInt("count", 0);
+                    if (count <= 0 || count > Item.MAX_STACK_SIZE) {
+                        GameLogger.error("Invalid item count: " + count);
+                        return null;
+                    }
+                    itemData.setCount(count);
+
+                    // Handle UUID
+                    String uuidStr = jsonData.getString("uuid", null);
+                    UUID uuid = null;
+                    try {
+                        uuid = uuidStr != null ? UUID.fromString(uuidStr) : UUID.randomUUID();
+                    } catch (IllegalArgumentException e) {
+                        uuid = UUID.randomUUID();
+                        GameLogger.error("Invalid UUID format, generated new: " + uuid);
+                    }
+                    itemData.setUuid(uuid);
+
+                    return itemData;
+
+                } catch (Exception e) {
+                    GameLogger.error("Error deserializing ItemData: " + e.getMessage());
+                    return null;
                 }
-
-                return block;
             }
-        });
-
-        // Serializer for PokemonData
-        json.setSerializer(PokemonData.class, new Json.Serializer<PokemonData>() {
+        });json.setSerializer(PokemonData.class, new Json.Serializer<PokemonData>() {
             @Override
-            public void write(Json json, PokemonData pokemon, Class knownType) {
-                if (pokemon == null) {
+            public void write(Json json, PokemonData pokemonData, Class knownType) {
+                if (pokemonData == null) {
                     json.writeValue(null);
                     return;
                 }
 
-                json.writeObjectStart();
+                try {
+                    json.writeObjectStart();
 
-                // Write basic info
-                json.writeValue("name", pokemon.getName());
-                json.writeValue("uuid", pokemon.getUuid() != null ? pokemon.getUuid().toString() : null);
-                json.writeValue("level", pokemon.getLevel());
-                json.writeValue("nature", pokemon.getNature());
+                    // Basic Pokemon data
+                    json.writeValue("name", pokemonData.getName());
+                    json.writeValue("level", pokemonData.getLevel());
 
-                // Write types
-                if (pokemon.getPrimaryType() != null) {
-                    json.writeValue("primaryType", pokemon.getPrimaryType().name());
-                }
-                if (pokemon.getSecondaryType() != null) {
-                    json.writeValue("secondaryType", pokemon.getSecondaryType().name());
-                }
+                    // Initialize stats if null
+                    if (pokemonData.getStats() == null) {
+                        pokemonData.setStats(new PokemonData.Stats());
+                        GameLogger.info("Initialized null stats for Pokemon: " + pokemonData.getName());
+                    }
 
-                // Write base stats
-                json.writeValue("baseHp", pokemon.getBaseHp());
-                json.writeValue("baseAttack", pokemon.getBaseAttack());
-                json.writeValue("baseDefense", pokemon.getBaseDefense());
-                json.writeValue("baseSpAtk", pokemon.getBaseSpAtk());
-                json.writeValue("baseSpDef", pokemon.getBaseSpDef());
-                json.writeValue("baseSpeed", pokemon.getBaseSpeed());
+                    // Write current HP and stats
+                    json.writeValue("currentHp", pokemonData.getBaseHp());
 
-                // Write physical dimensions
-                json.writeValue("width", pokemon.getWidth());
-                json.writeValue("height", pokemon.getHeight());
+                    // Stats object
+                    json.writeObjectStart("stats");
+                    json.writeValue("hp", pokemonData.getStats().getHp());
+                    json.writeValue("attack", pokemonData.getStats().getAttack());
+                    json.writeValue("defense", pokemonData.getStats().getDefense());
+                    json.writeValue("specialAttack", pokemonData.getStats().getSpecialAttack());
+                    json.writeValue("specialDefense", pokemonData.getStats().getSpecialDefense());
+                    json.writeValue("speed", pokemonData.getStats().getSpeed());
+                    json.writeObjectEnd();
 
-                // Write stats object
-                json.writeValue("stats", pokemon.getStats());
+                    // Types
+                    json.writeValue("primaryType", pokemonData.getPrimaryType() != null ?
+                        pokemonData.getPrimaryType().name() : "NORMAL");
+                    if (pokemonData.getSecondaryType() != null) {
+                        json.writeValue("secondaryType", pokemonData.getSecondaryType().name());
+                    }
 
-                // Write moves
-                if (pokemon.getMoves() != null) {
+                    // Write UUID
+                    json.writeValue("uuid", pokemonData.getUuid() != null ?
+                        pokemonData.getUuid().toString() : UUID.randomUUID().toString());
+
+                    // Moves
                     json.writeArrayStart("moves");
-                    for (PokemonData.MoveData move : pokemon.getMoves()) {
-                        json.writeValue(move);
+                    if (pokemonData.getMoves() != null) {
+                        for (PokemonData.MoveData move : pokemonData.getMoves()) {
+                            if (move != null) {
+                                json.writeObjectStart();
+                                json.writeValue("name", move.getName());
+                                json.writeValue("pp", move.getPp());
+                                json.writeValue("maxPp", move.getMaxPp());
+                                json.writeObjectEnd();
+                            }
+                        }
                     }
                     json.writeArrayEnd();
-                }
 
-                // Write learnable moves
-                if (pokemon.getLearnableMoves() != null) {
-                    json.writeArrayStart("learnableMoves");
-                    for (LearnableMove move : pokemon.getLearnableMoves()) {
-                        json.writeValue(move);
+                    json.writeObjectEnd();
+
+                } catch (Exception e) {
+                    GameLogger.error("Error serializing PokemonData: " + e.getMessage());
+                    e.printStackTrace();
+                    // Create minimal valid representation rather than throwing
+                    try {
+                        json.writeObjectStart();
+                        json.writeValue("name", pokemonData.getName());
+                        json.writeValue("level", 1);
+                        json.writeObjectStart("stats");
+                        json.writeValue("hp", 1);
+                        json.writeValue("attack", 1);
+                        json.writeValue("defense", 1);
+                        json.writeValue("specialAttack", 1);
+                        json.writeValue("specialDefense", 1);
+                        json.writeValue("speed", 1);
+                        json.writeObjectEnd();
+                        json.writeValue("primaryType", "NORMAL");
+                        json.writeValue("uuid", UUID.randomUUID().toString());
+                        json.writeArrayStart("moves");
+                        json.writeArrayEnd();
+                        json.writeObjectEnd();
+                    } catch (Exception inner) {
+                        GameLogger.error("Failed to write fallback PokemonData: " + inner.getMessage());
+                        throw inner;
                     }
-                    json.writeArrayEnd();
                 }
-
-                // Write TM moves
-                if (pokemon.getTmMoves() != null) {
-                    json.writeArrayStart("tmMoves");
-                    for (String move : pokemon.getTmMoves()) {
-                        json.writeValue(move);
-                    }
-                    json.writeArrayEnd();
-                }
-
-                json.writeObjectEnd();
             }
 
             @Override
@@ -620,174 +435,194 @@ public class JsonConfig {
                     return null;
                 }
 
-                PokemonData pokemon = new PokemonData();
-
-                // Read basic info
-                pokemon.setName(jsonData.getString("name", ""));
                 try {
-                    String uuidStr = jsonData.getString("uuid", null);
-                    if (uuidStr != null) {
-                        pokemon.setUuid(UUID.fromString(uuidStr));
-                    } else {
-                        pokemon.setUuid(UUID.randomUUID());
+                    PokemonData pokemon = new PokemonData();
+                    pokemon.setName(jsonData.getString("name")); // Default to BULBASAUR if no name
+                    pokemon.setLevel(jsonData.getInt("level"));
+
+                    // Initialize Stats
+                    PokemonData.Stats stats = new PokemonData.Stats();
+                    JsonValue statsData = jsonData.get("stats");
+                    if (statsData != null) {
+                        stats.setHp(statsData.getInt("hp", 1));
+                        stats.setAttack(statsData.getInt("attack", 1));
+                        stats.setDefense(statsData.getInt("defense", 1));
+                        stats.setSpecialAttack(statsData.getInt("specialAttack", 1));
+                        stats.setSpecialDefense(statsData.getInt("specialDefense", 1));
+                        stats.setSpeed(statsData.getInt("speed", 1));
                     }
-                } catch (IllegalArgumentException e) {
-                    GameLogger.error("Invalid UUID for PokemonData, generating new one");
-                    pokemon.setUuid(UUID.randomUUID());
-                }
-                pokemon.setLevel(jsonData.getInt("level", 1));
-                pokemon.setNature(jsonData.getString("nature", "Hardy"));
-
-                // Read types
-                try {
-                    String primaryTypeStr = jsonData.getString("primaryType", null);
-                    if (primaryTypeStr != null) {
-                        pokemon.setPrimaryType(Pokemon.PokemonType.valueOf(primaryTypeStr));
-                    }
-
-                    String secondaryTypeStr = jsonData.getString("secondaryType", null);
-                    if (secondaryTypeStr != null) {
-                        pokemon.setSecondaryType(Pokemon.PokemonType.valueOf(secondaryTypeStr));
-                    }
-                } catch (IllegalArgumentException e) {
-                    GameLogger.error("Error parsing Pokemon type: " + e.getMessage());
-                }
-
-                // Read base stats
-                pokemon.setBaseHp(jsonData.getInt("baseHp", 0));
-                pokemon.setBaseAttack(jsonData.getInt("baseAttack", 0));
-                pokemon.setBaseDefense(jsonData.getInt("baseDefense", 0));
-                pokemon.setBaseSpAtk(jsonData.getInt("baseSpAtk", 0));
-                pokemon.setBaseSpDef(jsonData.getInt("baseSpDef", 0));
-                pokemon.setBaseSpeed(jsonData.getInt("baseSpeed", 0));
-
-                // Read physical dimensions
-                pokemon.setWidth(jsonData.getFloat("width", 1f));
-                pokemon.setHeight(jsonData.getFloat("height", 1f));
-
-                // Read stats object
-                JsonValue statsData = jsonData.get("stats");
-                if (statsData != null && !statsData.isNull()) {
-                    PokemonData.Stats stats = json.readValue(PokemonData.Stats.class, statsData);
                     pokemon.setStats(stats);
-                }
 
-                // Read moves
-                JsonValue movesArray = jsonData.get("moves");
-                if (movesArray != null && movesArray.isArray()) {
-                    List<PokemonData.MoveData> moves = new ArrayList<>();
-                    for (JsonValue moveData = movesArray.child; moveData != null; moveData = moveData.next) {
-                        PokemonData.MoveData move = json.readValue(PokemonData.MoveData.class, moveData);
-                        moves.add(move);
+                    // Set current HP with validation
+                    float currentHp = jsonData.getFloat("currentHp", stats.getHp());
+                    pokemon.setBaseHp((int) Math.min(currentHp, stats.getHp()));
+
+                    // Handle Types
+                    try {
+                        Pokemon.PokemonType primaryType = Pokemon.PokemonType.valueOf(
+                            jsonData.getString("primaryType", "NORMAL")
+                        );
+                        pokemon.setPrimaryType(primaryType);
+
+                        if (jsonData.has("secondaryType")) {
+                            String secondaryTypeStr = jsonData.getString("secondaryType");
+                            if (secondaryTypeStr != null && !secondaryTypeStr.isEmpty()) {
+                                Pokemon.PokemonType secondaryType = Pokemon.PokemonType.valueOf(secondaryTypeStr);
+                                pokemon.setSecondaryType(secondaryType);
+                            }
+                        }
+                    } catch (IllegalArgumentException e) {
+                        GameLogger.error("Invalid Pokemon type, defaulting to NORMAL: " + e.getMessage());
+                        pokemon.setPrimaryType(Pokemon.PokemonType.NORMAL);
                     }
-                    pokemon.setMoves(moves);
-                }
 
-                // Read learnable moves
-                JsonValue learnableMovesArray = jsonData.get("learnableMoves");
-                if (learnableMovesArray != null && learnableMovesArray.isArray()) {
-                    List<LearnableMove> learnableMoves = new ArrayList<>();
-                    for (JsonValue moveData = learnableMovesArray.child; moveData != null; moveData = moveData.next) {
-                        LearnableMove move = json.readValue(LearnableMove.class, moveData);
-                        learnableMoves.add(move);
+                    // Handle UUID
+                    try {
+                        String uuidStr = jsonData.getString("uuid");
+                        pokemon.setUuid(uuidStr != null ? UUID.fromString(uuidStr) : UUID.randomUUID());
+                    } catch (Exception e) {
+                        pokemon.setUuid(UUID.randomUUID());
+                        GameLogger.error("Generated new UUID due to invalid data");
                     }
-                    pokemon.setLearnableMoves(learnableMoves);
-                }
 
-                // Read TM moves
-                JsonValue tmMovesArray = jsonData.get("tmMoves");
-                if (tmMovesArray != null && tmMovesArray.isArray()) {
-                    List<String> tmMoves = new ArrayList<>();
-                    for (JsonValue moveData = tmMovesArray.child; moveData != null; moveData = moveData.next) {
-                        tmMoves.add(moveData.asString());
+                    JsonValue movesArray = jsonData.get("moves");
+                    if (movesArray != null && movesArray.isArray()) {
+                        for (JsonValue moveValue = movesArray.child;
+                             moveValue != null;
+                             moveValue = moveValue.next) {
+
+                            try {
+                                String name = moveValue.getString("name");
+                                Pokemon.PokemonType moveType = Pokemon.PokemonType.valueOf(
+                                    moveValue.getString("type", "NORMAL")
+                                );
+                                int power = moveValue.getInt("power", 0);
+                                int accuracy = moveValue.getInt("accuracy", 100);
+                                int pp = moveValue.getInt("pp", 0);
+                                int maxPp = moveValue.getInt("maxPp", 0);
+                                boolean isSpecial = moveValue.getBoolean("isSpecial", false);
+                                String description = moveValue.getString("description", "");
+                                boolean canFlinch = moveValue.getBoolean("canFlinch", false);
+
+                                // Handle move effect
+                                PokemonData.MoveEffectData effect = null;
+                                JsonValue effectValue = moveValue.get("effect");
+                                if (effectValue != null) {
+                                    effect = new PokemonData.MoveEffectData(
+                                        effectValue.getString("type", ""),
+                                        effectValue.getFloat("chance", 0f)
+                                    );
+
+                                    // Status effect
+                                    if (effectValue.has("status")) {
+                                        try {
+                                            Pokemon.Status status = Pokemon.Status.valueOf(
+                                                effectValue.getString("status")
+                                            );
+                                            effect.setStatus(status);
+                                        } catch (IllegalArgumentException e) {
+                                            GameLogger.error("Invalid status in move effect: " + e.getMessage());
+                                        }
+                                    }
+
+                                    // Stat changes
+                                    JsonValue statChanges = effectValue.get("statChanges");
+                                    if (statChanges != null) {
+                                        Map<String, Integer> changes = new HashMap<>();
+                                        for (JsonValue stat = statChanges.child;
+                                             stat != null;
+                                             stat = stat.next) {
+                                            changes.put(stat.name, stat.asInt());
+                                        }
+                                        effect.setStatChanges(changes);
+                                    }
+                                }
+
+                                // Create move data with constructor
+                                PokemonData.MoveData move = new PokemonData.MoveData(
+                                    name,
+                                    moveType,
+                                    power,
+                                    accuracy,
+                                    pp,
+                                    maxPp,
+                                    isSpecial,
+                                    description,
+                                    effect,
+                                    canFlinch
+                                );
+
+                                pokemon.getMoves().add(move);
+
+                            } catch (Exception e) {
+                                GameLogger.error("Error loading move data: " + e.getMessage());
+
+                                // Try to create a basic move using the database as fallback
+                                String moveName = moveValue.getString("name", null);
+                                if (moveName != null) {
+                                    Move baseMove = PokemonDatabase.getMoveByName(moveName);
+                                    if (baseMove != null) {
+                                        pokemon.getMoves().add(PokemonData.MoveData.fromMove(baseMove));
+                                    }
+                                }
+                            }
+                        }
                     }
-                    pokemon.setTmMoves(tmMoves);
+
+                    // Ensure at least one move exists
+                    if (pokemon.getMoves().isEmpty()) {
+                        Move tackle = PokemonDatabase.getMoveByName("Tackle");
+                        if (tackle != null) {
+                            pokemon.getMoves().add(PokemonData.MoveData.fromMove(tackle));
+                        }
+                    }
+
+                    return pokemon;
+                } catch (Exception e) {
+                    GameLogger.error("Failed to deserialize PokemonData: " + e.getMessage());
+                    e.printStackTrace();
+                    // Return minimal valid Pokemon rather than null
+                    PokemonData fallback = new PokemonData();
+                    fallback.setName("BULBASAUR");
+                    fallback.setLevel(1);
+                    fallback.setStats(new PokemonData.Stats());
+                    fallback.setPrimaryType(Pokemon.PokemonType.NORMAL);
+                    fallback.setUuid(UUID.randomUUID());
+                    return fallback;
                 }
-
-                return pokemon;
-            }
-        });
-
-        // Serializer for PokemonData.Stats
-        json.setSerializer(PokemonData.Stats.class, new Json.Serializer<PokemonData.Stats>() {
-            @Override
-            public void write(Json json, PokemonData.Stats stats, Class knownType) {
-                if (stats == null) {
-                    json.writeValue(null);
-                    return;
-                }
-
-                json.writeObjectStart();
-                json.writeValue("hp", stats.hp);
-                json.writeValue("attack", stats.attack);
-                json.writeValue("defense", stats.defense);
-                json.writeValue("specialAttack", stats.specialAttack);
-                json.writeValue("specialDefense", stats.specialDefense);
-                json.writeValue("speed", stats.speed);
-                json.writeValue("ivs", stats.ivs);
-                json.writeValue("evs", stats.evs);
-                json.writeObjectEnd();
-            }
-
-            @Override
-            public PokemonData.Stats read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) {
-                    return new PokemonData.Stats();
-                }
-
-                PokemonData.Stats stats = new PokemonData.Stats();
-                stats.hp = jsonData.getInt("hp", 0);
-                stats.attack = jsonData.getInt("attack", 0);
-                stats.defense = jsonData.getInt("defense", 0);
-                stats.specialAttack = jsonData.getInt("specialAttack", 0);
-                stats.specialDefense = jsonData.getInt("specialDefense", 0);
-                stats.speed = jsonData.getInt("speed", 0);
-                stats.ivs = jsonData.get("ivs") != null ? json.readValue(int[].class, jsonData.get("ivs")) : new int[6];
-                stats.evs = jsonData.get("evs") != null ? json.readValue(int[].class, jsonData.get("evs")) : new int[6];
-                return stats;
-            }
-        });
-
-        // Serializer for WorldData.WorldConfig
-        json.setSerializer(WorldData.WorldConfig.class, new Json.Serializer<WorldData.WorldConfig>() {
-            @Override
-            public void write(Json json, WorldData.WorldConfig config, Class knownType) {
-                if (config == null) {
-                    json.writeValue(null);
-                    return;
-                }
-
-                json.writeObjectStart();
-                json.writeValue("seed", config.getSeed());
-                json.writeValue("treeSpawnRate", config.getTreeSpawnRate());
-                json.writeValue("pokemonSpawnRate", config.getPokemonSpawnRate());
-                json.writeObjectEnd();
-            }
-
-            @Override
-            public WorldData.WorldConfig read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) {
-                    return new WorldData.WorldConfig(System.currentTimeMillis());
-                }
-
-                WorldData.WorldConfig config = new WorldData.WorldConfig();
-                config.setSeed(jsonData.getLong("seed", System.currentTimeMillis()));
-                config.setTreeSpawnRate(jsonData.getFloat("treeSpawnRate", 0.15f));
-                config.setPokemonSpawnRate(jsonData.getFloat("pokemonSpawnRate", 0.05f));
-
-                return config;
             }
         });
     }
+    private static void validatePlayerInventory(PlayerData playerData) {
+        if (playerData.getInventoryItems() == null) {
+            List<ItemData> items = new ArrayList<>(Inventory.INVENTORY_SIZE);
+            for (int i = 0; i < Inventory.INVENTORY_SIZE; i++) {
+                items.add(null);
+            }
+            playerData.setInventoryItems(items);
+        }
+    }
+
+    private static void validatePlayerPokemon(PlayerData playerData) {
+        if (playerData.getPartyPokemon() == null) {
+            List<PokemonData> pokemon = new ArrayList<>(6);
+            for (int i = 0; i < 6; i++) {
+                pokemon.add(null);
+            }
+            playerData.setPartyPokemon(pokemon);
+        }
+    }
+
+
+
 
     public static void saveWorldDataWithPlayer(WorldData worldData, PlayerData updatedPlayerData) {
-        // Update the player data in worldData
         if (worldData != null && updatedPlayerData != null) {
             worldData.savePlayerData(updatedPlayerData.getUsername(), updatedPlayerData);
         }
 
-        // Serialize the updated WorldData to JSON
         try {
+            assert worldData != null;
             String worldPath = SINGLE_PLAYER_DIR + worldData.getName();
             FileHandle worldDir = Gdx.files.local(worldPath);
             worldDir.mkdirs();
@@ -801,5 +636,60 @@ public class JsonConfig {
         }
     }
 
-    // ... (Other methods remain unchanged)
+    private static void applyInventoryData(PlayerData player, List<ItemData> items) {
+        // Validate items before applying
+        List<ItemData> validatedItems = new ArrayList<>(Inventory.INVENTORY_SIZE);
+        for (int i = 0; i < Inventory.INVENTORY_SIZE; i++) {
+            ItemData item = i < items.size() ? items.get(i) : null;
+            if (item != null && item.isValid() && ItemManager.getItem(item.getItemId()) != null) {
+                if (item.getUuid() == null) {
+                    item.setUuid(UUID.randomUUID());
+                }
+                validatedItems.add(item);
+            } else {
+                validatedItems.add(null);
+            }
+        }
+        player.setInventoryItems(validatedItems);
+        player.validateInventory();
+    }
+
+    /**
+     * Validates and normalizes inventory data during serialization/deserialization
+     */
+    private static List<ItemData> normalizeInventoryItems(List<ItemData> items) {
+        List<ItemData> normalized = new ArrayList<>(Inventory.INVENTORY_SIZE);
+
+        // Initialize all slots to null first
+        for (int i = 0; i < Inventory.INVENTORY_SIZE; i++) {
+            normalized.add(null);
+        }
+
+        // Copy valid items to the correct slots
+        if (items != null) {
+            for (int i = 0; i < Math.min(items.size(), Inventory.INVENTORY_SIZE); i++) {
+                ItemData item = items.get(i);
+                if (isValidItem(item)) {
+                    // Ensure UUID exists
+                    if (item.getUuid() == null) {
+                        item.setUuid(UUID.randomUUID());
+                    }
+                    normalized.set(i, item.copy());  // Make a defensive copy
+                }
+            }
+        }
+
+        return normalized;
+    }
+
+    /**
+     * Validates an individual item
+     */
+    private static boolean isValidItem(ItemData item) {
+        return item != null &&
+            item.getItemId() != null &&
+            !item.getItemId().isEmpty() &&
+            item.getCount() > 0 &&
+            ItemManager.getItem(item.getItemId()) != null;
+    }
 }

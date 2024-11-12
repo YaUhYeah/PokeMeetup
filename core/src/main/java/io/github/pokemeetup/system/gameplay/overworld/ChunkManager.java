@@ -28,41 +28,38 @@ public class ChunkManager {
         return viewBounds.overlaps(chunkBounds);
     }
 
-    public static Rectangle calculateViewBounds(float centerX, float centerY, float viewportWidth, float viewportHeight) {
+
+
+
+    public static Rectangle calculateViewBounds(float playerX, float playerY, float viewportWidth, float viewportHeight) {
+        // Add buffer zones for smoother loading
+        float bufferZone = World.TILE_SIZE * 4;
         return new Rectangle(
-            centerX - (viewportWidth / 2),
-            centerY - (viewportHeight / 2),
-            viewportWidth + VISIBILITY_BUFFER * 2,
-            viewportHeight + VISIBILITY_BUFFER * 2
+            playerX - (viewportWidth / 2) - bufferZone,
+            playerY - (viewportHeight / 2) - bufferZone,
+            viewportWidth + (bufferZone * 2),
+            viewportHeight + (bufferZone * 2)
         );
     }
 
-    public static Vector2 getChunkPosition(float worldX, float worldY) {
-        int chunkX = Math.floorDiv((int)worldX, CHUNK_SIZE);
-        int chunkY = Math.floorDiv((int)worldY, CHUNK_SIZE);
-        return new Vector2(chunkX, chunkY);
-    }
-
     public static Set<Vector2> getChunksToLoad(Vector2 playerPosition, Rectangle viewBounds) {
-        Set<Vector2> chunksToLoad = new HashSet<>();
-        Vector2 playerChunkPos = getChunkPosition(playerPosition.x, playerPosition.y);
+        Set<Vector2> chunksNeeded = new HashSet<>();
 
-        // Load chunks in a square around player
-        for (int dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; dx++) {
-            for (int dy = -LOAD_RADIUS; dy <= LOAD_RADIUS; dy++) {
-                Vector2 chunkPos = new Vector2(
-                    playerChunkPos.x + dx,
-                    playerChunkPos.y + dy
-                );
+        // Calculate chunk coordinates from view bounds
+        int minChunkX = Math.floorDiv((int)viewBounds.x, World.CHUNK_SIZE * World.TILE_SIZE);
+        int maxChunkX = Math.floorDiv((int)(viewBounds.x + viewBounds.width), World.CHUNK_SIZE * World.TILE_SIZE);
+        int minChunkY = Math.floorDiv((int)viewBounds.y, World.CHUNK_SIZE * World.TILE_SIZE);
+        int maxChunkY = Math.floorDiv((int)(viewBounds.y + viewBounds.height), World.CHUNK_SIZE * World.TILE_SIZE);
 
-                // Only add chunks that are visible or within load radius
-                float distanceSquared = playerChunkPos.dst2(chunkPos);
-                if (distanceSquared <= LOAD_RADIUS * LOAD_RADIUS || isChunkVisible(chunkPos, viewBounds)) {
-                    chunksToLoad.add(chunkPos);
-                }
+        // Add an extra radius for smoother transitions
+        int extraRadius = 2;
+        for (int x = minChunkX - extraRadius; x <= maxChunkX + extraRadius; x++) {
+            for (int y = minChunkY - extraRadius; y <= maxChunkY + extraRadius; y++) {
+                chunksNeeded.add(new Vector2(x, y));
             }
         }
 
-        return chunksToLoad;
+        return chunksNeeded;
     }
+
 }

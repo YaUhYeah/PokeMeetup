@@ -9,11 +9,11 @@ import io.github.pokemeetup.utils.TileType;
 import java.util.*;
 
 public class Biome {
-    private Map<Integer, Integer> tileDistribution; // Tile type to weight
-    private Map<Integer, Float> tileSpawnChances;   // Tile type to spawn chance
     private final BiomeType type;
     private final Map<Integer, TextureRegion> tileTextures;
     private final Map<BiomeType, Map<Integer, TextureRegion>> transitionTiles;
+    private Map<Integer, Integer> tileDistribution; // Tile type to weight
+    private Map<Integer, Float> tileSpawnChances;   // Tile type to spawn chance
     private Set<Integer> spawnableTileTypes;      // Tile types where objects can spawn
     private String name;
     private float temperature;
@@ -21,6 +21,7 @@ public class Biome {
     private float moisture;
     private List<Integer> allowedTileTypes;
     private List<WorldObject.ObjectType> spawnableObjects;
+    private Map<WorldObject.ObjectType, Float> objectSpawnChances;
 
     public Biome(String name, BiomeType type) {
         this.name = name;
@@ -32,7 +33,27 @@ public class Biome {
         this.spawnableObjects = new ArrayList<>();
         this.tileSpawnChances = new HashMap<>();
         this.spawnableTileTypes = new HashSet<>();
+        this.objectSpawnChances = new HashMap<>();
         this.tileDistribution = new HashMap<>();
+    }
+
+    // Add new methods for object spawn chance management
+    public void setObjectSpawnChance(WorldObject.ObjectType objectType, float chance) {
+        objectSpawnChances.put(objectType, chance);
+    }
+
+    public float getObjectSpawnChance(WorldObject.ObjectType objectType) {
+        return objectSpawnChances.getOrDefault(objectType, 0.0f);
+    }
+
+    public Map<WorldObject.ObjectType, Float> getObjectSpawnChances() {
+        return objectSpawnChances;
+    }
+
+    // Add a method to check if an object should spawn based on its chance
+    public boolean shouldSpawnObject(WorldObject.ObjectType objectType, Random random) {
+        float chance = getObjectSpawnChance(objectType);
+        return random.nextFloat() < chance;
     }
 
     public void loadTileTextures() {
@@ -89,14 +110,6 @@ public class Biome {
         return transitionTilesConfig;
     }
 
-    public void setTileSpawnChances(Map<Integer, Float> tileSpawnChances) {
-        this.tileSpawnChances = tileSpawnChances;
-    }
-
-    public void setSpawnableTileTypes(Set<Integer> spawnableTileTypes) {
-        this.spawnableTileTypes = spawnableTileTypes;
-    }
-
     public void setTransitionTilesConfig(Map<BiomeType, Map<Integer, Integer>> transitionTilesConfig) {
         this.transitionTilesConfig = transitionTilesConfig;
     }
@@ -142,8 +155,16 @@ public class Biome {
         return tileSpawnChances;
     }
 
+    public void setTileSpawnChances(Map<Integer, Float> tileSpawnChances) {
+        this.tileSpawnChances = tileSpawnChances;
+    }
+
     public Set<Integer> getSpawnableTileTypes() {
         return spawnableTileTypes;
+    }
+
+    public void setSpawnableTileTypes(Set<Integer> spawnableTileTypes) {
+        this.spawnableTileTypes = spawnableTileTypes;
     }
 
     public float getTemperature() {

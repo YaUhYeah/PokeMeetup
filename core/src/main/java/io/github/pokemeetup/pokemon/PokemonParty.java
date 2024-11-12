@@ -15,15 +15,21 @@ public class PokemonParty {
         this.party = new ArrayList<>(MAX_PARTY_SIZE);
     }
 
-    public boolean addPokemon(Pokemon pokemon) {
+    public void addPokemon(Pokemon pokemon) {
         synchronized (partyLock) {
             if (party.size() >= MAX_PARTY_SIZE) {
-                return false;
+                return;
             }
             party.add(pokemon);
-            return true;
+        }
+    }public Pokemon getFirstPokemon() {
+        synchronized (partyLock) {
+            return party.isEmpty() ? null : party.get(0);
         }
     }
+
+    // Add healing method to Pokemon class (if not already present)
+
 
     public void clearParty() {
         party.clear();
@@ -80,7 +86,7 @@ public class PokemonParty {
                 // Restore HP and PP
                 pokemon.setCurrentHp(pokemon.getStats().getHp());
                 for (Move move : pokemon.getMoves()) {
-                    move.restore();
+//                    move.restore();
                 }
             }
         }
