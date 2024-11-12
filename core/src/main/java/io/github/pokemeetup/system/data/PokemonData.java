@@ -48,6 +48,8 @@ public class PokemonData {
         this.tmMoves = new ArrayList<>();
         this.moveDatabase = new HashMap<>();
         wildPokemon = new HashMap<>();
+        // Initialize stats with default values
+        this.stats = new Stats();
     }
 
     public static PokemonData fromPokemon(Pokemon pokemon) {
@@ -172,12 +174,18 @@ public class PokemonData {
     }
 
     public Stats getStats() {
+        // Ensure stats are never null
+        if (this.stats == null) {
+            this.stats = new Stats();
+        }
         return stats;
     }
 
     public void setStats(Stats stats) {
+        // Never allow null stats
         this.stats = stats != null ? stats.copy() : new Stats();
     }
+
 
     public int getBaseHp() {
         return baseHp;
@@ -271,10 +279,13 @@ public class PokemonData {
         copy.uuid = this.uuid;
         copy.primaryType = this.primaryType;
         copy.secondaryType = this.secondaryType;
-        copy.stats = this.stats != null ? this.stats.copy() : null;
+        // Ensure stats are never null in copies
+        copy.stats = this.stats != null ? this.stats.copy() : new Stats();
+
 
         if (this.moves != null) {
             copy.moves = new ArrayList<>();
+
             for (MoveData move : this.moves) {
                 copy.moves.add(move.copy());
             }
@@ -335,8 +346,18 @@ public class PokemonData {
         public int[] evs = new int[6];
 
         public Stats() {
-            // Initialize with default values or random IVs as needed
+            // Initialize with default values
+            this.hp = 1;
+            this.attack = 1;
+            this.defense = 1;
+            this.specialAttack = 1;
+            this.specialDefense = 1;
+            this.speed = 1;
+            // Initialize IVs and EVs with zeros
+            this.ivs = new int[6];
+            this.evs = new int[6];
         }
+
 
         public Stats(Pokemon.Stats stats) {
             if (stats != null) {
@@ -836,3 +857,9 @@ public class PokemonData {
         }
     }
 }
+
+
+
+
+
+

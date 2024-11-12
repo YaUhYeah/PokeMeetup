@@ -438,9 +438,9 @@ public class JsonConfig {
                 try {
                     PokemonData pokemon = new PokemonData();
                     pokemon.setName(jsonData.getString("name")); // Default to BULBASAUR if no name
-                    pokemon.setLevel(jsonData.getInt("level"));
+                    pokemon.setLevel(jsonData.getInt("level", 1));
 
-                    // Initialize Stats
+                    // Initialize Stats - Always create a new Stats object
                     PokemonData.Stats stats = new PokemonData.Stats();
                     JsonValue statsData = jsonData.get("stats");
                     if (statsData != null) {
@@ -450,8 +450,16 @@ public class JsonConfig {
                         stats.setSpecialAttack(statsData.getInt("specialAttack", 1));
                         stats.setSpecialDefense(statsData.getInt("specialDefense", 1));
                         stats.setSpeed(statsData.getInt("speed", 1));
+                    } else {
+                        // Set default values if stats are missing
+                        stats.setHp(1);
+                        stats.setAttack(1);
+                        stats.setDefense(1);
+                        stats.setSpecialAttack(1);
+                        stats.setSpecialDefense(1);
+                        stats.setSpeed(1);
                     }
-                    pokemon.setStats(stats);
+                    pokemon.setStats(stats); // Always set stats to avoid null
 
                     // Set current HP with validation
                     float currentHp = jsonData.getFloat("currentHp", stats.getHp());
@@ -693,3 +701,4 @@ public class JsonConfig {
             ItemManager.getItem(item.getItemId()) != null;
     }
 }
+
