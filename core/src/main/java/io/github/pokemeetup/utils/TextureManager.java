@@ -341,7 +341,6 @@ public class TextureManager {
                                   TextureAtlas pokemonoverworld, TextureAtlas items, TextureAtlas boy,
                                   TextureAtlas tiles, TextureAtlas effects, TextureAtlas mountains) {
 
-
         TextureManager.effects = effects;
         TextureManager.battlebacks = battlebacks;
         TextureManager.ui = ui;
@@ -353,6 +352,10 @@ public class TextureManager {
         TextureManager.boy = boy;
         TextureManager.tiles = tiles;
         TextureManager.mountains = mountains;
+        
+        // Initialize biome textures
+        BiomeTextureManager.initialize();
+        
         loadTypeAndStatusIcons();
         loadCentralTileTextures();
 
@@ -362,7 +365,15 @@ public class TextureManager {
         debugAtlas("boy", boy);
         debugPokemonAtlas();
         GameLogger.info("=== Texture Manager Initialization Complete ===");
+
+    public static TextureRegion getTileTexture(BiomeType biome, String tileName) {
+        return BiomeTextureManager.getTile(biome, tileName);
     }
+
+    private static void loadCentralTileTextures() {
+
+    }
+
 
     private static void loadCentralTileTextures() {
         // Ensure tiles atlas is loaded
@@ -510,3 +521,5 @@ public class TextureManager {
         }
     }
 }
+
+
