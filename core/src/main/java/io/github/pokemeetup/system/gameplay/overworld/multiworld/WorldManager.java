@@ -1,12 +1,17 @@
 package io.github.pokemeetup.system.gameplay.overworld.multiworld;
 
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.utils.Json;
 import io.github.pokemeetup.CreatureCaptureGame;
 import io.github.pokemeetup.multiplayer.server.ServerStorageSystem;
+import io.github.pokemeetup.pokemon.PokemonParty;
 import io.github.pokemeetup.system.data.ItemData;
 import io.github.pokemeetup.system.data.PlayerData;
 import io.github.pokemeetup.system.data.PokemonData;
 import io.github.pokemeetup.system.data.WorldData;
+import io.github.pokemeetup.system.gameplay.inventory.Inventory;
+import io.github.pokemeetup.system.gameplay.inventory.Item;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.storage.GameFileSystem;
 import io.github.pokemeetup.utils.storage.JsonConfig;
@@ -193,59 +198,45 @@ public class WorldManager {
     }
 
 
-    public void saveWorld(WorldData world) {
-        synchronized(worldLock) {
-            if (world == null) return;
+
+    public void saveWorld(WorldData worldData) {
+        synchronized(saveLock) {
+            if (worldData == null) {
+                GameLogger.error("Cannot save null world data");
+                return;
+            }
 
             try {
-                // Create backup before saving
-                createBackup(world);
+                // Create backup first
 
-                // Validate and prepare for saving
-                if (!validateWorld(world)) {
-                    throw new RuntimeException("World validation failed: " + world.getName());
+                // Prepare save path
+                String worldPath = "worlds/singleplayer/" + worldData.getName();
+                FileHandle worldDir = Gdx.files.local(worldPath);
+                worldDir.mkdirs();
+
+                // Save to temp file first
+                FileHandle tempFile = worldDir.child("world.json.temp");
+                String jsonContent = JsonConfig.getInstance().toJson(worldData);
+                tempFile.writeString(jsonContent, false);
+
+                // Verify temp file
+                WorldData verified = JsonConfig.getInstance().fromJson(WorldData.class, tempFile.readString());
+                if (!validateWorldData(verified)) {
+                    throw new RuntimeException("Save validation failed");
                 }
 
-                String worldPath = baseDirectory + world.getName();
-                fs.createDirectory(worldPath);
-                String worldFilePath = worldPath + "/world.json";
-                String tempFilePath = worldPath + "/world.json.temp";
+                // Move temp to real file
+                FileHandle realFile = worldDir.child("world.json");
+                tempFile.moveTo(realFile);
 
-                // Create deep copy for saving
-                WorldData worldCopy = deepCopyWorldData(world);
+                // Update cache
+                worldCache.put(worldData.getName(), worldData);
 
-                Json json = JsonConfig.getInstance();
-                String jsonData = json.prettyPrint(worldCopy);
-
-                // Write to temp file first
-                fs.writeString(tempFilePath, jsonData);
-
-                // Verify the save
-                try {
-                    WorldData verification = json.fromJson(WorldData.class, fs.readString(tempFilePath));
-                    if (!validateWorld(verification)) {
-                        throw new RuntimeException("Save verification failed");
-                    }
-                } catch (Exception e) {
-                    fs.deleteFile(tempFilePath);
-                    throw new RuntimeException("Save verification failed: " + e.getMessage());
-                }
-
-                // Replace old file with new one
-                if (fs.exists(worldFilePath)) {
-                    fs.deleteFile(worldFilePath);
-                }
-                fs.moveFile(tempFilePath, worldFilePath);
-
-                // Update cache and clear dirty flag
-                worlds.put(world.getName(), worldCopy);
-                world.clearDirtyFlag();
-
-                GameLogger.info("Successfully saved world: " + world.getName());
+                GameLogger.info("Successfully saved world: " + worldData.getName());
 
             } catch (Exception e) {
-                GameLogger.error("Failed to save world: " + world.getName() + " - " + e.getMessage());
-                throw new RuntimeException("Failed to save world", e);
+                GameLogger.error("Failed to save world: " + worldData.getName() + " - " + e.getMessage());
+                throw new RuntimeException("World save failed", e);
             }
         }
     }
@@ -480,89 +471,137 @@ public class WorldManager {
             GameLogger.error("Error loading singleplayer worlds: " + e.getMessage());
         }
     }
-    public WorldData loadAndValidateWorld(String name) {
+    private final Map<String, WorldData> worldCache = new ConcurrentHashMap<>();
+    private final Object saveLock = new Object();
+
+
+    private boolean validateWorldData(WorldData data) {
+        if (data == null) return false;
+
         try {
-            String worldPath = baseDirectory + name + "/world.json";
-            if (!fs.exists(worldPath)) {
-                GameLogger.error("World file not found: " + worldPath);
-                return null;
+            // Validate core data
+            if (data.getName() == null || data.getName().isEmpty()) {
+                GameLogger.error("World data missing name");
+                return false;
             }
 
-            String content = fs.readString(worldPath);
-            WorldData world = JsonConfig.getInstance().fromJson(WorldData.class, content);
-            WorldData existingWorld = worlds.get(name);
-
-            if (world == null) {
-                GameLogger.error("Failed to parse world data: " + worldPath);
-                return null;
-            }
-
-            // Preserve existing data if available
-            if (existingWorld != null) {
-                // Keep player data
-                Map<String, PlayerData> existingPlayers = existingWorld.getPlayersMap();
-                if (existingPlayers != null && !existingPlayers.isEmpty()) {
-                    for (Map.Entry<String, PlayerData> entry : existingPlayers.entrySet()) {
-                        PlayerData existingData = entry.getValue();
-                        PlayerData worldData = world.getPlayersMap().get(entry.getKey());
-
-                        if (worldData == null || !worldData.verifyIntegrity()) {
-                            world.savePlayerData(entry.getKey(), existingData);
-                            GameLogger.info("Restored existing player data for: " + entry.getKey());
-                        }
-                    }
-                }
-            }
-
-            // Perform repairs if needed
-            boolean needsSave = false;
-
-            if (world.getConfig() == null) {
-                GameLogger.info("Repairing missing config for world: " + name);
+            // Validate config
+            if (data.getConfig() == null) {
                 WorldData.WorldConfig config = new WorldData.WorldConfig(System.currentTimeMillis());
-                config.setTreeSpawnRate(0.15f);
-                config.setPokemonSpawnRate(0.05f);
-                world.setConfig(config);
-                needsSave = true;
+                data.setConfig(config);
             }
 
-            // Validate each player
-            HashMap<String, PlayerData> repairedPlayers = new HashMap<>();
-            for (Map.Entry<String, PlayerData> entry : world.getPlayersMap().entrySet()) {
-                PlayerData playerData = entry.getValue();
-                if (playerData != null) {
-                    if (playerData.validateAndRepairState()) {
-                        needsSave = true;
+            // Validate player data
+            if (data.getPlayers() != null) {
+                for (Map.Entry<String, PlayerData> entry : data.getPlayers().entrySet()) {
+                    PlayerData playerData = entry.getValue();
+                    if (!validatePlayerData(playerData)) {
+                        GameLogger.error("Invalid player data for: " + entry.getKey());
+                        return false;
                     }
-                    repairedPlayers.put(entry.getKey(), playerData);
-
-                    GameLogger.info(String.format("Validated player: %s - Pokemon: %d, Items: %d",
-                        entry.getKey(),
-                        playerData.getPartyPokemon().size(),
-                        playerData.getInventoryItems().stream().filter(Objects::nonNull).count()
-                    ));
                 }
             }
 
-            // Update with repaired data
-            world.setPlayersMap(repairedPlayers);
-
-            // Save if repairs were made
-            if (needsSave) {
-                saveWorld(world);
+            // Validate time values
+            if (data.getWorldTimeInMinutes() < 0 || data.getWorldTimeInMinutes() >= 24 * 60) {
+                data.setWorldTimeInMinutes(480.0); // Reset to 8:00 AM
             }
 
-            // Update cache
-            worlds.put(name, world);
-
-            GameLogger.info("Successfully loaded and validated world: " + name);
-            return world;
+            return true;
 
         } catch (Exception e) {
-            GameLogger.error("Error loading world: " + name + " - " + e.getMessage());
-            return null;
+            GameLogger.error("Error validating world data: " + e.getMessage());
+            return false;
         }
-    } public void updateWorld(String name, WorldData worldData) {
+    }
+    private boolean validatePlayerData(PlayerData data) {
+        if (data == null) return false;
+
+        // Validate inventory
+        if (data.getInventoryItems() == null) {
+            data.setInventoryItems(new ArrayList<>(Collections.nCopies(Inventory.INVENTORY_SIZE, null)));
+        } else {
+            List<ItemData> validated = new ArrayList<>(Collections.nCopies(Inventory.INVENTORY_SIZE, null));
+            for (int i = 0; i < Math.min(data.getInventoryItems().size(), Inventory.INVENTORY_SIZE); i++) {
+                ItemData item = data.getInventoryItems().get(i);
+                if (item != null && validateItemData(item)) {
+                    validated.set(i, item);
+                }
+            }
+            data.setInventoryItems(validated);
+        }
+
+        // Validate Pokemon party
+        if (data.getPartyPokemon() == null) {
+            data.setPartyPokemon(new ArrayList<>(Collections.nCopies(PokemonParty.MAX_PARTY_SIZE, null)));
+        } else {
+            List<PokemonData> validated = new ArrayList<>(Collections.nCopies(PokemonParty.MAX_PARTY_SIZE, null));
+            for (int i = 0; i < Math.min(data.getPartyPokemon().size(), PokemonParty.MAX_PARTY_SIZE); i++) {
+                PokemonData pokemon = data.getPartyPokemon().get(i);
+                if (pokemon != null && validatePokemonData(pokemon)) {
+                    validated.set(i, pokemon);
+                }
+            }
+            data.setPartyPokemon(validated);
+        }
+
+        return true;
+    }
+
+    private boolean validateItemData(ItemData item) {
+        return item != null &&
+            item.getItemId() != null &&
+            !item.getItemId().isEmpty() &&
+            item.getCount() > 0 &&
+            item.getCount() <= Item.MAX_STACK_SIZE &&
+            (item.getUuid() != null);
+    }
+
+    private boolean validatePokemonData(PokemonData pokemon) {
+        return pokemon != null &&
+            pokemon.getName() != null &&
+            !pokemon.getName().isEmpty() &&
+            pokemon.getLevel() > 0 &&
+            pokemon.getLevel() <= 100 &&
+            (pokemon.getUuid() != null);
+    }
+    public WorldData loadAndValidateWorld(String worldName) {
+        synchronized(saveLock) {
+            try {
+                // First check cache
+                WorldData cached = worldCache.get(worldName);
+                if (cached != null) {
+                    GameLogger.info("Found cached world: " + worldName);
+                    return cached;
+                }
+
+                // Then try loading from storage
+                String worldPath = "worlds/singleplayer/" + worldName + "/world.json";
+                FileHandle worldFile = Gdx.files.local(worldPath);
+
+                if (worldFile.exists()) {
+                    String jsonContent = worldFile.readString();
+                    WorldData worldData = JsonConfig.getInstance().fromJson(WorldData.class, jsonContent);
+
+                    if (worldData != null && validateWorldData(worldData)) {
+                        // Cache valid world
+                        worldCache.put(worldName, worldData);
+                        GameLogger.info("Loaded existing world: " + worldName);
+                        return worldData;
+                    } else {
+                        GameLogger.error("Invalid world data for: " + worldName);
+                    }
+                }
+
+                // Only create new if no valid existing world
+                return null;
+
+            } catch (Exception e) {
+                GameLogger.error("Error loading world: " + worldName + " - " + e.getMessage());
+                return null;
+            }
+        }
+    }public void updateWorld(String name, WorldData worldData) {
         if (name == null || worldData == null) {
             throw new IllegalArgumentException("World name and data cannot be null");
         }

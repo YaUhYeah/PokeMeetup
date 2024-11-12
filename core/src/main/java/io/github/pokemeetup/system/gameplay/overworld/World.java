@@ -341,17 +341,7 @@ public class World {
         return currentPlayerData;
     }
 
-    public void setPlayerData(PlayerData playerData) {
-    }
 
-    public void save() {
-        if (player != null) {
-            updatePlayerData();
-            GameLogger.info("Saving latest player state:");
-            GameLogger.info("Position: " + currentPlayerData.getX() + "," + currentPlayerData.getY());
-            GameLogger.info("Inventory: " + currentPlayerData.getInventoryItems());
-        }
-    }
 
     public String getName() {
         return name;
