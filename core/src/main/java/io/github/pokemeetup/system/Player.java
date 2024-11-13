@@ -17,7 +17,10 @@ import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.pokemon.PokemonParty;
 import io.github.pokemeetup.pokemon.WildPokemon;
 import io.github.pokemeetup.screens.otherui.BuildModeUI;
+import io.github.pokemeetup.screens.otherui.CraftingUI;
+import io.github.pokemeetup.screens.otherui.ChestUI;
 import io.github.pokemeetup.system.data.PlayerData;
+
 import io.github.pokemeetup.system.data.PokemonData;
 import io.github.pokemeetup.system.gameplay.PlayerAnimations;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
@@ -731,6 +734,20 @@ public class Player {
         return buildMode;
     }
 
+    public void openCraftingTable() {
+        if (buildMode) {
+            // TODO: Implement crafting UI
+            GameLogger.info("Opening crafting table");
+        }
+    }
+
+    public void openChestInventory(PlaceableBlock chest) {
+        if (buildMode) {
+            // TODO: Implement chest inventory UI
+            GameLogger.info("Opening chest inventory");
+        }
+    }
+
     public void setBuildMode(boolean buildMode) {
         this.buildMode = buildMode;
         if (buildModeUI != null) {
@@ -744,6 +761,7 @@ public class Player {
             }
         }
     }   public Inventory getInventory() {
+
         synchronized (inventoryLock) {
             if (inventory == null) {
                 GameLogger.error("Player inventory is null - creating new");
@@ -816,3 +834,5 @@ public class Player {
     }
 
 }
+
+
