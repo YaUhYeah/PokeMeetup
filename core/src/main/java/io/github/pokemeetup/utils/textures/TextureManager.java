@@ -1,4 +1,4 @@
-package io.github.pokemeetup.utils;
+package io.github.pokemeetup.utils.textures;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
@@ -6,14 +6,16 @@ import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import io.github.pokemeetup.managers.BiomeHandlers;
 import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.HashMap;
 import java.util.Map;
 
-import static io.github.pokemeetup.utils.TileType.*;
+import static io.github.pokemeetup.utils.textures.TileType.*;
 
 public class TextureManager {
     public static final int TYPE_ICON_WIDTH = 64;
@@ -37,7 +39,35 @@ public class TextureManager {
     public static TextureAtlas battlebacks;
     public static TextureAtlas mountains;
     public static TextureAtlas effects;
+    public static TextureAtlas atlasPlains;
+    public static TextureAtlas atlasForest;
+    public static TextureAtlas atlasMountains;
+    public static TextureAtlas atlasRuins;
+    public static TextureAtlas atlasSafari;
+    public static TextureAtlas atlasSnow;
+    public static TextureAtlas atlasDesert;
+    public static TextureAtlas atlasSwamp;
+    public static TextureAtlas atlasHaunted;
+    public static TextureAtlas atlasCherryBlossom;
+    public static TextureAtlas atlasVolcano;
+
     private static boolean usingFallbackSystem = false;
+    private static Texture whitePixel;private static void validateHauntedTextures() {
+        // List of all expected texture IDs
+        int[] expectedIds = {
+            5110, 5111, 5112,  // Trees
+            5420, 5421, 5422,  // Platforms
+            5430, 5431, 5432,  // Walls
+            5500, 5501, 5502,  // Mushrooms
+            5600, 5601, 5602   // Decorations
+        };
+
+        for (int id : expectedIds) {
+            if (tileTextures.get(id) == null) {
+                GameLogger.error("Missing haunted texture for ID: " + id);
+            }
+        }
+    }
 
     static {
         // Initialize status colors
@@ -336,10 +366,26 @@ public class TextureManager {
     public static void debugPokemonAtlas() {
     }
 
+    public static Texture getWhitePixel() {
+        if (whitePixel == null) {
+            // Create on demand if not initialized
+            Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+            pixmap.setColor(Color.WHITE);
+            pixmap.fill();
+            whitePixel = new Texture(pixmap);
+            pixmap.dispose();
+        }
+        return whitePixel;
+    }
+
     public static void initialize(TextureAtlas battlebacks, TextureAtlas ui,
                                   TextureAtlas pokemonback, TextureAtlas pokemonfront, TextureAtlas pokemonicon,
                                   TextureAtlas pokemonoverworld, TextureAtlas items, TextureAtlas boy,
-                                  TextureAtlas tiles, TextureAtlas effects, TextureAtlas mountains) {
+                                  TextureAtlas tiles, TextureAtlas effects, TextureAtlas mountains,
+                                  TextureAtlas plains, TextureAtlas ruins, TextureAtlas safari,
+                                  TextureAtlas snow, TextureAtlas desert, TextureAtlas swamp,
+                                  TextureAtlas haunted, TextureAtlas cherryBlossom,
+                                  TextureAtlas volcano, TextureAtlas atlasMountains, TextureAtlas atlasForest) {
 
         TextureManager.effects = effects;
         TextureManager.battlebacks = battlebacks;
@@ -352,10 +398,38 @@ public class TextureManager {
         TextureManager.boy = boy;
         TextureManager.tiles = tiles;
         TextureManager.mountains = mountains;
-        
+        TextureManager.atlasForest = atlasForest;
+
+        // Create white pixel texture
+        Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+        pixmap.setColor(Color.WHITE);
+        pixmap.fill();
+        whitePixel = new Texture(pixmap);
+        pixmap.dispose();
+        // Initialize new atlas variables
+        TextureManager.atlasPlains = plains;
+        TextureManager.atlasRuins = ruins;
+        TextureManager.atlasSafari = safari;
+        TextureManager.atlasSnow = snow;
+        TextureManager.atlasDesert = desert;
+        TextureManager.atlasSwamp = swamp; TextureManager.atlasHaunted = haunted;
+        if (haunted == null) {
+            GameLogger.error("Haunted atlas failed to initialize!");
+        } else {
+            GameLogger.info("Haunted atlas initialized with " + haunted.getRegions().size + " regions");
+        }
+        TextureManager.atlasCherryBlossom = cherryBlossom;
+        TextureManager.atlasMountains = atlasMountains;
+        TextureManager.atlasVolcano = volcano;
+        if (haunted != null) {
+            GameLogger.info("=== Haunted Atlas Contents ===");
+            for (TextureAtlas.AtlasRegion region : haunted.getRegions()) {
+                GameLogger.info(region.name + " [" + region.getRegionWidth() + "x" + region.getRegionHeight() + "]");
+            }
+            GameLogger.info("============================");
+        }
         // Initialize biome textures
-        BiomeTextureManager.initialize();
-        
+
         loadTypeAndStatusIcons();
         loadCentralTileTextures();
 
@@ -363,24 +437,261 @@ public class TextureManager {
         debugAtlas("tiles", tiles);
         debugAtlas("ui", ui);
         debugAtlas("boy", boy);
+        debugAtlas("plains", plains);
+        debugAtlas("ruins", ruins);
+        debugAtlas("safari", safari);
+        debugAtlas("snow", snow);
+        debugAtlas("desert", desert);
+        debugAtlas("swamp", swamp);
+        debugAtlas("haunted", haunted);
+        debugAtlas("cherryBlossom", cherryBlossom);
+        debugAtlas("volcano", volcano);
         debugPokemonAtlas();
         GameLogger.info("=== Texture Manager Initialization Complete ===");
-
-    public static TextureRegion getTileTexture(BiomeType biome, String tileName) {
-        return BiomeTextureManager.getTile(biome, tileName);
-    }
-
-    private static void loadCentralTileTextures() {
-
     }
 
 
+    private static void loadHauntedBiomeTextures() {
+        if (atlasHaunted == null) {
+            GameLogger.error("Haunted atlas is null!");
+            return;
+        }
+
+        BiomeHandlers.PlainsBiomeHandler.HauntedBiomeHandler handler = new BiomeHandlers.PlainsBiomeHandler.HauntedBiomeHandler();
+        Map<String, TextureRegion> hauntedTiles = handler.getAllTiles(atlasHaunted);
+
+        // Map the split tiles to our tile IDs
+        for (Map.Entry<String, TextureRegion> entry : hauntedTiles.entrySet()) {
+            String key = entry.getKey();
+            TextureRegion region = entry.getValue();
+
+            if (key.startsWith("haunted_tree_dark_")) {
+                int index = extractIndex(key);
+                tileTextures.put(5110 + index, region);
+            } else if (key.startsWith("haunted_platform_")) {
+                int index = extractIndex(key);
+                tileTextures.put(5420 + index, region);
+            } else if (key.startsWith("haunted_wall_stone_")) {
+                int index = extractIndex(key);
+                tileTextures.put(5430 + index, region);
+            } else if (key.startsWith("haunted_mushroom_")) {
+                int index = extractIndex(key);
+                tileTextures.put(5500 + index, region);
+            } else if (key.startsWith("haunted_decoration_")) {
+                int index = extractIndex(key);
+                tileTextures.put(5600 + index, region);
+            }
+        }
+    }private static int extractIndex(String tileName) {
+        String[] parts = tileName.split("_");
+        if (parts.length >= 4) {
+            try {
+                int row = Integer.parseInt(parts[parts.length - 2]);
+                int col = Integer.parseInt(parts[parts.length - 1]);
+                return row * 10 + col;
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+        return 0;
+    }
+    private static void loadVolcanoBiomeTextures() {
+        // Ground and Base Tiles
+        tileTextures.put(VOLCANO_GROUND_ROCK, atlasVolcano.findRegion("volcano_ground_rock_0_0"));
+        tileTextures.put(VOLCANO_GROUND_ROCK, atlasVolcano.findRegion("volcano_ground_rock_0_1"));
+        tileTextures.put(VOLCANO_GROUND_LAVA, atlasVolcano.findRegion("volcano_ground_lava_0_0"));
+        tileTextures.put(VOLCANO_BRIDGE, atlasVolcano.findRegion("volcano_bridge_0_0"));
+
+        // Rock Formations
+        tileTextures.put(VOLCANO_ROCK_FORMATION, atlasVolcano.findRegion("volcano_rock_formation_0_0"));
+        tileTextures.put(VOLCANO_ROCK_FORMATION, atlasVolcano.findRegion("volcano_rock_formation_1_0"));
+        tileTextures.put(VOLCANO_ROCK_SMALL, atlasVolcano.findRegion("volcano_rock_small_0_0"));
+        tileTextures.put(VOLCANO_ROCK_EDGE, atlasVolcano.findRegion("volcano_rock_edge_0_0"));
+
+        // Lava Features
+        tileTextures.put(VOLCANO_LAVA_POOL, atlasVolcano.findRegion("volcano_lava_pool_0_0"));
+        tileTextures.put(VOLCANO_LAVA_FLOW, atlasVolcano.findRegion("volcano_lava_flow_0_0"));
+        tileTextures.put(VOLCANO_PLATFORM, atlasVolcano.findRegion("volcano_platform_0_0"));
+    }
+
+    private static void loadForestBiomeTextures() {
+        // Ground Types
+        tileTextures.put(FOREST_GROUND, atlasForest.findRegion("forest_ground_0_0"));
+        tileTextures.put(FOREST_GROUND, atlasForest.findRegion("forest_ground_0_1"));
+        tileTextures.put(FOREST_GROUND_DECORATED, atlasForest.findRegion("forest_ground_decorated_0_0"));
+        tileTextures.put(FOREST_GROUND_DECORATED, atlasForest.findRegion("forest_ground_decorated_0_1"));
+        tileTextures.put(FOREST_PATH, atlasForest.findRegion("forest_path_0_0"));
+
+        // Flora
+        tileTextures.put(FOREST_FLOWER, atlasForest.findRegion("forest_flower_0_0"));
+        tileTextures.put(FOREST_FLOWER, atlasForest.findRegion("forest_flower_0_1"));
+        tileTextures.put(FOREST_FLOWER, atlasForest.findRegion("forest_flower_0_2"));
+        tileTextures.put(FOREST_FLOWER_TALL, atlasForest.findRegion("forest_flower_tall_0_0"));
+        tileTextures.put(FOREST_FLOWER_TALL, atlasForest.findRegion("forest_flower_tall_0_1"));
+        tileTextures.put(FOREST_FLOWER_TALL, atlasForest.findRegion("forest_flower_tall_0_2"));
+
+        // Trees and Vegetation
+        tileTextures.put(FOREST_TREE_LARGE, atlasForest.findRegion("forest_tree_large_0_0"));
+        tileTextures.put(FOREST_TREE_LARGE, atlasForest.findRegion("forest_tree_large_0_1"));
+        tileTextures.put(FOREST_TREE_LARGE, atlasForest.findRegion("forest_tree_large_1_0"));
+        tileTextures.put(FOREST_TREE_LARGE, atlasForest.findRegion("forest_tree_large_1_1"));
+        tileTextures.put(FOREST_VEGETATION_SMALL, atlasForest.findRegion("forest_vegetation_small_0_0"));
+        tileTextures.put(FOREST_VEGETATION_SMALL, atlasForest.findRegion("forest_vegetation_small_0_1"));
+    }
+
+    private static void loadCherryBlossomBiomeTextures() {
+        // Ground Types
+        tileTextures.put(CHERRY_GROUND, atlasCherryBlossom.findRegion("cherry_ground_0_0"));
+        tileTextures.put(CHERRY_GROUND_DETAIL, atlasCherryBlossom.findRegion("cherry_ground_detail_0_0"));
+        tileTextures.put(CHERRY_GROUND_DETAIL, atlasCherryBlossom.findRegion("cherry_ground_detail_0_1"));
+        tileTextures.put(CHERRY_WATER, atlasCherryBlossom.findRegion("cherry_water_0"));
+
+        // Trees
+        tileTextures.put(CHERRY_TREE_GREEN, atlasCherryBlossom.findRegion("cherry_tree_green_0_0"));
+        tileTextures.put(CHERRY_TREE_GREEN, atlasCherryBlossom.findRegion("cherry_tree_green_1_0"));
+        tileTextures.put(CHERRY_TREE_GREEN, atlasCherryBlossom.findRegion("cherry_tree_green_2_0"));
+        tileTextures.put(CHERRY_TREE_PINK, atlasCherryBlossom.findRegion("cherry_tree_pink_0_0"));
+        tileTextures.put(CHERRY_TREE_PINK, atlasCherryBlossom.findRegion("cherry_tree_pink_1_0"));
+        tileTextures.put(CHERRY_TREE_PINK, atlasCherryBlossom.findRegion("cherry_tree_pink_2_0"));
+        tileTextures.put(CHERRY_TREE_SMALL, atlasCherryBlossom.findRegion("cherry_tree_small_0_0"));
+        tileTextures.put(CHERRY_TREE_SMALL, atlasCherryBlossom.findRegion("cherry_tree_small_1_0"));
+
+        // Structures
+        tileTextures.put(CHERRY_PLATFORM_WOOD, atlasCherryBlossom.findRegion("cherry_platform_wood_0_0"));
+        tileTextures.put(CHERRY_PLATFORM_WOOD, atlasCherryBlossom.findRegion("cherry_platform_wood_1_0"));
+        tileTextures.put(CHERRY_PLATFORM_STONE, atlasCherryBlossom.findRegion("cherry_platform_stone_0_0"));
+        tileTextures.put(CHERRY_PLATFORM_STONE, atlasCherryBlossom.findRegion("cherry_platform_stone_1_0"));
+        tileTextures.put(CHERRY_PLANTER, atlasCherryBlossom.findRegion("cherry_planter_0_0"));
+        tileTextures.put(CHERRY_BENCH, atlasCherryBlossom.findRegion("cherry_bench_0_0"));
+
+        // Features
+        tileTextures.put(CHERRY_ROCK, atlasCherryBlossom.findRegion("cherry_rock_0_0"));
+        tileTextures.put(CHERRY_ROCK, atlasCherryBlossom.findRegion("cherry_rock_1_0"));
+        tileTextures.put(CHERRY_DECORATION, atlasCherryBlossom.findRegion("cherry_decoration_0_0"));
+    }
+
+    private static void loadSafariBiomeTextures() {
+        // Ground Types
+        tileTextures.put(SAFARI_GROUND_GRASS, atlasSafari.findRegion("safari_ground_grass_0"));
+        tileTextures.put(SAFARI_GROUND_GRASS, atlasSafari.findRegion("safari_ground_grass_1"));
+        tileTextures.put(SAFARI_GROUND_DIRT, atlasSafari.findRegion("safari_ground_dirt_0"));
+        tileTextures.put(SAFARI_GROUND_DIRT, atlasSafari.findRegion("safari_ground_dirt_1"));
+
+        // Rock Formations
+        tileTextures.put(SAFARI_ROCK, atlasSafari.findRegion("safari_rock_0_0"));
+        tileTextures.put(SAFARI_ROCK, atlasSafari.findRegion("safari_rock_0_1"));
+        tileTextures.put(SAFARI_ROCK, atlasSafari.findRegion("safari_rock_0_2"));
+        tileTextures.put(SAFARI_ROCK_BORDER, atlasSafari.findRegion("safari_rock_border_0_0"));
+        tileTextures.put(SAFARI_ROCK_BORDER, atlasSafari.findRegion("safari_rock_border_0_1"));
+
+        // Vegetation
+        tileTextures.put(SAFARI_TREE_LARGE, atlasSafari.findRegion("safari_tree_large_0_0"));
+        tileTextures.put(SAFARI_TREE_LARGE, atlasSafari.findRegion("safari_tree_large_0_1"));
+        tileTextures.put(SAFARI_VEGETATION_SMALL, atlasSafari.findRegion("safari_vegetation_small_0_0"));
+        tileTextures.put(SAFARI_VEGETATION_DENSE, atlasSafari.findRegion("safari_vegetation_dense_0_0"));
+    }
+
+    private static void loadSwampBiomeTextures() {
+        // Ground Types
+        tileTextures.put(SWAMP_GROUND_WATER, atlasSwamp.findRegion("swamp_ground_water_0_0"));
+        tileTextures.put(SWAMP_GROUND_GREEN, atlasSwamp.findRegion("swamp_ground_green_0_0"));
+        tileTextures.put(SWAMP_GROUND_BROWN, atlasSwamp.findRegion("swamp_ground_brown_0_0"));
+
+        // Vegetation
+        tileTextures.put(SWAMP_TREE_MANGROVE, atlasSwamp.findRegion("swamp_tree_mangrove_0_0"));
+        tileTextures.put(SWAMP_TREE_MANGROVE, atlasSwamp.findRegion("swamp_tree_mangrove_0_1"));
+        tileTextures.put(SWAMP_ROOTS, atlasSwamp.findRegion("swamp_roots_0_0"));
+        tileTextures.put(SWAMP_VEGETATION, atlasSwamp.findRegion("swamp_vegetation_0_0"));
+
+        // Structures
+        tileTextures.put(SWAMP_PLATFORM, atlasSwamp.findRegion("swamp_platform_0_0"));
+        tileTextures.put(SWAMP_PLATFORM, atlasSwamp.findRegion("swamp_platform_0_1"));
+    }
+    private static void loadAllBiomeTextures() {
+        // Haunted Biome
+        if (atlasHaunted != null) {
+            BiomeHandlers.PlainsBiomeHandler.HauntedBiomeHandler hauntedHandler = new BiomeHandlers.PlainsBiomeHandler.HauntedBiomeHandler();
+            loadTilesForBiome(hauntedHandler.getAllTiles(atlasHaunted), "haunted", 5000);
+        }
+
+        // Safari Biome
+        if (atlasSafari != null) {
+            BiomeHandlers.PlainsBiomeHandler.SafariTilesetHandler safariHandler = new BiomeHandlers.PlainsBiomeHandler.SafariTilesetHandler();
+            loadTilesForBiome(safariHandler.getSafariTiles(atlasSafari), "safari", 8000);
+        }
+
+        // Snow Biome
+        if (atlasSnow != null) {
+            BiomeHandlers.PlainsBiomeHandler.SnowBiomeHandler snowHandler = new BiomeHandlers.PlainsBiomeHandler.SnowBiomeHandler();
+            loadTilesForBiome(snowHandler.getAllTiles(atlasSnow), "snow", 4000);
+        }
+
+        // Forest Biome
+        if (atlasForest != null) {
+            BiomeHandlers.PlainsBiomeHandler.ForestBiomeHandler forestHandler = new BiomeHandlers.PlainsBiomeHandler.ForestBiomeHandler();
+            loadTilesForBiome(forestHandler.getAllTiles(atlasForest), "forest", 3000);
+        }
+
+        // Volcano Biome
+        if (atlasVolcano != null) {
+            BiomeHandlers.PlainsBiomeHandler.VolcanoBiomeHandler volcanoHandler = new BiomeHandlers.PlainsBiomeHandler.VolcanoBiomeHandler();
+            loadTilesForBiome(volcanoHandler.getAllTiles(atlasVolcano), "volcano", 10000);
+        }
+
+        // Cherry Blossom Biome
+        if (atlasCherryBlossom != null) {
+            BiomeHandlers.PlainsBiomeHandler.CherryBlossomBiomeHandler cherryHandler = new BiomeHandlers.PlainsBiomeHandler.CherryBlossomBiomeHandler();
+            loadTilesForBiome(cherryHandler.getAllTiles(atlasCherryBlossom), "cherry", 7000);
+        }
+
+        // Swamp Biome
+        if (atlasSwamp != null) {
+            BiomeHandlers.PlainsBiomeHandler.SwampBiomeHandler swampHandler = new BiomeHandlers.PlainsBiomeHandler.SwampBiomeHandler();
+            loadTilesForBiome(swampHandler.getAllTiles(atlasSwamp), "swamp", 9000);
+        }
+    }
+
+    private static void loadTilesForBiome(Map<String, TextureRegion> biomeTiles, String prefix, int baseOffset) {
+        for (Map.Entry<String, TextureRegion> entry : biomeTiles.entrySet()) {
+            String key = entry.getKey();
+            if (key.startsWith(prefix + "_")) {
+                String[] parts = key.split("_");
+                if (parts.length >= 4) {
+                    try {
+                        String type = parts[1];
+                        int row = Integer.parseInt(parts[parts.length - 2]);
+                        int col = Integer.parseInt(parts[parts.length - 1]);
+                        int typeOffset = getTileTypeOffset(type);
+                        int finalId = baseOffset + typeOffset + (row * 10) + col;
+                        tileTextures.put(finalId, entry.getValue());
+                    } catch (NumberFormatException e) {
+                        GameLogger.error("Failed to parse indices for tile: " + key);
+                    }
+                }
+            }
+        }
+    }
+
+    private static int getTileTypeOffset(String type) {
+        switch (type) {
+            case "tree": return 110;
+            case "ground": return 20;
+            case "wall": return 430;
+            case "platform": return 420;
+            case "decoration": return 600;
+            case "rock": return 200;
+            case "water": return 30;
+            case "vegetation": return 130;
+            case "mushroom": return 500;
+            default: return 0;
+        }
+    }
     private static void loadCentralTileTextures() {
         // Ensure tiles atlas is loaded
         if (tiles == null) {
             GameLogger.error("Tiles atlas is not initialized!");
             return;
-        }
+        }loadAllBiomeTextures();
 
         // Map tile type IDs to their corresponding texture regions
         tileTextures.put(WATER, tiles.findRegion("water"));

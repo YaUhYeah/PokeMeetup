@@ -15,7 +15,7 @@ import io.github.pokemeetup.system.data.ItemData;
 import io.github.pokemeetup.system.gameplay.inventory.Item;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.HashMap;
 import java.util.Map;

@@ -1,6 +1,8 @@
 package io.github.pokemeetup.screens;
 
-import com.badlogic.gdx.*;
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
+import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
@@ -16,7 +18,7 @@ import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import io.github.pokemeetup.CreatureCaptureGame;
 import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 public class ModeSelectionScreen implements Screen {
     private final CreatureCaptureGame game;
@@ -136,7 +138,7 @@ public class ModeSelectionScreen implements Screen {
             public void changed(ChangeEvent event, Actor actor) {
                 // Start single player mode
                 GameClientSingleton.getSinglePlayerInstance();
-                game.setScreen(new WorldSelectionScreen(game));
+                game.setScreen((Screen) new WorldSelectionScreen(game));
                 dispose();
             }
         });

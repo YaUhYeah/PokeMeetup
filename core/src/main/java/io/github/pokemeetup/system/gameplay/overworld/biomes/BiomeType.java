@@ -6,6 +6,9 @@ public enum BiomeType {
     SNOW,
     HAUNTED,
     DESERT,
-    RAIN_FOREST,
-    BIG_MOUNTAINS
+    BIG_MOUNTAINS,
+    CHERRY_BLOSSOM,
+    SAFARI,
+    SWAMP,
+    VOLCANO,
 }

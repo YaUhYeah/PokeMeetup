@@ -5,12 +5,8 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import io.github.pokemeetup.system.gameplay.overworld.Chunk;
 import io.github.pokemeetup.system.gameplay.overworld.World;
-import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
-import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
-
-import java.util.Map;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 public class BiomeRenderer {
 
@@ -30,7 +26,7 @@ public class BiomeRenderer {
                 if (tileTexture != null) {
                     batch.draw(tileTexture, worldX, worldY, World.TILE_SIZE, World.TILE_SIZE);
                 } else {
-                    GameLogger.error("Missing texture for tile at (" + x + ", " + y + ") with tileType " + tileType);
+//                    GameLogger.error("Missing texture for tile at (" + x + ", " + y + ") with tileType " + tileType);
                 }
             }
         }

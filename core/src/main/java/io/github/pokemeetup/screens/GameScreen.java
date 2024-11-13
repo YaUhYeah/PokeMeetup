@@ -44,10 +44,10 @@ import io.github.pokemeetup.system.gameplay.overworld.*;
 import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
-import io.github.pokemeetup.utils.BattleAssets;
+import io.github.pokemeetup.utils.textures.BattleAssets;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.storage.InventoryConverter;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.List;
 import java.util.*;
@@ -77,8 +77,7 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     private static final float ACTION_BUTTON_SIZE = 80f;
     private static final float RUN_BUTTON_SIZE = 70f;
     private static final long SCREEN_INIT_TIMEOUT = 30000; // 30 seconds
-    public static boolean SHOW_DEBUG_INFO = false; // Toggle flag for debug info
-    private final String worldName;
+    public static boolean SHOW_DEBUG_INFO = false; // Toggle flag for debug inforldName;
     private final CreatureCaptureGame game;
     private final GameClient gameClient;
     private final Vector2 BATTLE_RESOLUTION = new Vector2(800, 480);
@@ -181,11 +180,11 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     private Rectangle centerButton; // For running
     private AndroidMovementController movementController;
 
-    public GameScreen(CreatureCaptureGame game, String username, GameClient gameClient, String worldName) {
+    public GameScreen(CreatureCaptureGame game, String username, GameClient gameClient, World world) {
         GameLogger.info("GameScreen constructor called");
         try {
             this.game = game;
-            this.worldName = worldName;
+            this.world = world;
             this.username = username;
             this.gameClient = gameClient;
             game.setScreen(new LoadingScreen(game, this));
@@ -321,7 +320,7 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
             player.setPokemonParty(party);
         }
 
-        if (party.getSize() == 0) {
+        if (party.getFirstPokemon()==null) {
             GameLogger.info("No Pokemon in party - initiating starter selection");
             initiateStarterSelection();
         } else {
@@ -378,25 +377,13 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
                 GameLogger.info("Using existing world from GameClient");
                 return;
             }
-            if (worldName == null) {
+            if (this.world == null) {
                 String defaultWorldName = isMultiplayer ?
                     CreatureCaptureGame.MULTIPLAYER_WORLD_NAME :
                     "singleplayer_world";
                 GameLogger.info("No world name provided, using default: " + defaultWorldName);
                 this.world = new World(
                     defaultWorldName,
-                    World.WORLD_SIZE,
-                    World.WORLD_SIZE,
-                    gameClient.getWorldSeed(),
-                    gameClient,
-                    new BiomeManager(gameClient.getWorldSeed())
-                );
-            } else {
-                GameLogger.info("Creating new world with name: " + worldName);
-                this.world = new World(
-                    worldName,
-                    World.WORLD_SIZE,
-                    World.WORLD_SIZE,
                     gameClient.getWorldSeed(),
                     gameClient,
                     new BiomeManager(gameClient.getWorldSeed())
@@ -459,16 +446,12 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
                 throw new IllegalStateException("World initialization failed");
             }
 
-            // 4. Setup camera (needs valid player position)
-            setupCamera();
 
             // 5. Initialize player's resources and animations
             if (player != null) {
                 player.initializeResources();
                 GameLogger.info("Player resources initialized");
             }
-
-            // 6. Load and apply player data
             if (isMultiplayer) {
                 PlayerData playerDataFromServer = gameClient.getCurrentWorld().getWorldData().getPlayerData(username);
                 if (playerDataFromServer != null) {
@@ -500,6 +483,7 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
                 playerData.applyToPlayer(player);
             }
 
+            setupCamera();
             // 7. Initialize essential game systems
             this.inventory = player.getInventory();
             this.spawnManager = world.getPokemonSpawnManager();
@@ -542,7 +526,6 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
 
         } catch (Exception e) {
             GameLogger.error("Error during initialization: " + e.getMessage());
-            e.printStackTrace();
             handleInitializationFailure();
         }
     }
@@ -615,8 +598,29 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         GameLogger.info("Starter selection completed: " + starter.getName());
         starterSelectionComplete = true;
 
+        // Clear party first
+        player.getPokemonParty().clearParty();
+
+        // Add starter Pokemon
         player.getPokemonParty().addPokemon(starter);
+
+        // Verify party state
+        if (player.getPokemonParty().getSize() == 0) {
+            GameLogger.error("Failed to add starter Pokemon to party!");
+        } else {
+            GameLogger.info("Successfully added starter " + starter.getName() +
+                " to party. Party size: " + player.getPokemonParty().getSize());
+        }
+
+        // Update player data with new party
         player.updatePlayerData();
+
+        // Force a save to ensure the starter is persisted
+        if (player.getWorld() != null && player.getWorld().getWorldData() != null) {
+            player.getWorld().getWorldData().savePlayerData(player.getUsername(), player.getPlayerData());
+            GameLogger.info("Saved player data with starter Pokemon");
+        }
+
         updateSlotVisuals();
 
         if (starterTable != null) {

@@ -1,6 +1,6 @@
 package io.github.pokemeetup.screens.otherui;
 
-import com.badlogic.gdx.*;
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
@@ -23,13 +23,11 @@ import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.ObjectMap;
 import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.pokemon.attacks.Move;
-import io.github.pokemeetup.utils.BattleAssets;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 public class BattleTable extends Table {
     public static final int HP_BAR_WIDTH = 150;

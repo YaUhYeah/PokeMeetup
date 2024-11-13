@@ -16,8 +16,7 @@ import io.github.pokemeetup.pokemon.data.PokemonDatabase;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.ResponsiveLayout;
 import io.github.pokemeetup.utils.ScalingUtils;
-import io.github.pokemeetup.utils.TextureManager;
-import static io.github.pokemeetup.screens.LoginScreen.MIN_WIDTH;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 public class StarterSelectionTable extends Table {
     private static final float BASE_TITLE_SCALE = 2.0f;

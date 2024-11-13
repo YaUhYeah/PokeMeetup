@@ -2,33 +2,69 @@ package io.github.pokemeetup.lwjgl3;
 
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3Application;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3ApplicationConfiguration;
+import com.badlogic.gdx.backends.lwjgl3.Lwjgl3Window;
+import com.badlogic.gdx.backends.lwjgl3.Lwjgl3WindowListener;
 import io.github.pokemeetup.CreatureCaptureGame;
+import io.github.pokemeetup.utils.GameLogger;
 
-/** Launches the desktop (LWJGL3) application. */
 public class Lwjgl3Launcher {
-    public static void main(String[] args) {
-        if (StartupHelper.startNewJvmIfRequired()) return; // This handles macOS support and helps on Windows.
-        createApplication();
-    }
+    private static CreatureCaptureGame game;
+    private static Lwjgl3Application app;
 
-    private static Lwjgl3Application createApplication() {
-        return new Lwjgl3Application(new CreatureCaptureGame(false), getDefaultConfiguration());
+    public static void main(String[] args) {
+        Lwjgl3ApplicationConfiguration configuration = getDefaultConfiguration();
+
+        configuration.setWindowListener(new Lwjgl3WindowListener() {
+            @Override
+            public void created(Lwjgl3Window window) {
+            }
+
+            @Override
+            public void iconified(boolean isIconified) {}
+
+            @Override
+            public void maximized(boolean isMaximized) {}
+
+            @Override
+            public void focusLost() {}
+
+            @Override
+            public void focusGained() {}
+
+            @Override
+            public boolean closeRequested() {
+                if (game != null) {
+                    GameLogger.info("Window close requested, saving final state...");
+                    try {
+                        game.saveGame();
+                        GameLogger.info("Game saved successfully before close");
+                    } catch (Exception e) {
+                        GameLogger.error("Failed to save during shutdown: " + e.getMessage());
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public void filesDropped(String[] files) {}
+
+            @Override
+            public void refreshRequested() {}
+        });
+
+        // Create and store game instance
+        game = new CreatureCaptureGame(false);
+
+        // Create and store application
+        app = new Lwjgl3Application(game, configuration);
     }
 
     private static Lwjgl3ApplicationConfiguration getDefaultConfiguration() {
         Lwjgl3ApplicationConfiguration configuration = new Lwjgl3ApplicationConfiguration();
         configuration.setTitle("PokeMeetup");
-        //// Vsync limits the frames per second to what your hardware can display, and helps eliminate
-        //// screen tearing. This setting doesn't always work on Linux, so the line after is a safeguard.
         configuration.useVsync(true);
-        //// Limits FPS to the refresh rate of the currently active monitor, plus 1 to try to match fractional
-        //// refresh rates. The Vsync setting above should limit the actual FPS to match the monitor.
         configuration.setForegroundFPS(Lwjgl3ApplicationConfiguration.getDisplayMode().refreshRate + 1);
-        //// If you remove the above line and set Vsync to false, you can get unlimited FPS, which can be
-        //// useful for testing performance, but can also be very stressful to some hardware.
-        //// You may also need to configure GPU drivers to fully disable Vsync; this can cause screen tearing.
-        configuration.setWindowedMode(640, 480);
-        //// You can change these files; they are in lwjgl3/src/main/resources/ .
+        configuration.setWindowedMode(800, 600);
         configuration.setWindowIcon("libgdx128.png", "libgdx64.png", "libgdx32.png", "libgdx16.png");
         return configuration;
     }

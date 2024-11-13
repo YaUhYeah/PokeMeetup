@@ -19,7 +19,7 @@ import com.esotericsoftware.kryonet.Listener;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.Base64;
 

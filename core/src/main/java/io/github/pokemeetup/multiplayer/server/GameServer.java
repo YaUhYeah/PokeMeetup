@@ -32,13 +32,12 @@ import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.PasswordUtils;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 import io.github.pokemeetup.utils.storage.JsonConfig;
 
 import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.*;

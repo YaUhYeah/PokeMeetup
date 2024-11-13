@@ -1,6 +1,9 @@
 package io.github.pokemeetup.screens;
 
-import com.badlogic.gdx.*;
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.InputMultiplexer;
+import com.badlogic.gdx.InputProcessor;
+import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
@@ -13,25 +16,19 @@ import com.badlogic.gdx.scenes.scene2d.*;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.*;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
-import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.system.InputHandler;
 import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.data.ItemData;
-import io.github.pokemeetup.system.data.PlayerData;
 import io.github.pokemeetup.system.gameplay.inventory.*;
-import io.github.pokemeetup.system.gameplay.inventory.crafting.CraftingSystem;
 import io.github.pokemeetup.system.gameplay.inventory.secureinventories.InventoryObserver;
 import io.github.pokemeetup.system.gameplay.inventory.secureinventories.InventorySlotData;
 import io.github.pokemeetup.screens.otherui.InventorySlotUI;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.storage.InventoryConverter;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.*;
 import java.util.List;
-
-import static io.github.pokemeetup.system.gameplay.inventory.Inventory.*;
 
 public class InventoryScreen implements Screen, InventoryObserver {
     private static final float BACKGROUND_OPACITY = 0.5f;

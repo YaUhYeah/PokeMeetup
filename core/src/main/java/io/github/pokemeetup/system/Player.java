@@ -9,13 +9,10 @@ import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
-import io.github.pokemeetup.CreatureCaptureGame;
 import io.github.pokemeetup.blocks.PlaceableBlock;
 import io.github.pokemeetup.multiplayer.client.GameClient;
-import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.pokemon.PokemonParty;
-import io.github.pokemeetup.pokemon.WildPokemon;
 import io.github.pokemeetup.screens.otherui.BuildModeUI;
 import io.github.pokemeetup.system.data.PlayerData;
 import io.github.pokemeetup.system.data.PokemonData;
@@ -26,9 +23,7 @@ import io.github.pokemeetup.system.data.ItemData;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 import io.github.pokemeetup.system.gameplay.overworld.PokemonSpawnManager;
 import io.github.pokemeetup.system.gameplay.overworld.World;
-import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
 import io.github.pokemeetup.utils.storage.InventoryConverter;
 
 import java.util.*;
@@ -623,6 +618,49 @@ public class Player {
         playerData.setMoving(isMoving);
         playerData.setWantsToRun(isRunning);
         playerData.setInventoryItems(inventory.getAllItems());
+
+        // Create a fixed-size list for party Pokemon
+        List<PokemonData> partyData = new ArrayList<>(Collections.nCopies(PokemonParty.MAX_PARTY_SIZE, null));
+
+        synchronized (pokemonParty.partyLock) {  // Use the party's lock for thread safety
+            List<Pokemon> currentParty = pokemonParty.getParty();
+
+            // Log the current party state
+            GameLogger.info("Converting party of size " + currentParty.size() + " to PokemonData");
+
+            // Convert each Pokemon to PokemonData while maintaining slot positions
+            for (int i = 0; i < PokemonParty.MAX_PARTY_SIZE; i++) {
+                Pokemon pokemon = i < currentParty.size() ? currentParty.get(i) : null;
+                if (pokemon != null) {
+                    try {
+                        PokemonData pokemonData = PokemonData.fromPokemon(pokemon);
+                        if (pokemonData.verifyIntegrity()) {
+                            partyData.set(i, pokemonData);
+                            GameLogger.info("Added Pokemon to slot " + i + ": " + pokemon.getName());
+                        } else {
+                            GameLogger.error("Pokemon data failed integrity check at slot " + i);
+                            partyData.set(i, null);
+                        }
+                    } catch (Exception e) {
+                        GameLogger.error("Failed to convert Pokemon at slot " + i + ": " + e.getMessage());
+                        partyData.set(i, null);
+                    }
+                }
+            }
+        }
+
+        // Verify the party data before setting
+        boolean hasValidPokemon = partyData.stream().anyMatch(Objects::nonNull);
+        if (!hasValidPokemon) {
+            GameLogger.error("No valid Pokemon found in party data!");
+        }
+
+        // Set the verified party data
+        playerData.setPartyPokemon(partyData);
+
+        // Log final state
+        GameLogger.info("Updated player data with " +
+            partyData.stream().filter(Objects::nonNull).count() + " Pokemon in party");
     }
 
 

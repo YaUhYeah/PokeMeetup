@@ -1,4 +1,4 @@
-package io.github.pokemeetup.utils;
+package io.github.pokemeetup.utils.textures;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.files.FileHandle;
@@ -10,6 +10,7 @@ import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.scenes.scene2d.ui.ProgressBar;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
 import io.github.pokemeetup.pokemon.Pokemon;
+import io.github.pokemeetup.utils.GameLogger;
 
 import java.util.HashMap;
 import java.util.Map;

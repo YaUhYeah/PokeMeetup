@@ -2,10 +2,9 @@ package io.github.pokemeetup.system.data;
 
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.utils.Json;
-import io.github.pokemeetup.system.gameplay.inventory.Item;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.UUID;
 

@@ -27,7 +27,7 @@ import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.io.IOException;
 import java.util.*;
@@ -1517,8 +1517,6 @@ public class GameClient {
                 GameLogger.info("Creating new World instance...");
                 currentWorld = new World(
                     "multiplayer_world",
-                    World.WORLD_SIZE,
-                    World.WORLD_SIZE,
                     response.worldSeed,
                     this,
                     new BiomeManager(response.worldSeed)

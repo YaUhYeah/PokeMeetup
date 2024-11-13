@@ -1,6 +1,6 @@
 // src/io/github/pokemeetup/managers/AssetManagerSingleton.java
 
-package io.github.pokemeetup.utils;
+package io.github.pokemeetup.utils.textures;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;

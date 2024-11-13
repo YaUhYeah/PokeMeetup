@@ -9,7 +9,7 @@ import java.util.List;
 public class PokemonParty {
     public static final int MAX_PARTY_SIZE = 6;
     private final List<Pokemon> party;
-    private final Object partyLock = new Object();
+    public final Object partyLock = new Object();
 
     public PokemonParty() {
         this.party = new ArrayList<>(MAX_PARTY_SIZE);

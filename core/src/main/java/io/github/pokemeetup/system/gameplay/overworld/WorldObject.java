@@ -9,7 +9,7 @@ import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -184,7 +184,7 @@ public class WorldObject {
         }
 
         if (type == ObjectType.TREE || type == ObjectType.SNOW_TREE ||
-            type == ObjectType.HAUNTED_TREE || type ==ObjectType.RAIN_TREE) {
+            type == ObjectType.HAUNTED_TREE || type == ObjectType.RAIN_TREE) {
             // Trees have 2x2 collision at base only
             return new Rectangle(
                 pixelX - World.TILE_SIZE, // Center the 2-tile base
@@ -265,6 +265,7 @@ public class WorldObject {
         VINES(true, false, 1, 2, RenderLayer.FULL),
         SNOW_BALL(true, true, 1, 1, RenderLayer.FULL),
         RAIN_TREE(true, true, 2, 3, RenderLayer.LAYERED),
+        CHERRY_TREE(true, true, 2, 3, RenderLayer.LAYERED),
         SUNFLOWER(true, false, 1, 2, RenderLayer.FULL),   // No collision
 
         // Collectible objects
@@ -320,6 +321,7 @@ public class WorldObject {
             objectTextures.put(ObjectType.SMALL_HAUNTED_TREE, atlas.findRegion("small_haunted_tree"));
             objectTextures.put(ObjectType.SNOW_BALL, atlas.findRegion("snowball"));
             objectTextures.put(ObjectType.RAIN_TREE, atlas.findRegion("rain_tree"));
+            objectTextures.put(ObjectType.CHERRY_TREE, atlas.findRegion("CherryTree"));
         }
 
         private void tryPlaceVine(Chunk chunk, Vector2 chunkPos, List<WorldObject> objects, Random random) {
@@ -356,14 +358,10 @@ public class WorldObject {
             List<WorldObject> objects = objectsByChunk.computeIfAbsent(chunkPos,
                 k -> new CopyOnWriteArrayList<>());
             Random random = new Random((long) (worldSeed + chunkPos.x * 31 + chunkPos.y * 17));
-
-            // First generate all non-vine objects
             List<String> spawnableObjects = biome.getSpawnableObjects().stream()
                 .filter(obj -> obj != ObjectType.VINES)
                 .map(Enum::name)
                 .collect(Collectors.toList());
-
-            // Handle object clusters
             generateObjectClusters(chunk, chunkPos, objects, biome, random);
 
             // Handle individual objects
@@ -410,11 +408,10 @@ public class WorldObject {
                 case VINES:
                 case DEAD_TREE:
                 case SMALL_HAUNTED_TREE:
-                    // Sunflower is 32x64 in your atlas (1x2 tiles)
                     batch.draw(objectTexture,
-                        renderX, renderY,            // Position
-                        World.TILE_SIZE,             // Width (1 tile)
-                        World.TILE_SIZE * 2);        // Height (2 tiles)
+                        renderX, renderY,
+                        World.TILE_SIZE,
+                        World.TILE_SIZE * 2);
                     break;
                 case BUSH:
                     batch.draw(objectTexture,
@@ -429,9 +426,13 @@ public class WorldObject {
                         World.TILE_SIZE,             // Width (1 tile)
                         World.TILE_SIZE * 2);        // Height (2 tiles)
                     break;
+                case CHERRY_TREE:
+                    batch.draw(objectTexture,
+                        renderX, renderY,
+                        World.TILE_SIZE * 2,
+                        World.TILE_SIZE * 2);
 
                 default:
-                    // Default 1x1 rendering for other objects
                     batch.draw(objectTexture,
                         renderX, renderY,
                         World.TILE_SIZE,
@@ -440,15 +441,12 @@ public class WorldObject {
         }
 
         public void renderTreeTop(SpriteBatch batch, WorldObject tree) {
-            // Position above the base, centered on the same X as the base
             float renderX = tree.getPixelX() - World.TILE_SIZE; // Centering to match the base
             float renderY = tree.getPixelY() + (World.TILE_SIZE * 2); // 2 tiles above base
 
             TextureRegion treeRegion = tree.getTexture();
             int totalWidth = treeRegion.getRegionWidth();
             int totalHeight = treeRegion.getRegionHeight();
-
-            // Top section: upper 1/3 of the texture
             int topHeight = totalHeight - (int) (totalHeight * 2 / 3f);
             int topY = 0;
 

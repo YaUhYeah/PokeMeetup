@@ -30,9 +30,8 @@ import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.multiplayer.server.config.ServerConfigManager;
 import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
 import io.github.pokemeetup.screens.otherui.ServerListEntry;
-import io.github.pokemeetup.utils.AssetManagerSingleton;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -119,7 +118,7 @@ public class LoginScreen implements Screen {
                 // Login successful
                 Gdx.app.postRunnable(() -> {
                     // Create GameScreen and switch to it
-                    GameScreen gameScreen = new GameScreen(game, username, gameClient, response.worldName);
+                    GameScreen gameScreen = new GameScreen(game, username, gameClient, game.getCurrentWorld());
                     game.setScreen(gameScreen);
                     // Dispose of the login screen resources if needed
                     dispose();
@@ -536,7 +535,7 @@ public class LoginScreen implements Screen {
                             game,
                             response.username,
                             localGameClient,
-                            response.worldName
+                            game.getCurrentWorld()
                         );
 
                         // Update loading screen's target
@@ -624,7 +623,7 @@ public class LoginScreen implements Screen {
                                 game,
                                 username,
                                 gameClient,
-                                "multiplayer_world"
+                                game.getCurrentWorld()
                             );
                             game.setScreen(gameScreen);
                             dispose(); // Clean up login screen
@@ -1059,7 +1058,7 @@ public class LoginScreen implements Screen {
                             throw new RuntimeException(e);
                         }
                         fadeToScreen(new GameScreen(game, username, gameClient,
-                            CreatureCaptureGame.MULTIPLAYER_WORLD_NAME));
+                            game.getCurrentWorld()));
 
                     } else {
                         feedbackLabel.setColor(Color.RED);
@@ -1210,7 +1209,7 @@ public class LoginScreen implements Screen {
                                         game,
                                         response.username,
                                         gameClient,
-                                        response.worldName
+                                        game.getCurrentWorld()
                                     );
 
                                     // Update loading screen's target
@@ -1254,7 +1253,7 @@ public class LoginScreen implements Screen {
                     game,
                     response.username,
                     gameClient,
-                    response.worldName
+                    game.getCurrentWorld()
                 );
 
                 // Create loading screen with game screen as target

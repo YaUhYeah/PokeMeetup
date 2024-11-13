@@ -10,7 +10,7 @@ import io.github.pokemeetup.pokemon.data.PokemonDatabase;
 import io.github.pokemeetup.system.battle.BattleCompletionHandler;
 import io.github.pokemeetup.system.gameplay.PokemonAnimations;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.ArrayList;
 import java.util.List;

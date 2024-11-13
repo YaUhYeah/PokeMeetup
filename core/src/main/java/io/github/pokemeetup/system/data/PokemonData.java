@@ -3,11 +3,9 @@ package io.github.pokemeetup.system.data;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.pokemon.Pokemon;
-import io.github.pokemeetup.pokemon.WildPokemon;
 import io.github.pokemeetup.pokemon.attacks.LearnableMove;
 import io.github.pokemeetup.pokemon.attacks.Move;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
 
 import java.io.Serializable;
 import java.util.*;

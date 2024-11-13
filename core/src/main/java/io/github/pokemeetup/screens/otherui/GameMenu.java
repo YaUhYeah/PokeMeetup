@@ -19,8 +19,6 @@ import io.github.pokemeetup.system.data.PlayerData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.storage.InventoryConverter;
-import io.github.pokemeetup.utils.storage.JsonConfig;
 
 public class GameMenu extends Actor {
     private static final float BUTTON_WIDTH = 200f;
@@ -555,13 +553,6 @@ public class GameMenu extends Actor {
         }
     }
 
-
-    public void resize(int width, int height) {
-        stage.getViewport().update(width, height, true);
-        menuWindow.setPosition((width - menuWindow.getWidth()) / 2, (height - menuWindow.getHeight()) / 2);
-        optionsWindow.setPosition((width - optionsWindow.getWidth()) / 2, (height - optionsWindow.getHeight()) / 2);
-    }
-
     public void show() {
         isVisible = true;
         menuWindow.setVisible(true);
@@ -572,28 +563,6 @@ public class GameMenu extends Actor {
         menuWindow.setVisible(false);
     }
 
-    private void switchToModeSelection(Dialog loadingDialog) {
-        Gdx.app.postRunnable(() -> {
-            try {
-                loadingDialog.hide();
-                if (gameScreen != null) {
-                    gameScreen.dispose();
-                }
-                dispose();
-                game.setScreen(new ModeSelectionScreen(game));
-            } catch (Exception e) {
-                GameLogger.error("Screen transition failed: " + e.getMessage());
-                showErrorDialog("Failed to switch screens: " + e.getMessage());
-            }
-        });
-    }
-
-    private void showErrorOnMainThread(Dialog loadingDialog, String error) {
-        Gdx.app.postRunnable(() -> {
-            loadingDialog.hide();
-            showErrorDialog("Failed to save game: " + error);
-        });
-    }
     public void dispose() {
         if (isDisposing) {
             return;

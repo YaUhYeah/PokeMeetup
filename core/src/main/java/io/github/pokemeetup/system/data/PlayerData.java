@@ -1,8 +1,10 @@
 package io.github.pokemeetup.system.data;
 
 import io.github.pokemeetup.pokemon.Pokemon;
+import io.github.pokemeetup.pokemon.PokemonParty;
 import io.github.pokemeetup.system.Player;
 import io.github.pokemeetup.system.gameplay.inventory.Inventory;
+import io.github.pokemeetup.system.gameplay.inventory.Item;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.utils.GameLogger;
@@ -75,37 +77,68 @@ public class PlayerData {
     }
 
     public void updateFromPlayer(Player player) {
-        this.x = player.getTileX();
-        this.y = player.getTileY();
-        this.direction = player.getDirection();
-        this.isMoving = player.isMoving();
-        this.wantsToRun = player.isRunning();
+        if (player == null) {
+            GameLogger.error("Cannot update from null player");
+            return;
+        }
 
-        // Deep copy inventory items
-        if (player.getInventory() != null) {
-            List<ItemData> currentItems = player.getInventory().getAllItems();
-            this.inventoryItems = new ArrayList<>(Inventory.INVENTORY_SIZE);
+        try {
+            // Update basic info
+            this.x = player.getTileX();
+            this.y = player.getTileY();
+            this.direction = player.getDirection();
+            this.isMoving = player.isMoving();
+            this.wantsToRun = player.isRunning();
 
-            for (int i = 0; i < Inventory.INVENTORY_SIZE; i++) {
-                ItemData item = i < currentItems.size() ? currentItems.get(i) : null;
-                if (item != null) {
-                    this.inventoryItems.add(item.copy());
-                } else {
-                    this.inventoryItems.add(null);
+            // Initialize fixed-size lists with nulls
+            this.inventoryItems = new ArrayList<>(Collections.nCopies(Inventory.INVENTORY_SIZE, null));
+            this.partyPokemon = new ArrayList<>(Collections.nCopies(PokemonParty.MAX_PARTY_SIZE, null));
+
+            // Update inventory items maintaining slot positions
+            if (player.getInventory() != null) {
+                List<ItemData> items = player.getInventory().getAllItems();
+                for (int i = 0; i < Inventory.INVENTORY_SIZE; i++) {
+                    if (i < items.size() && items.get(i) != null) {
+                        ItemData itemData = items.get(i);
+                        if (validateItemData(itemData)) {
+                            this.inventoryItems.set(i, itemData.copy());
+                        }
+                    }
                 }
             }
 
-            GameLogger.info("Updated PlayerData inventory with " +
-                inventoryItems.stream().filter(Objects::nonNull).count() + " non-null items");
-        }
-        if (player.getPokemonParty() != null) {
-            this.partyPokemon = new ArrayList<>();
-            for (Pokemon pokemon : player.getPokemonParty().getParty()) {
-                this.partyPokemon.add(pokemon != null ? PokemonData.fromPokemon(pokemon) : null);
+            // Update Pokemon party maintaining slot positions
+            if (player.getPokemonParty() != null) {
+                List<Pokemon> currentParty = player.getPokemonParty().getParty();
+                for (int i = 0; i < PokemonParty.MAX_PARTY_SIZE; i++) {
+                    if (i < currentParty.size() && currentParty.get(i) != null) {
+                        Pokemon pokemon = currentParty.get(i);
+                        try {
+                            PokemonData pokemonData = PokemonData.fromPokemon(pokemon);
+                            if (pokemonData.verifyIntegrity()) {
+                                this.partyPokemon.set(i, pokemonData);
+                            }
+                        } catch (Exception e) {
+                            GameLogger.error("Failed to convert Pokemon at slot " + i + ": " + e.getMessage());
+                        }
+                    }
+                }
             }
+
+            // Log the update results
+            long validItems = inventoryItems.stream().filter(Objects::nonNull).count();
+            long validPokemon = partyPokemon.stream().filter(Objects::nonNull).count();
+
+            GameLogger.info(String.format("Updated PlayerData from player %s - Items: %d/%d, Pokemon: %d/%d",
+                player.getUsername(),
+                validItems, Inventory.INVENTORY_SIZE,
+                validPokemon, PokemonParty.MAX_PARTY_SIZE));
+
+        } catch (Exception e) {
+            GameLogger.error("Error updating PlayerData: " + e.getMessage());
+            e.printStackTrace();
         }
     }
-
     private float tileToPixelX(int tileX) {
         return tileX * World.TILE_SIZE;
     }
@@ -114,73 +147,154 @@ public class PlayerData {
         return tileY * World.TILE_SIZE;
     }
 
+
+    public int getValidItemCount() {
+        if (inventoryItems == null) return 0;
+        return (int) inventoryItems.stream()
+            .filter(item -> item != null && item.isValid())
+            .count();
+    }
+
+    public int getValidPokemonCount() {
+        if (partyPokemon == null) return 0;
+        return (int) partyPokemon.stream()
+            .filter(pokemon -> pokemon != null && pokemon.verifyIntegrity())
+            .count();
+    }
+
     public void applyToPlayer(Player player) {
         if (player == null) return;
 
+        GameLogger.info("Applying PlayerData to player: " + this.username);
+
+        // Count VALID items/pokemon, not just slots
+        int validItems = getValidItemCount();
+        int validPokemon = getValidPokemonCount();
+        GameLogger.info("Initial PlayerData state - Valid Items: " + validItems +
+            " Valid Pokemon: " + validPokemon);
+
         try {
-            player.setX(tileToPixelX((int) x));
-            player.setY(tileToPixelY((int) y));
+            // Validate without clearing valid data
+            if (validateAndRepairState()) {
+                GameLogger.info("Data was repaired during validation");
+            }
+
+            // Apply basic attributes
+            player.setX(x * World.TILE_SIZE);
+            player.setY(y * World.TILE_SIZE);
             player.setDirection(direction);
             player.setMoving(isMoving);
             player.setRunning(wantsToRun);
 
-            if (partyPokemon != null) {
+            // Only clear if we're actually going to add items
+            if (validItems > 0) {
+                player.getInventory().clear();
+                for (ItemData item : inventoryItems) {
+                    if (item != null && item.isValid()) {
+                        player.getInventory().addItem(item.copy());
+                        GameLogger.info("Restored item: " + item.getItemId() + " x" + item.getCount());
+                    }
+                }
+            }
+
+            // Only clear if we're actually going to add Pokemon
+            if (validPokemon > 0) {
                 player.getPokemonParty().clearParty();
                 for (PokemonData pokemonData : partyPokemon) {
                     if (pokemonData != null && pokemonData.verifyIntegrity()) {
                         Pokemon pokemon = pokemonData.toPokemon();
                         player.getPokemonParty().addPokemon(pokemon);
-                    } else {
-                        GameLogger.error("Skipping invalid PokemonData in party");
-                        player.getPokemonParty().addPokemon(null); // Preserve party slot
+                        GameLogger.info("Restored Pokemon: " + pokemon.getName());
                     }
                 }
             }
 
-            GameLogger.info(String.format("Applied PlayerData to %s at (%.2f, %.2f)",
-                username, x, y));
+            // Log final valid counts
+            GameLogger.info("Final player state - Items: " + player.getInventory().getAllItems().size() +
+                " Pokemon: " + player.getPokemonParty().getSize());
 
         } catch (Exception e) {
             GameLogger.error("Error applying PlayerData: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    public boolean validateAndRepairState() {
+        boolean wasRepaired = false;
+        GameLogger.info("Starting PlayerData validation for user: " + username);
+
+        try {
+            // Don't initialize new arrays if they exist and have valid items
+            if (inventoryItems == null || inventoryItems.isEmpty()) {
+                inventoryItems = new ArrayList<>(Collections.nCopies(Inventory.INVENTORY_SIZE, null));
+                wasRepaired = true;
+            }
+
+            if (partyPokemon == null || partyPokemon.isEmpty()) {
+                partyPokemon = new ArrayList<>(Collections.nCopies(PokemonParty.MAX_PARTY_SIZE, null));
+                wasRepaired = true;
+            }
+
+            // Only remove invalid items/pokemon, keep valid ones
+            for (int i = 0; i < inventoryItems.size(); i++) {
+                ItemData item = inventoryItems.get(i);
+                if (item != null && !item.isValid()) {
+                    inventoryItems.set(i, null);
+                    wasRepaired = true;
+                }
+            }
+
+            for (int i = 0; i < partyPokemon.size(); i++) {
+                PokemonData pokemon = partyPokemon.get(i);
+                if (pokemon != null && !pokemon.verifyIntegrity()) {
+                    partyPokemon.set(i, null);
+                    wasRepaired = true;
+                }
+            }
+
+            // Log valid counts
+            GameLogger.info("Validation complete - Items: " + getValidItemCount() +
+                ", Pokemon: " + getValidPokemonCount());
+
+            return wasRepaired;
+
+        } catch (Exception e) {
+            GameLogger.error("Error during PlayerData validation: " + e.getMessage());
+            return true;
+        }
+    }
+    private boolean isValidItem(ItemData item) {
+        if (item == null) return false;
+        try {
+            return item.getItemId() != null &&
+                !item.getItemId().isEmpty() &&
+                item.getCount() > 0 &&
+                item.getCount() <= Item.MAX_STACK_SIZE &&
+                item.getUuid() != null &&
+                ItemManager.getItem(item.getItemId()) != null;
+        } catch (Exception e) {
+            GameLogger.error("Error validating item: " + e.getMessage());
+            return false;
         }
     }
 
-    public boolean validateAndRepairState() {
-        boolean wasRepaired = false;
 
-        // Validate inventory
-        if (inventoryItems == null) {
-            inventoryItems = new ArrayList<>(Inventory.INVENTORY_SIZE);
-            for (int i = 0; i < Inventory.INVENTORY_SIZE; i++) {
-                inventoryItems.add(null);
-            }
-            wasRepaired = true;
-        }
-        if (partyPokemon == null) {
-            partyPokemon = new ArrayList<>(MAX_PARTY_SIZE);
-            for (int i = 0; i < MAX_PARTY_SIZE; i++) {
-                partyPokemon.add(null);
-            }
-            wasRepaired = true;
-        } else if (partyPokemon.size() != MAX_PARTY_SIZE) {
-            List<PokemonData> adjustedParty = new ArrayList<>(MAX_PARTY_SIZE);
-            for (int i = 0; i < MAX_PARTY_SIZE; i++) {
-                adjustedParty.add(i < partyPokemon.size() ? partyPokemon.get(i) : null);
-            }
-            partyPokemon = adjustedParty;
-            wasRepaired = true;
-        }
-        if (direction == null) {
-            direction = "down";
-            wasRepaired = true;
-        }
+    private boolean validateItemData(ItemData item) {
+        return item != null &&
+            item.getItemId() != null &&
+            !item.getItemId().isEmpty() &&
+            item.getCount() > 0 &&
+            item.getCount() <= Item.MAX_STACK_SIZE &&
+            ItemManager.getItem(item.getItemId()) != null &&
+            item.getUuid() != null;
+    }
 
-        if (username == null) {
-            username = "Player";
-            wasRepaired = true;
-        }
-
-        return wasRepaired;
+    private boolean validatePokemonData(PokemonData pokemon) {
+        return pokemon != null &&
+            pokemon.getName() != null &&
+            !pokemon.getName().isEmpty() &&
+            pokemon.getLevel() > 0 &&
+            pokemon.getLevel() <= 100 &&
+            pokemon.verifyIntegrity();
     }
     public PlayerData copy() {
         PlayerData copy = new PlayerData(this.username);

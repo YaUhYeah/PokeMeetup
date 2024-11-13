@@ -32,6 +32,8 @@ public class WorldManager {
     private final String baseDirectory;
     private final GameFileSystem fs;
     private final boolean isMultiplayerMode;
+    private final Map<String, WorldData> worldCache = new ConcurrentHashMap<>();
+    private final Object saveLock = new Object();
     private boolean isInitialized = false;
     private WorldData currentWorld;
     private long lastAutoSave = 0;
@@ -197,10 +199,8 @@ public class WorldManager {
         }
     }
 
-
-
     public void saveWorld(WorldData worldData) {
-        synchronized(saveLock) {
+        synchronized (saveLock) {
             if (worldData == null) {
                 GameLogger.error("Cannot save null world data");
                 return;
@@ -240,6 +240,7 @@ public class WorldManager {
             }
         }
     }
+
     private void saveSingleplayerWorld(WorldData world) {
         try {
             String worldPath = baseDirectory + world.getName();
@@ -248,7 +249,6 @@ public class WorldManager {
             String tempFilePath = worldPath + "/world.json.temp";
 
             WorldData worldCopy = deepCopyWorldData(world);
-
 
 
             Json json = JsonConfig.getInstance();
@@ -309,7 +309,6 @@ public class WorldManager {
         return copy;
     }
 
-
     public WorldData getWorld(String name) {
         synchronized (worldLock) {
             try {
@@ -329,7 +328,6 @@ public class WorldManager {
             }
         }
     }
-
 
     public void deleteWorld(String name) {
         synchronized (worldLock) {
@@ -367,7 +365,6 @@ public class WorldManager {
         return Collections.unmodifiableMap(worlds);
     }
 
-
     public WorldData getCurrentWorld() {
         return currentWorld;
     }
@@ -401,7 +398,9 @@ public class WorldManager {
                 }
             }
         }
-    }private boolean validateWorld(WorldData world) {
+    }
+
+    private boolean validateWorld(WorldData world) {
         if (world == null) return false;
         if (world.getName() == null || world.getName().isEmpty()) return false;
 
@@ -471,9 +470,6 @@ public class WorldManager {
             GameLogger.error("Error loading singleplayer worlds: " + e.getMessage());
         }
     }
-    private final Map<String, WorldData> worldCache = new ConcurrentHashMap<>();
-    private final Object saveLock = new Object();
-
 
     private boolean validateWorldData(WorldData data) {
         if (data == null) return false;
@@ -514,6 +510,7 @@ public class WorldManager {
             return false;
         }
     }
+
     private boolean validatePlayerData(PlayerData data) {
         if (data == null) return false;
 
@@ -565,43 +562,65 @@ public class WorldManager {
             pokemon.getLevel() <= 100 &&
             (pokemon.getUuid() != null);
     }
+
     public WorldData loadAndValidateWorld(String worldName) {
-        synchronized(saveLock) {
+        synchronized (saveLock) {
             try {
-                // First check cache
+                // Check for cached world first
                 WorldData cached = worldCache.get(worldName);
                 if (cached != null) {
                     GameLogger.info("Found cached world: " + worldName);
                     return cached;
                 }
 
-                // Then try loading from storage
-                String worldPath = "worlds/singleplayer/" + worldName + "/world.json";
+                String worldPath = SINGLE_PLAYER_DIR + worldName + "/world.json";
                 FileHandle worldFile = Gdx.files.local(worldPath);
 
-                if (worldFile.exists()) {
-                    String jsonContent = worldFile.readString();
-                    WorldData worldData = JsonConfig.getInstance().fromJson(WorldData.class, jsonContent);
+                if (!worldFile.exists()) {
+                    GameLogger.error("World file not found: " + worldPath);
+                    return null;
+                }
 
-                    if (worldData != null && validateWorldData(worldData)) {
-                        // Cache valid world
-                        worldCache.put(worldName, worldData);
-                        GameLogger.info("Loaded existing world: " + worldName);
-                        return worldData;
-                    } else {
-                        GameLogger.error("Invalid world data for: " + worldName);
+                String jsonContent = worldFile.readString();
+                if (jsonContent == null || jsonContent.isEmpty()) {
+                    GameLogger.error("World file is empty: " + worldPath);
+                    return null;
+                }
+
+                WorldData worldData = JsonConfig.getInstance().fromJson(WorldData.class, jsonContent);
+                if (worldData == null) {
+                    GameLogger.error("Failed to parse world data from JSON");
+                    return null;
+                }
+
+                // Log the loaded data state
+                GameLogger.info("Loaded world data - Players: " +
+                    (worldData.getPlayers() != null ? worldData.getPlayers().size() : 0));
+
+                if (worldData.getPlayers() != null) {
+                    for (Map.Entry<String, PlayerData> entry : worldData.getPlayers().entrySet()) {
+                        PlayerData playerData = entry.getValue();
+                        if (playerData != null) {
+                            GameLogger.info("Loaded player: " + entry.getKey() +
+                                " Items: " + playerData.getInventoryItems().size() +
+                                " Pokemon: " + playerData.getPartyPokemon().size());
+                        }
                     }
                 }
 
-                // Only create new if no valid existing world
-                return null;
+                // Cache valid world
+                worldCache.put(worldName, worldData);
+                return worldData;
 
             } catch (Exception e) {
                 GameLogger.error("Error loading world: " + worldName + " - " + e.getMessage());
+                e.printStackTrace();
                 return null;
             }
         }
-    }public void updateWorld(String name, WorldData worldData) {
+    }
+
+    public void updateWorld(String name, WorldData worldData) {
         if (name == null || worldData == null) {
             throw new IllegalArgumentException("World name and data cannot be null");
         }

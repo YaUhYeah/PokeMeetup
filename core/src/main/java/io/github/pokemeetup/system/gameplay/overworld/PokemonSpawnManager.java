@@ -442,10 +442,7 @@ public class PokemonSpawnManager {
             "Treecko", "Slakoth", "Aipom", "Tropius", "Pansage",
             "Tangela", "Paras"
         });
-        rainforestSpawns.put(TimeOfDay.NIGHT, new String[]{
-            "Oddish", "Venonat", "Shroomish", "Morelull", "Paras"
-        });
-        POKEMON_SPAWNS.put(BiomeType.RAIN_FOREST, rainforestSpawns);
+
 
         // Big Mountains biome
         Map<TimeOfDay, String[]> mountainSpawns = new HashMap<>();
@@ -456,8 +453,54 @@ public class PokemonSpawnManager {
             "Zubat", "Machop", "Geodude", "Sableye", "Larvitar"
         });
         POKEMON_SPAWNS.put(BiomeType.BIG_MOUNTAINS, mountainSpawns);
-    }
+        // Cherry Blossom biome
+        Map<TimeOfDay, String[]> cherrySpawns = new HashMap<>();
+        cherrySpawns.put(TimeOfDay.DAY, new String[]{
+            "Cherubi", "Petilil", "Combee", "Butterfree", "Beautifly",
+            "Bounsweet", "Comfey", "Ribombee", "Lilligant"
+        });
+        cherrySpawns.put(TimeOfDay.NIGHT, new String[]{
+            "Morelull", "Cutiefly", "Spritzee", "Munna", "Swablu",
+            "Illumise", "Volbeat"
+        });
+        POKEMON_SPAWNS.put(BiomeType.CHERRY_BLOSSOM, cherrySpawns);
 
+        // Safari biome
+        Map<TimeOfDay, String[]> safariSpawns = new HashMap<>();
+        safariSpawns.put(TimeOfDay.DAY, new String[]{
+            "Tauros", "Kangaskhan", "Girafarig", "Zangoose", "Bouffalant",
+            "Miltank", "Zebstrika", "Pyroar", "Donphan", "Heliolisk"
+        });
+        safariSpawns.put(TimeOfDay.NIGHT, new String[]{
+            "Luxio", "Noctowl", "Seviper", "Persian", "Liepard",
+            "Zoroark", "Absol"
+        });
+        POKEMON_SPAWNS.put(BiomeType.SAFARI, safariSpawns);
+
+        // Swamp biome
+        Map<TimeOfDay, String[]> swampSpawns = new HashMap<>();
+        swampSpawns.put(TimeOfDay.DAY, new String[]{
+            "Croagunk", "Politoed", "Quagsire", "Lotad", "Yanma",
+            "Carnivine", "Tympole", "Froakie", "Goomy"
+        });
+        swampSpawns.put(TimeOfDay.NIGHT, new String[]{
+            "Wooper", "Stunky", "Gastrodon", "Skorupi", "Toxicroak",
+            "Croagunk", "Marshtomp"
+        });
+        POKEMON_SPAWNS.put(BiomeType.SWAMP, swampSpawns);
+
+        // Volcano biome
+        Map<TimeOfDay, String[]> volcanoSpawns = new HashMap<>();
+        volcanoSpawns.put(TimeOfDay.DAY, new String[]{
+            "Numel", "Slugma", "Torkoal", "Heatmor", "Camerupt",
+            "Magmar", "Turtonator", "Salandit"
+        });
+        volcanoSpawns.put(TimeOfDay.NIGHT, new String[]{
+            "Slugma", "Magmar", "Houndour", "Magby", "Magcargo",
+            "Torchic", "Torkoal"
+        });
+        POKEMON_SPAWNS.put(BiomeType.VOLCANO, volcanoSpawns);
+    }
 
     public void setWorld(World world) {
         this.world = world;

@@ -7,3 +7,5 @@ include 'android', 'core'
 
 include 'android', 'core'
 rootProject.name = "PokeMeetup"
+include 'TexturePacking'
+

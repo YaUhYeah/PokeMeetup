@@ -7,7 +7,7 @@ import com.badlogic.gdx.scenes.scene2d.utils.Drawable;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
 import io.github.pokemeetup.pokemon.Pokemon;
 import io.github.pokemeetup.pokemon.PokemonParty;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.ArrayList;
 import java.util.List;

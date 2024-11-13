@@ -1,6 +1,8 @@
 package io.github.pokemeetup.screens;
 
-import com.badlogic.gdx.*;
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
+import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.*;
 import com.badlogic.gdx.graphics.g2d.*;
@@ -19,11 +21,13 @@ import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.managers.BiomeManager;
 import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
 import io.github.pokemeetup.system.Player;
+import io.github.pokemeetup.system.data.ItemData;
 import io.github.pokemeetup.system.data.PlayerData;
+import io.github.pokemeetup.system.data.PokemonData;
 import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 import io.github.pokemeetup.utils.storage.JsonConfig;
 
 import java.io.IOException;
@@ -672,18 +676,13 @@ public class WorldSelectionScreen implements Screen {
             long seed = config.getSeed();
             BiomeManager biomeManager = new BiomeManager(seed);
             GameLogger.info("Created BiomeManager for world: " + worldData.getName() + " with seed: " + seed);
-
-            // Initialize World
             World world = new World(
                 worldData.getName(),
-                World.WORLD_SIZE,
-                World.WORLD_SIZE,
                 seed,
                 GameClientSingleton.getSinglePlayerInstance(),
                 biomeManager
             );
 
-            // Load initial chunks synchronously first
             world.loadChunksAroundPositionSynchronously(
                 new Vector2(World.DEFAULT_X_POSITION, World.DEFAULT_Y_POSITION),
                 INITIAL_LOAD_RADIUS
@@ -728,66 +727,98 @@ public class WorldSelectionScreen implements Screen {
             GameLogger.error("Failed to initialize world: " + e.getMessage());
             throw new IOException("Failed to initialize world: " + e.getMessage(), e);
         }
-    }
-
-    public void loadSelectedWorld(String username) {
+    }public void loadSelectedWorld(String username) {
         try {
             GameLogger.info("Starting world load: " + selectedWorld.getName());
 
-            // Validate world data and config
-            validateWorldConfig();
+            // IMPORTANT: Create deep copy of world data to prevent modification
+            WorldData worldDataCopy = new WorldData(selectedWorld.getName());
+            worldDataCopy.setConfig(selectedWorld.getConfig());
+            worldDataCopy.setWorldTimeInMinutes(selectedWorld.getWorldTimeInMinutes());
+            worldDataCopy.setPlayedTime(selectedWorld.getPlayedTime());
+            worldDataCopy.setLastPlayed(System.currentTimeMillis());
 
-            // Get or create player data before world initialization
+            // Get player data and make deep copy
             PlayerData playerData = selectedWorld.getPlayerData(username);
-            boolean isNewPlayer = false;
+            if (playerData != null) {
+                // Explicitly copy all data including items and Pokemon
+                PlayerData playerDataCopy = new PlayerData(username);
+                playerDataCopy.setX(playerData.getX());
+                playerDataCopy.setY(playerData.getY());
+                playerDataCopy.setDirection(playerData.getDirection());
+                playerDataCopy.setMoving(playerData.isMoving());
+                playerDataCopy.setWantsToRun(playerData.isWantsToRun());
 
-            if (playerData == null) {
-                isNewPlayer = true;
-                playerData = new PlayerData(username);
-                playerData.setX(World.DEFAULT_X_POSITION);
-                playerData.setY(World.DEFAULT_Y_POSITION);
-                selectedWorld.savePlayerData(username, playerData);
-                GameLogger.info("Created new player data for: " + username);
-            } else {
-                GameLogger.info("Found existing player data for: " + username +
-                    " with " + playerData.getInventoryItems().size() + " inventory items");
-            }
-
-            // Save the current state if needed
-            if (game.getCurrentWorld() != null) {
-                game.saveGame();
-            }
-
-            // Initialize World with existing config
-            World world = initializeWorldDirectly(selectedWorld);
-            Player player = world.getPlayer();
-
-            if (!isNewPlayer) {
-                GameLogger.info("Applying saved player data");
-                // Make sure to apply the data again to ensure nothing was lost in initialization
-                playerData.applyToPlayer(player);
-                // Verify inventory was properly restored
-                if (player.getInventory() != null) {
-                    GameLogger.info("Restored inventory with " +
-                        player.getInventory().getAllItems().size() + " items");
+                // Deep copy inventory
+                if (playerData.getInventoryItems() != null) {
+                    List<ItemData> itemsCopy = new ArrayList<>();
+                    for (ItemData item : playerData.getInventoryItems()) {
+                        if (item != null) {
+                            ItemData itemCopy = new ItemData();
+                            itemCopy.setItemId(item.getItemId());
+                            itemCopy.setCount(item.getCount());
+                            itemCopy.setUuid(item.getUuid());
+                            itemsCopy.add(itemCopy);
+                        } else {
+                            itemsCopy.add(null);
+                        }
+                    }
+                    playerDataCopy.setInventoryItems(itemsCopy);
                 }
+
+                // Deep copy Pokemon
+                if (playerData.getPartyPokemon() != null) {
+                    List<PokemonData> pokemonCopy = new ArrayList<>();
+                    for (PokemonData pokemon : playerData.getPartyPokemon()) {
+                        if (pokemon != null) {
+                            // Create complete copy of Pokemon data
+                            PokemonData pokemonDataCopy = pokemon.copy();
+                            pokemonCopy.add(pokemonDataCopy);
+                        } else {
+                            pokemonCopy.add(null);
+                        }
+                    }
+                    playerDataCopy.setPartyPokemon(pokemonCopy);
+                }
+
+                // Save copied data to world
+                worldDataCopy.savePlayerData(username, playerDataCopy);
+
+                // Log the state we're about to load
+                GameLogger.info("Loading world with player state - Position: (" +
+                    playerDataCopy.getX() + "," + playerDataCopy.getY() +
+                    ") Items: " + playerDataCopy.getValidItemCount() +
+                    " Pokemon: " + playerDataCopy.getValidPokemonCount());
             }
 
-            // Initialize game world state
-            game.initializeWorld(world.getName(), false);
+            // Initialize world with copied data
+            try {
+                game.initializeWorld(worldDataCopy.getName(), false);
 
-            // Ensure resources are initialized
-            player.initializeResources();
+                // Verify state was preserved
+                World currentWorld = game.getCurrentWorld();
+                if (currentWorld != null && currentWorld.getPlayer() != null) {
+                    Player player = currentWorld.getPlayer();
+                    GameLogger.info("Loaded player state - Position: (" +
+                        player.getX() + "," + player.getY() +
+                        ") Items: " + player.getInventory().getAllItems().size() +
+                        " Pokemon: " + player.getPokemonParty().getSize());
+                }
 
-            // Create and transition to game screen
-            AudioManager.getInstance().fadeOutMenuMusic();
-            game.setScreen(new GameScreen(
-                game,
-                username,
-                GameClientSingleton.getSinglePlayerInstance(),
-                selectedWorld.getName()
-            ));
-            dispose();
+                // Create and transition to game screen
+                AudioManager.getInstance().fadeOutMenuMusic();
+                game.setScreen((Screen) new GameScreen(
+                    game,
+                    username,
+                    GameClientSingleton.getSinglePlayerInstance(),
+                    game.getCurrentWorld()
+                ));
+                dispose();
+
+            } catch (Exception e) {
+                GameLogger.error("Failed to initialize world: " + e.getMessage());
+                showError("Failed to initialize world: " + e.getMessage());
+            }
 
         } catch (Exception e) {
             GameLogger.error("Failed to load world: " + e.getMessage());

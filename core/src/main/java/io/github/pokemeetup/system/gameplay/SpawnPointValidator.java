@@ -4,7 +4,7 @@ import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.system.gameplay.overworld.Chunk;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
-import io.github.pokemeetup.utils.TileType;
+import io.github.pokemeetup.utils.textures.TileType;
 
 import java.util.List;
 

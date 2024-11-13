@@ -1,10 +1,11 @@
 package io.github.pokemeetup.system.gameplay.overworld.biomes;
 
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import io.github.pokemeetup.managers.BiomeManager;
 import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
-import io.github.pokemeetup.utils.TileType;
+import io.github.pokemeetup.utils.textures.TextureManager;
+import io.github.pokemeetup.utils.textures.TileType;
 
 import java.util.*;
 
@@ -12,6 +13,7 @@ public class Biome {
     private final BiomeType type;
     private final Map<Integer, TextureRegion> tileTextures;
     private final Map<BiomeType, Map<Integer, TextureRegion>> transitionTiles;
+    private BiomeManager.BiomeEnvironmentEffect environmentEffect;
     private Map<Integer, Integer> tileDistribution; // Tile type to weight
     private Map<Integer, Float> tileSpawnChances;   // Tile type to spawn chance
     private Set<Integer> spawnableTileTypes;      // Tile types where objects can spawn
@@ -22,7 +24,6 @@ public class Biome {
     private List<Integer> allowedTileTypes;
     private List<WorldObject.ObjectType> spawnableObjects;
     private Map<WorldObject.ObjectType, Float> objectSpawnChances;
-
     public Biome(String name, BiomeType type) {
         this.name = name;
         this.type = type;
@@ -35,6 +36,14 @@ public class Biome {
         this.spawnableTileTypes = new HashSet<>();
         this.objectSpawnChances = new HashMap<>();
         this.tileDistribution = new HashMap<>();
+    }
+
+    public BiomeManager.BiomeEnvironmentEffect getEnvironmentEffect() {
+        return environmentEffect;
+    }
+
+    public void setEnvironmentEffect(BiomeManager.BiomeEnvironmentEffect effect) {
+        this.environmentEffect = effect;
     }
 
     // Add new methods for object spawn chance management

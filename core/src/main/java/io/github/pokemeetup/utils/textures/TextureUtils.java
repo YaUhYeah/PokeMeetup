@@ -1,4 +1,4 @@
-package io.github.pokemeetup.utils;
+package io.github.pokemeetup.utils.textures;
 
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;

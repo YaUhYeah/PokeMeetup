@@ -3,7 +3,7 @@ package io.github.pokemeetup.system.gameplay.overworld.mechanics;
 import io.github.pokemeetup.system.gameplay.overworld.Chunk;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
 import io.github.pokemeetup.utils.PerlinNoise;
-import io.github.pokemeetup.utils.TileType;
+import io.github.pokemeetup.utils.textures.TileType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -48,8 +48,6 @@ public class MountainGenerator {
             return SNOW_BIOME_CHANCE;
         } else if (biomeType == BiomeType.DESERT) {
             return DEFAULT_MOUNTAIN_CHANCE * 0.5f;
-        } else if (biomeType == BiomeType.RAIN_FOREST) {
-            return DEFAULT_MOUNTAIN_CHANCE * 0.3f;
         } else {
             return DEFAULT_MOUNTAIN_CHANCE;
         }

@@ -11,8 +11,6 @@ public class ItemManager {
     private static final Map<String, Item> items = new HashMap<>();
     private static boolean initialized = false;
     private static final String DEFAULT_TEXTURE = "missing_texture";
-
-    // Define standard item IDs to ensure consistency
     public static final class ItemIDs {
         public static final String POTION = "potion";
         public static final String ELIXIR = "elixir";

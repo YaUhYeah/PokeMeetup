@@ -7,8 +7,8 @@ import io.github.pokemeetup.managers.BiomeTransitionResult;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
 import io.github.pokemeetup.system.gameplay.overworld.mechanics.MountainGenerator;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
-import io.github.pokemeetup.utils.TileType;
+import io.github.pokemeetup.utils.textures.TextureManager;
+import io.github.pokemeetup.utils.textures.TileType;
 
 import java.util.*;
 

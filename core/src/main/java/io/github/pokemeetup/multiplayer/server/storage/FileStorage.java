@@ -20,11 +20,10 @@ public class FileStorage implements StorageSystem {
     private final Path worldsDir;
     private final Path playersDir;
     private final Json json;
-
-    // Cache for multiplayer data
     private final ConcurrentHashMap<String, PlayerData> playerCache;
     private final ConcurrentHashMap<String, WorldData> worldCache;
-
+    // Cache for multiplayer data
+    private long serverSeed; // Add this to ensure consistent generation
     public FileStorage(String baseDirectory) {
         // Always use multiplayer root
         this.baseDir = Paths.get(baseDirectory, MULTIPLAYER_ROOT);
@@ -32,7 +31,7 @@ public class FileStorage implements StorageSystem {
         this.playersDir = baseDir.resolve("players");
 
         this.json = JsonConfig.getInstance();
-        setupJsonSerializers(json);
+        this.serverSeed = System.currentTimeMillis(); // Initialize with a default
 
         this.playerCache = new ConcurrentHashMap<>();
         this.worldCache = new ConcurrentHashMap<>();
@@ -40,28 +39,10 @@ public class FileStorage implements StorageSystem {
         GameLogger.info("Initializing multiplayer storage at: " + baseDir);
     }
 
-    private void setupJsonSerializers(Json json) {
-        // Add UUID serializer
-        json.setSerializer(UUID.class, new Json.Serializer<UUID>() {
-            @Override
-            public void write(Json json, UUID uuid, Class knownType) {
-                json.writeValue(uuid != null ? uuid.toString() : null);
-            }
-
-            @Override
-            public UUID read(Json json, JsonValue jsonData, Class type) {
-                if (jsonData == null || jsonData.isNull()) return null;
-                try {
-                    return UUID.fromString(jsonData.asString());
-                } catch (Exception e) {
-                    GameLogger.error("Error parsing UUID: " + jsonData);
-                    return null;
-                }
-            }
-        });
-
-        // Add any other necessary serializers for multiplayer data
+    public void setServerSeed(long seed) {
+        this.serverSeed = seed;
     }
+
     private void createWorldBackup(String worldName) {
         try {
             Path worldFile = worldsDir.resolve(worldName + "/world.json");
@@ -82,7 +63,8 @@ public class FileStorage implements StorageSystem {
         Files.createDirectories(playersDir);
 
         // Load existing multiplayer data
-        loadExistingData();   worldCache.forEach((worldName, data) -> {
+        loadExistingData();
+        worldCache.forEach((worldName, data) -> {
             createWorldBackup(worldName);
         });
 
@@ -117,19 +99,31 @@ public class FileStorage implements StorageSystem {
 
     @Override
     public void savePlayerData(String username, PlayerData data) throws IOException {
-        Path file = playersDir.resolve(username + ".json");
+        try {
+            if (data != null) {
+                // Validate before saving
+                data.validateAndRepairState();
 
-        // Create backup if file exists
-        if (Files.exists(file)) {
-            Path backup = file.resolveSibling(username + ".bak");
-            Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+                Path file = playersDir.resolve(username + ".json");
+
+                // Create backup if file exists
+                if (Files.exists(file)) {
+                    Path backup = file.resolveSibling(username + "_" +
+                        new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date()) + ".bak");
+                    Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+                }
+
+                String jsonData = json.prettyPrint(data);
+                Files.writeString(file, jsonData, StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING);
+                playerCache.put(username, data);
+
+                GameLogger.info("Saved multiplayer player data: " + username);
+            }
+        } catch (Exception e) {
+            GameLogger.error("Failed to save player data: " + username + " - " + e.getMessage());
+            throw e;
         }
-
-        String jsonData = json.prettyPrint(data);
-        Files.writeString(file, jsonData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-        playerCache.put(username, data);
-
-        GameLogger.info("Saved multiplayer player data: " + username);
     }
 
     @Override
@@ -156,7 +150,7 @@ public class FileStorage implements StorageSystem {
         return null;
     }
 
-    private boolean backupCreated = false;
+    @Override
     public void saveWorldData(String worldName, WorldData data) throws IOException {
         Path worldFile = worldsDir.resolve(worldName + "/world.json");
         Path backupDir = worldsDir.resolve(worldName + "/backups");
@@ -164,22 +158,35 @@ public class FileStorage implements StorageSystem {
         try {
             Files.createDirectories(worldFile.getParent());
             Files.createDirectories(backupDir);
-            if (Files.exists(worldFile)) {
-                Path backup = backupDir.resolve("world_backup.json");
-                Files.copy(worldFile, backup, StandardCopyOption.REPLACE_EXISTING);
-                GameLogger.info("Created backup of world: " + worldName);
+
+            // Ensure world config uses server seed
+            if (data.getConfig() == null) {
+                data.setConfig(new WorldData.WorldConfig(serverSeed));
+            } else {
+                data.getConfig().setSeed(serverSeed);
             }
 
-            String jsonData = JsonConfig.getInstance().prettyPrint(data);
-            Files.writeString(worldFile, jsonData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            // Create backup
+            if (Files.exists(worldFile)) {
+                Path backup = backupDir.resolve("world_backup_" +
+                    new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date()) + ".json");
+                Files.copy(worldFile, backup, StandardCopyOption.REPLACE_EXISTING);
+            }
 
+            // Save world data with validated player data
+            for (PlayerData playerData : data.getPlayersMap().values()) {
+                if (playerData != null) {
+                    playerData.validateAndRepairState();
+                }
+            }
+
+            String jsonData = json.prettyPrint(data);
+            Files.writeString(worldFile, jsonData, StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING);
             worldCache.put(worldName, data);
 
-            GameLogger.info("Saved world: " + worldName +
-                " Time: " + data.getWorldTimeInMinutes() +
-                " Played: " + data.getPlayedTime() +
-                " Day Length: " + data.getDayLength() +
-                " to: " + worldFile.toAbsolutePath());
+            GameLogger.info("Saved multiplayer world: " + worldName +
+                " with seed: " + serverSeed);
 
         } catch (Exception e) {
             GameLogger.error("Failed to save world: " + worldName + " - " + e.getMessage());
@@ -190,28 +197,41 @@ public class FileStorage implements StorageSystem {
 
     @Override
     public WorldData loadWorldData(String worldName) {
-        WorldData cached = worldCache.get(worldName);
-        if (cached != null) {
-            return cached;
-        }
-
         try {
+            WorldData cached = worldCache.get(worldName);
+            if (cached != null) {
+                return cached;
+            }
+
             Path worldFile = worldsDir.resolve(worldName + "/world.json");
             if (Files.exists(worldFile)) {
                 String jsonData = Files.readString(worldFile);
-                WorldData data = JsonConfig.getInstance().fromJson(WorldData.class, jsonData);
+                WorldData data = json.fromJson(WorldData.class, jsonData);
+
+                // Ensure server seed is used
                 if (data != null) {
+                    if (data.getConfig() == null) {
+                        data.setConfig(new WorldData.WorldConfig(serverSeed));
+                    } else {
+                        data.getConfig().setSeed(serverSeed);
+                    }
+
+                    // Validate player data
+                    for (PlayerData playerData : data.getPlayersMap().values()) {
+                        if (playerData != null) {
+                            playerData.validateAndRepairState();
+                        }
+                    }
+
                     worldCache.put(worldName, data);
-                    GameLogger.info("Loaded world data: " + worldName +
-                        " Time: " + data.getWorldTimeInMinutes() +
-                        " Played: " + data.getPlayedTime());
                 }
                 return data;
             }
-        } catch (IOException e) {
+            return null;
+        } catch (Exception e) {
             GameLogger.error("Error loading world: " + worldName + " - " + e.getMessage());
+            return null;
         }
-        return null;
     }
 
 

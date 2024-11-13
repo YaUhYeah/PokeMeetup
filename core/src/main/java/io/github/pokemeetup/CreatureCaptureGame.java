@@ -9,41 +9,28 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.managers.BiomeManager;
-import io.github.pokemeetup.managers.DatabaseManager;
 import io.github.pokemeetup.multiplayer.client.GameClient;
-import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
 import io.github.pokemeetup.multiplayer.server.GameStateHandler;
 import io.github.pokemeetup.multiplayer.server.ServerStorageSystem;
-import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
 import io.github.pokemeetup.pokemon.data.PokemonDatabase;
 import io.github.pokemeetup.screens.*;
 import io.github.pokemeetup.system.Player;
-import io.github.pokemeetup.system.data.ItemData;
 import io.github.pokemeetup.system.data.PlayerData;
-import io.github.pokemeetup.system.data.PokemonData;
 import io.github.pokemeetup.system.data.WorldData;
-import io.github.pokemeetup.system.gameplay.inventory.Inventory;
 import io.github.pokemeetup.system.gameplay.inventory.ItemManager;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
 import io.github.pokemeetup.utils.GameLogger;
-import io.github.pokemeetup.utils.TextureManager;
+import io.github.pokemeetup.utils.textures.TextureManager;
 import io.github.pokemeetup.utils.storage.DesktopFileSystem;
 import io.github.pokemeetup.utils.storage.GameFileSystem;
-import io.github.pokemeetup.utils.storage.JsonConfig;
+import org.w3c.dom.Text;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-
-import static io.github.pokemeetup.system.gameplay.overworld.World.WORLD_SIZE;
 
 public class CreatureCaptureGame extends Game implements GameStateHandler {
     public static final String MULTIPLAYER_WORLD_NAME = "multiplayer_world";
     public static final long MULTIPLAYER_WORLD_SEED = System.currentTimeMillis();
-    private final Map<String, TextureAtlas> loadedAtlases = new HashMap<>();
     private boolean isMultiplayerMode = false;
     private WorldManager worldManager;
     private GameClient gameClient;
@@ -51,8 +38,6 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
     private Player player;
     private World currentWorld;
     private String currentWorldName;
-    private DatabaseManager databaseManager;
-    private LoadingScreen loadingScreen;
     private AssetManager assetManager;
 
     public CreatureCaptureGame(boolean isAndroid) {
@@ -75,14 +60,6 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
         this.isMultiplayerMode = isMultiplayer;
     }
 
-    public DatabaseManager getDatabaseManager() {
-        return databaseManager;
-    }
-
-    public AssetManager getAssetManager() {
-        return assetManager;
-    }
-
     @Override
     public void create() {
 
@@ -101,51 +78,48 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
         GameLogger.info("Game initialization complete");
     }
 
-
     @Override
     public void dispose() {
         try {
-            saveGame();
+            // Critical: Force save current state before disposal
+            if (currentWorld != null && player != null) {
+                // Create final state snapshot
+                PlayerData finalState = player.getPlayerData();
+                finalState.updateFromPlayer(player);
 
-            if (player != null) {
-                player.dispose();
+                // Save to world data
+                currentWorld.getWorldData().savePlayerData(player.getUsername(), finalState);
+
+                // Force save to disk
+                worldManager.saveWorld(currentWorld.getWorldData());
+                GameLogger.info("Final state saved during game closure");
             }
 
-            if (currentWorld != null) {
-                try {
-                    WorldData worldData = currentWorld.getWorldData();
-                    if (worldData != null && player != null) {
-                        PlayerData finalState = new PlayerData(player.getUsername());
-                        player.updatePlayerData();
-                        finalState.updateFromPlayer(player);
-                        worldData.savePlayerData(player.getUsername(), finalState);
-                        worldManager.saveWorld(worldData);
-                    }
-                } catch (Exception e) {
-                    GameLogger.error("Error saving world data during dispose: " + e.getMessage());
-                }
-                currentWorld.dispose();
+            // Normal disposal sequence
+            if (screen != null) {
+                screen.dispose();
             }
-
-            if (gameClient != null) {
-                gameClient.dispose();
-            }
-
-            if (loadingScreen != null) {
-                loadingScreen.dispose();
-            }
-
-            AudioManager.getInstance().dispose();
 
             if (assetManager != null) {
                 assetManager.dispose();
+                assetManager = null;
             }
 
-            // Clear loaded atlases
-            loadedAtlases.clear();
+            if (AudioManager.getInstance() != null) {
+                AudioManager.getInstance().dispose();
+            }
+
+            GameLogger.info("Game disposed successfully");
 
         } catch (Exception e) {
             GameLogger.error("Error during game disposal: " + e.getMessage());
+            try {
+                if (currentWorld != null && player != null) {
+                    saveGame();
+                }
+            } catch (Exception saveError) {
+                GameLogger.error("Emergency save failed: " + saveError.getMessage());
+            }
         }
     }
 
@@ -162,147 +136,118 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
                 return;
             }
 
-            // Create and validate player data
-            PlayerData playerData = new PlayerData(player.getUsername());
-            player.updatePlayerData();
+            // Create a snapshot of current state
+            PlayerData playerData = player.getPlayerData();
             playerData.updateFromPlayer(player);
 
-            if (!playerData.validateAndRepairState()) {
-                GameLogger.error("Player data validation failed");
+            // Verify data before saving
+            if (!verifyPlayerData(playerData)) {
+                GameLogger.error("Player data verification failed - aborting save");
                 return;
             }
 
-            // Save player data to world
+            // Save and verify
             worldData.savePlayerData(player.getUsername(), playerData);
-
-            // Update world manager
             worldManager.saveWorld(worldData);
+
+            // Verify save by reading it back
+            WorldData verifyData = worldManager.loadAndValidateWorld(currentWorldName);
+            if (verifyData != null) {
+                PlayerData verifyPlayer = verifyData.getPlayerData(player.getUsername());
+                if (verifyPlayer != null) {
+                    GameLogger.info("Save verified successfully - Items: " +
+                        verifyPlayer.getValidItemCount() + " Pokemon: " +
+                        verifyPlayer.getValidPokemonCount());
+                }
+            }
 
             GameLogger.info("Game saved successfully for world: " + currentWorldName);
 
         } catch (Exception e) {
             GameLogger.error("Failed to save game: " + e.getMessage());
-            e.printStackTrace();
         }
     }
+
+    private boolean verifyPlayerData(PlayerData data) {
+        if (data == null) return false;
+
+        try {
+            // Verify non-null essential data
+            if (data.getUsername() == null ||
+                data.getInventoryItems() == null ||
+                data.getPartyPokemon() == null) {
+                return false;
+            }
+
+            // Verify valid counts
+            if (data.getValidItemCount() + data.getValidPokemonCount() == 0) {
+                GameLogger.error("Player data has no valid items or Pokemon");
+            }
+
+            return true;
+        } catch (Exception e) {
+            GameLogger.error("Error verifying player data: " + e.getMessage());
+            return false;
+        }
+    }
+
     public World getCurrentWorld() {
         return currentWorld;
     }
 
-    // In CreatureCaptureGame.java
     public void initializeWorld(String worldName, boolean isMultiplayer) throws IOException {
-        GameLogger.info("Starting world initialization: " + worldName + " (Multiplayer: " + isMultiplayer + ")");
+        GameLogger.info("Starting world initialization: " + worldName);
         this.currentWorldName = worldName;
         this.isMultiplayerMode = isMultiplayer;
 
         try {
-            // Set up game client first
-            gameClient = isMultiplayer ?
-                GameClientSingleton.getInstance(ServerConnectionConfig.getInstance()) :
-                GameClientSingleton.getSinglePlayerInstance();
-
-            // Load or create world data
             WorldData worldData = worldManager.loadAndValidateWorld(worldName);
-            if (worldData == null && !isMultiplayer) {
-                GameLogger.info("Creating new world: " + worldName);
-                worldData = worldManager.createWorld(
-                    worldName,
-                    System.currentTimeMillis(),
-                    0.15f,
-                    0.05f
-                );
-            }
-
             if (worldData == null) {
-                throw new IllegalStateException("Failed to load or create world data");
+                GameLogger.error("Failed to load world data for: " + worldName);
+                throw new IOException("Failed to load world data");
             }
-
-            // Create world instance first
-            currentWorld = new World(
-                worldName,
-                WORLD_SIZE,
-                WORLD_SIZE,
-                worldData.getConfig().getSeed(),
-                gameClient,
-                biomeManager
-            );
-            currentWorld.setWorldData(worldData);
-
-            // Initialize world before creating player
-            if (!currentWorld.initialize()) {
-                throw new IllegalStateException("World initialization failed");
-            }
-
-            // Get saved player data if it exists
             String username = isMultiplayer ? gameClient.getLocalUsername() : "Player";
             PlayerData savedPlayerData = worldData.getPlayerData(username);
 
-            // Create and initialize player
             if (savedPlayerData != null) {
-                GameLogger.info(String.format("Loading saved player data - Position: (%.1f, %.1f)",
-                    savedPlayerData.getX(), savedPlayerData.getY()));
+                GameLogger.info("Found saved player data for: " + username +
+                    " Items: " + savedPlayerData.getInventoryItems().size() +
+                    " Pokemon: " + savedPlayerData.getPartyPokemon().size());
 
-                player = new Player(
-                    (int)savedPlayerData.getX(),
-                    (int)savedPlayerData.getY(),
-                    currentWorld,  // Pass initialized world
-                    username
-                );
-
-                // Initialize player resources
-                player.initializeResources();
-
-                // Ensure inventory exists
-                if (player.getInventory() == null) {
-                    player.setInventory(new Inventory());
+                // Validate the data
+                if (!savedPlayerData.validateAndRepairState()) {
+                    GameLogger.error("Player data validation failed");
+                    savedPlayerData = null;
                 }
+            }
 
-                // Apply saved data to initialized player
-                savedPlayerData.applyToPlayer(player);
+            // Initialize world
+            this.currentWorld = new World(worldName,
+                worldData.getConfig().getSeed(), gameClient, biomeManager);
+            this.currentWorld.setWorldData(worldData);
 
-            } else {
-                // Create new player
-                player = new Player(
-                    World.DEFAULT_X_POSITION,
-                    World.DEFAULT_Y_POSITION,
-                    currentWorld,
-                    username
-                );
+            // Initialize player
+            if (savedPlayerData != null) {
+                this.player = new Player((int) savedPlayerData.getX(),
+                    (int) savedPlayerData.getY(), currentWorld, username);
                 player.initializeResources();
-                currentWorld.spawnPlayer(player);
+                savedPlayerData.applyToPlayer(player);
+                GameLogger.info("Restored player state - Items: " +
+                    player.getInventory().getAllItems().size() +
+                    " Pokemon: " + player.getPokemonParty().getSize());
+            } else {
+                GameLogger.info("Creating new player at default position");
+                this.player = new Player(World.DEFAULT_X_POSITION,
+                    World.DEFAULT_Y_POSITION, currentWorld, username);
+                player.initializeResources();
             }
 
-            // Set player in world after initialization
             currentWorld.setPlayer(player);
-
-
-            if (!currentWorld.isInitialized()) {
-                throw new IllegalStateException("World not properly initialized");
-            }
-
             GameLogger.info("World initialization complete: " + worldName);
 
         } catch (Exception e) {
             GameLogger.error("Failed to initialize world: " + e.getMessage());
             throw new IOException("World initialization failed", e);
-        }
-    }
-
-    // Add helper method for logging inventory state
-    private void logInventoryState(String context) {
-        if (player == null || player.getInventory() == null) {
-            GameLogger.info(context + ": Inventory is null");
-            return;
-        }
-
-        List<ItemData> items = player.getInventory().getAllItems();
-        GameLogger.info(context + ": Inventory has " +
-            items.stream().filter(Objects::nonNull).count() + " items");
-
-        for (int i = 0; i < items.size(); i++) {
-            ItemData item = items.get(i);
-            if (item != null) {
-            }
         }
     }
 
@@ -318,7 +263,20 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
             "atlas/overworld-gfx-atlas",
             "atlas/battlebacks-gfx-atlas",
             "atlas/move-effects-gfx",
-            "atlas/mountain-atlas.atlas"
+            "atlas/haunted_biome.atlas",
+            "atlas/mountain-atlas.atlas",
+            "atlas/mountain_biome.atlas",
+            "atlas/move_effects_gfx.atlas",
+            "atlas/plains_biome.atlas",
+            "atlas/ruins_biome.atlas",
+            "atlas/safari_biome.atlas",
+            "atlas/snow_biome.atlas",
+            "atlas/cherry_blossom_biome.atlas",
+            "atlas/swamp_biome.atlas",
+            "atlas/volcano_biome.atlas",
+            "atlas/desert_biome.atlas",
+            "atlas/Forest_Biome"
+
         };
 
         for (String path : atlasFiles) {
@@ -399,6 +357,19 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
         try {
 
             GameLogger.info("Initializing managers with loaded assets...");
+
+            TextureAtlas atlasPlains = new TextureAtlas(Gdx.files.internal("atlas/plains_biome.atlas"));
+            TextureAtlas atlasForest = new TextureAtlas(Gdx.files.internal("atlas/Forest_Biome"));
+            TextureAtlas atlasRuins = new TextureAtlas(Gdx.files.internal("atlas/ruins_biome.atlas"));
+            TextureAtlas atlasSafari = new TextureAtlas(Gdx.files.internal("atlas/safari_biome.atlas"));
+            TextureAtlas atlasSnow = new TextureAtlas(Gdx.files.internal("atlas/snow_biome.atlas"));
+            TextureAtlas atlasDesert = new TextureAtlas(Gdx.files.internal("atlas/desert_biome.atlas"));
+            TextureAtlas atlasSwamp = new TextureAtlas(Gdx.files.internal("atlas/swamp_biome.atlas"));
+            TextureAtlas atlasHaunted = new TextureAtlas(Gdx.files.internal("atlas/haunted_biome.atlas"));
+            TextureAtlas atlasCherryBlossom = new TextureAtlas(Gdx.files.internal("atlas/cherry_blossom_biome.atlas"));
+            TextureAtlas atlasMountains = new TextureAtlas(Gdx.files.internal("atlas/mountain_biome.atlas"));
+            TextureAtlas atlasVolcano = new TextureAtlas(Gdx.files.internal("atlas/volcano_biome.atlas"));
+
             TextureAtlas battleAtlas = assetManager.get("atlas/battlebacks-gfx-atlas", TextureAtlas.class);
             TextureAtlas uiAtlas = assetManager.get("atlas/ui-gfx-atlas.atlas", TextureAtlas.class);
             TextureAtlas backAtlas = assetManager.get("atlas/back-gfx-atlas", TextureAtlas.class);
@@ -407,16 +378,15 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
             TextureAtlas overworldAtlas = assetManager.get("atlas/overworld-gfx-atlas", TextureAtlas.class);
             TextureAtlas itemsAtlas = assetManager.get("atlas/items-gfx-atlas", TextureAtlas.class);
             TextureAtlas boyAtlas = assetManager.get("atlas/boy-gfx-atlas", TextureAtlas.class);
-            TextureAtlas effects = assetManager.get("atlas/move-effects-gfx", TextureAtlas.class);
+            TextureAtlas effects = assetManager.get("atlas/move_effects_gfx.atlas", TextureAtlas.class);
             TextureAtlas mountains = assetManager.get("atlas/mountain-atlas.atlas", TextureAtlas.class);
+            TextureAtlas tilesAtlas = assetManager.get("atlas/tiles-gfx-atlas", TextureAtlas.class);
 
             TextureManager.debugAtlasState("Boy", boyAtlas);
 
             if (!verifyAtlas(boyAtlas)) {
                 throw new RuntimeException("Boy atlas verification failed");
             }
-
-            TextureAtlas tilesAtlas = assetManager.get("atlas/tiles-gfx-atlas", TextureAtlas.class);
 
             TextureManager.initialize(
                 battleAtlas,
@@ -427,8 +397,21 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
                 overworldAtlas,
                 itemsAtlas,
                 boyAtlas,
-                tilesAtlas, effects, mountains
+                tilesAtlas,
+                effects,
+                mountains,
+                atlasPlains,
+                atlasRuins,
+                atlasSafari,
+                atlasSnow,
+                atlasDesert,
+                atlasSwamp,
+                atlasHaunted,
+                atlasCherryBlossom,
+                atlasVolcano,
+                atlasMountains, atlasForest
             );
+
             PokemonDatabase.initialize();
 
             ItemManager.initialize(TextureManager.items);
