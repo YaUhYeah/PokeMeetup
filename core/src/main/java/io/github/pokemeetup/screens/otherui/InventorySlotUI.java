@@ -334,13 +334,9 @@
 
         public void updateVisuals() {
             try {
-                GameLogger.info("Updating visuals for slot " + slotData.getSlotIndex());
                 clearVisuals();
 
-                if (slotData == null || slotData.isEmpty()) {
-                    GameLogger.info("Slot " + slotData.getSlotIndex() + " is empty");
-                    return;
-                }
+
 
                 ItemData item = slotData.getItemData();
                 if (item == null) {
@@ -379,9 +375,6 @@
                     countLabel.setText(String.valueOf(item.getCount()));
                     countLabel.setVisible(true);
                 }
-
-                GameLogger.info("Successfully updated visuals for slot " + slotData.getSlotIndex() +
-                    " with item " + item.getItemId() + " x" + item.getCount());
 
             } catch (Exception e) {
                 GameLogger.error("Error updating slot visuals: " + e.getMessage());

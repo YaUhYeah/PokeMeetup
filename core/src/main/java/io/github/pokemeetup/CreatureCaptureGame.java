@@ -150,63 +150,41 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
     }
 
     public void saveGame() {
-        if (player == null) {
-            GameLogger.error("Cannot save game - player is null");
-            return;
-        }
-        if (currentWorld == null) {
-            GameLogger.error("Cannot save game - currentWorld is null");
-            return;
-        }
-        if (currentWorldName == null) {
-            GameLogger.error("Cannot save game - currentWorldName is null");
+        if (player == null || currentWorld == null || currentWorldName == null) {
+            GameLogger.error("Cannot save game - required objects are null");
             return;
         }
 
         try {
-            // Log inventory state before saving
-            logInventoryState("Before saving game");
-
-            // **Get the WorldData from currentWorld**
             WorldData worldData = currentWorld.getWorldData();
-            if (worldData != null) {
-                PlayerData playerData = new PlayerData(player.getUsername());
-
-                // Verify inventory before saving
-                if (player.getInventory() != null) {
-                    GameLogger.info("Saving inventory with " +
-                        player.getInventory().getAllItems().stream()
-                            .filter(Objects::nonNull).count() + " items");
-                } else {
-                    GameLogger.error("Player inventory is null during save!");
-                }
-
-                player.updatePlayerData();
-                playerData.updateFromPlayer(player);
-                worldData.savePlayerData(player.getUsername(), playerData);
-
-                // **Update the world in the worldManager's worlds map**
-//                worldManager.getWorlds().put(currentWorldName, worldData);
-
-                worldManager.updateWorld(currentWorldName, worldData);
-                if (!isMultiplayerMode) {
-                    JsonConfig.saveWorldDataWithPlayer(worldData, playerData);
-                }
-
-                // Log inventory state after saving
-                logInventoryState("After saving game");
-
-                GameLogger.info("Game saved successfully for world: " + currentWorldName);
-            } else {
-                GameLogger.error("Failed to save - world data not found for: " + currentWorldName);
+            if (worldData == null) {
+                GameLogger.error("Cannot save game - world data is null");
+                return;
             }
+
+            // Create and validate player data
+            PlayerData playerData = new PlayerData(player.getUsername());
+            player.updatePlayerData();
+            playerData.updateFromPlayer(player);
+
+            if (!playerData.validateAndRepairState()) {
+                GameLogger.error("Player data validation failed");
+                return;
+            }
+
+            // Save player data to world
+            worldData.savePlayerData(player.getUsername(), playerData);
+
+            // Update world manager
+            worldManager.saveWorld(worldData);
+
+            GameLogger.info("Game saved successfully for world: " + currentWorldName);
+
         } catch (Exception e) {
             GameLogger.error("Failed to save game: " + e.getMessage());
             e.printStackTrace();
         }
     }
-
-
     public World getCurrentWorld() {
         return currentWorld;
     }
