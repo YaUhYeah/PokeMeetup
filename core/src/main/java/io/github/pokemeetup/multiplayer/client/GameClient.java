@@ -1430,21 +1430,15 @@ public class GameClient {private static final long KEEPALIVE_TIMEOUT = 20000; //
 
     public boolean isInitializing() {
         return isInitializing;
-    }
-
-    public void initializePlayer(NetworkProtocol.LoginResponse response) {
+    }public void initializePlayer(NetworkProtocol.LoginResponse response) {
         if (isSinglePlayer) {
-            GameLogger.info("Skipping server player initialization for singleplayer");
             return;
         }
-
-        GameLogger.info("Initializing player on main thread");
 
         Gdx.app.postRunnable(() -> {
             try {
                 // First initialize world if needed
                 if (currentWorld == null) {
-                    GameLogger.info("Initializing world from response data");
                     initializeWorld(response);
                 }
 
@@ -1456,28 +1450,17 @@ public class GameClient {private static final long KEEPALIVE_TIMEOUT = 20000; //
 
                 GameLogger.info("Creating new player: " + response.username);
 
-                // Create/load player
-                PlayerData playerData = currentWorld.getWorldData().getPlayerData(response.username);
-                if (playerData == null) {
-                    playerData = new PlayerData(response.username);
-                    playerData.setX(response.x);
-                    playerData.setY(response.y);
-                    currentWorld.getWorldData().savePlayerData(response.username, playerData);
-                }
-
+                // Create/load player with position from server
                 Player player = new Player(response.username, currentWorld);
                 player.setX(response.x);
                 player.setY(response.y);
                 this.activePlayer = player;
-                GameLogger.info("Player initialized: " + response.username + " at (" + response.x + "," + response.y + ")");
 
                 currentWorld.setPlayer(player);
+                GameLogger.info("Player initialized at: " + response.x + "," + response.y);
 
-                // After player is fully initialized, request chunks
-                initializeChunks();
-
-                // Finally notify completion
-                notifyInitializationComplete(true);
+                // IMPORTANT: Request initial chunks around player
+                requestInitialChunks();
 
             } catch (Exception e) {
                 GameLogger.error("Error initializing player: " + e.getMessage());
@@ -1486,6 +1469,46 @@ public class GameClient {private static final long KEEPALIVE_TIMEOUT = 20000; //
         });
     }
 
+    private void requestInitialChunks() {
+        if (activePlayer == null) return;
+
+        int playerChunkX = (int) Math.floor(activePlayer.getX() / (Chunk.CHUNK_SIZE * World.TILE_SIZE));
+        int playerChunkY = (int) Math.floor(activePlayer.getY() / (Chunk.CHUNK_SIZE * World.TILE_SIZE));
+
+        GameLogger.info("Requesting initial chunks around: " + playerChunkX + "," + playerChunkY);
+
+        // Request chunks in spiral pattern
+        for (int radius = 0; radius <= INITIAL_LOAD_RADIUS; radius++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dy = -radius; dy <= radius; dy++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dy)) == radius) {
+                        Vector2 chunkPos = new Vector2(playerChunkX + dx, playerChunkY + dy);
+                        requestChunk(chunkPos);
+                    }
+                }
+            }
+        }
+    }
+
+    public void requestChunk(Vector2 chunkPos) {
+        if (!isConnected() || !isAuthenticated()) {
+            return;
+        }
+
+        try {
+            NetworkProtocol.ChunkRequest request = new NetworkProtocol.ChunkRequest();
+            request.chunkX = (int)chunkPos.x;
+            request.chunkY = (int)chunkPos.y;
+            request.timestamp = System.currentTimeMillis();
+
+            GameLogger.info("Requesting chunk: " + chunkPos);
+            client.sendTCP(request);
+
+            pendingChunks.add(chunkPos);
+        } catch (Exception e) {
+            GameLogger.error("Failed to request chunk: " + e.getMessage());
+        }
+    }
     private void cleanupExistingConnection() {
         if (client != null) {
             try {
@@ -1998,26 +2021,6 @@ public class GameClient {private static final long KEEPALIVE_TIMEOUT = 20000; //
         }
     }
 
-    public void requestChunk(Vector2 chunkPos) {
-        if (!isConnected() || !isAuthenticated()) {
-            return;
-        }
-
-        try {
-            NetworkProtocol.ChunkRequest request = new NetworkProtocol.ChunkRequest();
-            request.chunkX = (int) chunkPos.x;
-            request.chunkY = (int) chunkPos.y;
-            request.timestamp = System.currentTimeMillis();
-
-            client.sendTCP(request);
-            GameLogger.info("Requested chunk at: " + chunkPos);
-
-            // Track pending chunk request
-            pendingChunks.add(chunkPos);
-        } catch (Exception e) {
-            GameLogger.error("Failed to request chunk: " + e.getMessage());
-        }
-    }
 
     private boolean areInitialChunksLoaded() {
         int totalChunks = (INITIAL_LOAD_RADIUS * 2 + 1) * (INITIAL_LOAD_RADIUS * 2 + 1);

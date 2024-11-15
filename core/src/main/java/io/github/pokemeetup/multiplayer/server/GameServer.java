@@ -1314,71 +1314,53 @@ public class GameServer {
             default:
                 return 1.0f;
         }
-    }private void handleChunkRequest(Connection connection, NetworkProtocol.ChunkRequest request) {
-        try {
-            Vector2 chunkPos = new Vector2(request.chunkX, request.chunkY);
-            Chunk chunk = generateNewChunk((int) chunkPos.x, (int) chunkPos.y);
+    }
 
-            if (chunk == null) {
-                GameLogger.error("Failed to generate chunk at " + chunkPos);
+    private void handleChunkRequest(Connection connection, NetworkProtocol.ChunkRequest request) {
+        try {
+            String username = connectedPlayers.get(connection.getID());
+            if (username == null) {
+                GameLogger.error("Received chunk request from unauthenticated client");
                 return;
             }
 
-            // Split chunk data into smaller fragments
-            int fragmentSize = 4;
-            int totalFragments = (World.CHUNK_SIZE * World.CHUNK_SIZE) / (fragmentSize * fragmentSize);
+            Vector2 chunkPos = new Vector2(request.chunkX, request.chunkY);
+            Chunk chunk = multiplayerWorld.getChunk(chunkPos);
 
-            for (int i = 0; i < totalFragments; i++) {
-                int startX = (i % (World.CHUNK_SIZE/fragmentSize)) * fragmentSize;
-                int startY = (i / (World.CHUNK_SIZE/fragmentSize)) * fragmentSize;
-
-                NetworkProtocol.ChunkDataFragment fragment = new NetworkProtocol.ChunkDataFragment();
-                fragment.chunkX = request.chunkX;
-                fragment.chunkY = request.chunkY;
-                fragment.fragmentIndex = i;
-                fragment.totalFragments = totalFragments;
-                fragment.fragmentSize = fragmentSize;
-                fragment.startX = startX;
-                fragment.startY = startY;
-                fragment.biomeType = chunk.getBiome().getType();
-
-                // Copy tile data for this fragment
-                fragment.tileData = new int[fragmentSize][fragmentSize];
-                for (int x = 0; x < fragmentSize; x++) {
-                    for (int y = 0; y < fragmentSize; y++) {
-                        if (startX + x < World.CHUNK_SIZE && startY + y < World.CHUNK_SIZE) {
-                            fragment.tileData[x][y] = chunk.getTileData()[startX + x][startY + y];
-                        }
-                    }
-                }
-
-                connection.sendTCP(fragment);
-                Thread.sleep(50); // Add small delay between fragments
+            if (chunk == null) {
+                chunk = generateChunk(request.chunkX, request.chunkY);
             }
 
-            // Send completion message
-            NetworkProtocol.ChunkDataComplete complete = new NetworkProtocol.ChunkDataComplete();
-            complete.chunkX = request.chunkX;
-            complete.chunkY = request.chunkY;
-            connection.sendTCP(complete);
+            if (chunk != null) {
+                NetworkProtocol.ChunkData response = new NetworkProtocol.ChunkData();
+                response.chunkX = request.chunkX;
+                response.chunkY = request.chunkY;
+                response.biomeType = chunk.getBiome().getType();
+                response.tileData = chunk.getTileData();
+
+                GameLogger.info("Sending chunk data for: " + chunkPos + " to: " + username);
+                connection.sendTCP(response);
+            }
 
         } catch (Exception e) {
-            GameLogger.error("Error processing chunk request: " + e.getMessage());
+            GameLogger.error("Error handling chunk request: " + e.getMessage());
         }
     }
-    private void sendChunkDataSafely(Connection connection, NetworkProtocol.ChunkData data) {
+
+    private Chunk generateChunk(int chunkX, int chunkY) {
         try {
-            // Split large data if needed
-            if (isDataTooLarge(data)) {
-                sendFragmentedChunkData(connection, data);
-            } else {
-                connection.sendTCP(data);
-            }
+            BiomeTransitionResult biomeTransition = biomeManager.getBiomeAt(
+                chunkX * World.CHUNK_SIZE * World.TILE_SIZE,
+                chunkY * World.CHUNK_SIZE * World.TILE_SIZE
+            );
+
+            Biome biome = biomeTransition.getPrimaryBiome();
+            return new Chunk(chunkX, chunkY, biome, multiplayerWorld.getConfig().getSeed(), biomeManager);
         } catch (Exception e) {
-            GameLogger.error("Error sending chunk data: " + e.getMessage());
+            GameLogger.error("Failed to generate chunk: " + e.getMessage());
+            return null;
         }
     }
-
     private boolean isDataTooLarge(NetworkProtocol.ChunkData data) {
         // Estimate size based on chunk data
         int estimatedSize = 8 + // Basic fields
