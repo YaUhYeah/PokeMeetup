@@ -1,52 +1,132 @@
 package io.github.pokemeetup.system.gameplay.overworld.biomes;
 
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
-import io.github.pokemeetup.managers.BiomeManager;
 import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.textures.TextureManager;
-import io.github.pokemeetup.utils.textures.TileType;
 
 import java.util.*;
 
 public class Biome {
     private final BiomeType type;
-    private final Map<Integer, TextureRegion> tileTextures;
-    private final Map<BiomeType, Map<Integer, TextureRegion>> transitionTiles;
-    private BiomeManager.BiomeEnvironmentEffect environmentEffect;
-    private Map<Integer, Integer> tileDistribution; // Tile type to weight
-    private Map<Integer, Float> tileSpawnChances;   // Tile type to spawn chance
-    private Set<Integer> spawnableTileTypes;      // Tile types where objects can spawn
+    private final Map<Integer, Float> tileSpawnChances;
+    private final float temperature;
+    private final Map<WorldObject.ObjectType, Float> objectSpawnChances;
+    private HashMap<Integer, Integer> tileDistribution;
     private String name;
-    private float temperature;
-    private Map<BiomeType, Map<Integer, Integer>> transitionTilesConfig; // Add this field
-    private float moisture;
     private List<Integer> allowedTileTypes;
     private List<WorldObject.ObjectType> spawnableObjects;
-    private Map<WorldObject.ObjectType, Float> objectSpawnChances;
+
     public Biome(String name, BiomeType type) {
         this.name = name;
         this.type = type;
-        this.tileTextures = new HashMap<>();
-        this.transitionTiles = new HashMap<>();
-        this.transitionTilesConfig = new HashMap<>();
+        this.temperature = 0;
         this.allowedTileTypes = new ArrayList<>();
         this.spawnableObjects = new ArrayList<>();
         this.tileSpawnChances = new HashMap<>();
-        this.spawnableTileTypes = new HashSet<>();
         this.objectSpawnChances = new HashMap<>();
         this.tileDistribution = new HashMap<>();
     }
 
-    public BiomeManager.BiomeEnvironmentEffect getEnvironmentEffect() {
-        return environmentEffect;
+    public void setTileDistribution(Map<Integer, Integer> distribution) {
+        if (distribution == null || distribution.isEmpty()) {
+            throw new IllegalArgumentException("Tile distribution cannot be null or empty");
+        }
+
+        // If allowed types is empty, initialize it from the distribution
+        if (allowedTileTypes.isEmpty()) {
+            allowedTileTypes = new ArrayList<>(distribution.keySet());
+            GameLogger.info(String.format("Biome %s: Automatically setting allowed types to %s",
+                name, allowedTileTypes));
+        }
+
+        // Add any missing tile types to allowed types
+        for (Integer tileType : distribution.keySet()) {
+            if (!allowedTileTypes.contains(tileType)) {
+                allowedTileTypes.add(tileType);
+                GameLogger.info(String.format("Biome %s: Added tile type %d to allowed types",
+                    name, tileType));
+            }
+        }
+
+        // Verify textures exist for all tiles
+        boolean allTexturesValid = true;
+        for (Integer tileType : distribution.keySet()) {
+            if (TextureManager.getTileTexture(tileType) == null) {
+                GameLogger.error(String.format("Biome %s: Missing texture for tile type %d",
+                    name, tileType));
+                allTexturesValid = false;
+            }
+        }
+
+        if (!allTexturesValid) {
+            GameLogger.error(String.format("Biome %s: Using fallback tile distribution due to missing textures",
+                name));
+            useFallbackDistribution();
+            return;
+        }
+
+        // Calculate total weight and normalize
+        double totalWeight = distribution.values().stream()
+            .mapToDouble(Integer::doubleValue)
+            .sum();
+
+        // Normalize weights if needed
+        if (Math.abs(totalWeight - 100.0) > 0.001) {
+            Map<Integer, Integer> normalizedDist = new HashMap<>();
+
+            for (Map.Entry<Integer, Integer> entry : distribution.entrySet()) {
+                double normalizedValue = (entry.getValue() / totalWeight) * 100.0;
+                normalizedDist.put(entry.getKey(), (int) Math.round(normalizedValue));
+            }
+
+            // Adjust for rounding errors
+            int finalTotal = normalizedDist.values().stream()
+                .mapToInt(Integer::intValue)
+                .sum();
+
+            if (finalTotal != 100) {
+                int diff = 100 - finalTotal;
+                int highestKey = normalizedDist.entrySet().stream()
+                    .max(Map.Entry.comparingByValue())
+                    .map(Map.Entry::getKey)
+                    .orElse(distribution.keySet().iterator().next());
+
+                normalizedDist.put(highestKey, normalizedDist.get(highestKey) + diff);
+            }
+
+            distribution = normalizedDist;
+        }
+
+        // Store the normalized distribution
+        this.tileDistribution = new HashMap<>(distribution);
+
+        // Log the final distribution
+        GameLogger.info(String.format("Biome %s final tile distribution:", name));
+        distribution.forEach((type, weight) -> {
+            String textureName = TextureManager.getTextureNameForBiome(type, this.type);
+            GameLogger.info(String.format("  Tile %d (%s): %d%%", type, textureName, weight));
+        });
     }
 
-    public void setEnvironmentEffect(BiomeManager.BiomeEnvironmentEffect effect) {
-        this.environmentEffect = effect;
+    public void validateTileDistribution() {
+        if (tileDistribution == null || tileDistribution.isEmpty()) {
+            GameLogger.error(String.format("Biome %s has invalid tile distribution", name));
+            return;
+        }
+
+        int total = tileDistribution.values().stream().mapToInt(Integer::intValue).sum();
+        GameLogger.info(String.format("Biome %s distribution total: %d%%, tiles: %s", name, total, tileDistribution.keySet()));
+
+        // Verify each tile has a valid texture
+        tileDistribution.keySet().forEach(tileType -> {
+            TextureRegion texture = TextureManager.getTileTexture(tileType);
+            if (texture == null) {
+                GameLogger.error(String.format("Biome %s: Missing texture for tile type %d", name, tileType));
+            }
+        });
     }
 
-    // Add new methods for object spawn chance management
     public void setObjectSpawnChance(WorldObject.ObjectType objectType, float chance) {
         objectSpawnChances.put(objectType, chance);
     }
@@ -55,94 +135,18 @@ public class Biome {
         return objectSpawnChances.getOrDefault(objectType, 0.0f);
     }
 
-    public Map<WorldObject.ObjectType, Float> getObjectSpawnChances() {
-        return objectSpawnChances;
-    }
-
-    // Add a method to check if an object should spawn based on its chance
     public boolean shouldSpawnObject(WorldObject.ObjectType objectType, Random random) {
         float chance = getObjectSpawnChance(objectType);
         return random.nextFloat() < chance;
-    }
-
-    public void loadTileTextures() {
-        // Load main tile textures for this biome
-        for (Integer tileType : allowedTileTypes) {
-            String tileName = TileType.getTileTypeNames().get(tileType);
-            TextureRegion texture = TextureManager.tiles.findRegion(tileName);
-            if (texture != null) {
-                tileTextures.put(tileType, texture);
-                GameLogger.info("Loaded texture for tile type " + tileName + " in biome " + type);
-            } else {
-                // Handle missing texture
-                GameLogger.error("Missing texture for tile type " + tileName + " in biome " + type);
-            }
-        }
-    }
-
-    public void loadTransitionTiles() {
-        // Load transition tiles for transitions to other biomes
-        for (Map.Entry<BiomeType, Map<Integer, Integer>> transitionEntry : transitionTilesConfig.entrySet()) {
-            BiomeType neighborBiomeType = transitionEntry.getKey();
-            Map<Integer, Integer> tileMapping = transitionEntry.getValue();
-            Map<Integer, TextureRegion> neighborTransitionTiles = new HashMap<>();
-
-            for (Map.Entry<Integer, Integer> tileEntry : tileMapping.entrySet()) {
-                int fromTileType = tileEntry.getKey();
-                int toTileType = tileEntry.getValue();
-
-                String tileName = TileType.getTileTypeNames().get(toTileType);
-                TextureRegion texture = TextureManager.tiles.findRegion(tileName);
-                if (texture != null) {
-                    neighborTransitionTiles.put(fromTileType, texture);
-                    GameLogger.info("Loaded transition texture for tile type " + tileName + " from " + this.type + " to " + neighborBiomeType);
-                } else {
-                    GameLogger.error("Missing transition texture for tile type " + tileName + " from " + this.type + " to " + neighborBiomeType);
-                }
-            }
-
-            if (!neighborTransitionTiles.isEmpty()) {
-                transitionTiles.put(neighborBiomeType, neighborTransitionTiles);
-            }
-        }
-    }
-
-    public Map<Integer, TextureRegion> getTileTextures() {
-        return tileTextures;
-    }
-
-    public Map<BiomeType, Map<Integer, TextureRegion>> getTransitionTiles() {
-        return transitionTiles;
-    }
-
-    public Map<BiomeType, Map<Integer, Integer>> getTransitionTilesConfig() {
-        return transitionTilesConfig;
-    }
-
-    public void setTransitionTilesConfig(Map<BiomeType, Map<Integer, Integer>> transitionTilesConfig) {
-        this.transitionTilesConfig = transitionTilesConfig;
-    }
-
-    public TextureRegion getTileTexture(int tileType) {
-        return tileTextures.get(tileType);
-    }
-
-    public TextureRegion getTransitionTile(BiomeType neighborBiomeType, int tileType) {
-        Map<Integer, TextureRegion> transitions = transitionTiles.get(neighborBiomeType);
-        if (transitions != null) {
-            return transitions.get(tileType);
-        }
-        return null;
     }
 
     public BiomeType getType() {
         return type;
     }
 
-    public Map<Integer, Integer> getTileDistribution() {
+    public HashMap<Integer, Integer> getTileDistribution() {
         return tileDistribution;
     }
-
     public String getName() {
         return name;
     }
@@ -151,45 +155,13 @@ public class Biome {
         this.name = name;
     }
 
-    public void setSpawnChanceForTileType(int tileType, float chance) {
-        tileSpawnChances.put(tileType, chance);
-        spawnableTileTypes.add(tileType);
-    }
 
     public float getSpawnChanceForTileType(int tileType) {
         return tileSpawnChances.getOrDefault(tileType, 0f);
     }
 
-    public Map<Integer, Float> getTileSpawnChances() {
-        return tileSpawnChances;
-    }
-
-    public void setTileSpawnChances(Map<Integer, Float> tileSpawnChances) {
-        this.tileSpawnChances = tileSpawnChances;
-    }
-
-    public Set<Integer> getSpawnableTileTypes() {
-        return spawnableTileTypes;
-    }
-
-    public void setSpawnableTileTypes(Set<Integer> spawnableTileTypes) {
-        this.spawnableTileTypes = spawnableTileTypes;
-    }
-
     public float getTemperature() {
         return temperature;
-    }
-
-    public void setTemperature(float temperature) {
-        this.temperature = temperature;
-    }
-
-    public float getMoisture() {
-        return moisture;
-    }
-
-    public void setMoisture(float moisture) {
-        this.moisture = moisture;
     }
 
     public List<Integer> getAllowedTileTypes() {
@@ -206,5 +178,36 @@ public class Biome {
 
     public void setSpawnableObjects(List<WorldObject.ObjectType> spawnableObjects) {
         this.spawnableObjects = spawnableObjects;
+    }
+
+    private void useFallbackDistribution() {
+        // Provide safe default distribution
+        Map<Integer, Integer> fallback = new HashMap<>();
+        fallback.put(1, 70);  // grass
+        fallback.put(2, 20);  // dirt
+        fallback.put(3, 10);  // stone
+
+        this.allowedTileTypes = new ArrayList<>(fallback.keySet());
+        this.tileDistribution = new HashMap<>(fallback);
+
+        GameLogger.info(String.format("Biome %s using fallback distribution: %s",
+            name, fallback));
+    }
+
+    // Add this method to validate the entire biome state
+    public void validate() {
+        if (allowedTileTypes == null) {
+            allowedTileTypes = new ArrayList<>();
+        }
+
+        if (tileDistribution == null || tileDistribution.isEmpty()) {
+            useFallbackDistribution();
+        }
+
+        if (spawnableObjects == null) {
+            spawnableObjects = new ArrayList<>();
+        }
+
+        validateTileDistribution();
     }
 }

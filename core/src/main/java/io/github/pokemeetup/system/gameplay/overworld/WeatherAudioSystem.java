@@ -74,12 +74,10 @@ public class WeatherAudioSystem {
         switch (currentWeather) {
             case RAIN:
                 audioManager.updateWeatherLoop(AudioManager.WeatherSoundEffect.LIGHT_RAIN, intensity * 0.6f);
-                audioManager.stopWeatherLoop(AudioManager.WeatherSoundEffect.HEAVY_RAIN);
                 break;
 
             case HEAVY_RAIN:
             case THUNDERSTORM:
-                audioManager.updateWeatherLoop(AudioManager.WeatherSoundEffect.HEAVY_RAIN, intensity * 0.8f);
                 audioManager.stopWeatherLoop(AudioManager.WeatherSoundEffect.LIGHT_RAIN);
                 break;
 

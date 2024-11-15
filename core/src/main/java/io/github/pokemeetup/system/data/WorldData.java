@@ -16,6 +16,13 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class WorldData {// In WorldData.java
+    public Map<Vector2, Chunk> getChunks() {
+        return chunks;
+    }
+
+    public Map<Vector2, List<WorldObject>> getChunkObjects() {
+        return chunkObjects;
+    }
 
     private final Object timeLock = new Object();
     private final Object saveLock = new Object();
@@ -229,20 +236,12 @@ public class WorldData {// In WorldData.java
     public void addChunk(Vector2 position, Chunk chunk) {
         chunks.put(position, chunk);
     }
+    public Chunk getChunk(Vector2 chunkPos) {
+        return chunks.get(chunkPos);
+    }
 
     public void addChunkObjects(Vector2 position, List<WorldObject> objects) {
         chunkObjects.put(position, new ArrayList<>(objects));
-    }
-
-    private Map<Vector2, ChunkData> serializeChunks() {
-        Map<Vector2, ChunkData> serializedChunks = new HashMap<>();
-        for (Map.Entry<Vector2, Chunk> entry : chunks.entrySet()) {
-            ChunkData chunkData = new ChunkData();
-            chunkData.tileData = entry.getValue().getTileData();
-            chunkData.primaryBiomeType = entry.getValue().getBiome().getType().name();
-            serializedChunks.put(entry.getKey(), chunkData);
-        }
-        return serializedChunks;
     }
 
     public Object getTimeLock() {
@@ -536,14 +535,6 @@ public class WorldData {// In WorldData.java
         public void setPokemonSpawnRate(float rate) {
             this.pokemonSpawnRate = rate;
         }
-    }
-
-    public static class ChunkData implements Serializable {
-        public int[][] tileData;
-
-        public String primaryBiomeType;
-        public Map<String, Float> biomeTransitions;
-        // Add other chunk data
     }
 
     public static class WorldObjectData implements Serializable {

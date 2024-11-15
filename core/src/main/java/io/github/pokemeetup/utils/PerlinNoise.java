@@ -6,16 +6,6 @@ public class PerlinNoise {
     private static final int PERMUTATION_SIZE = 256;
     private static final int PERMUTATION_MASK = PERMUTATION_SIZE - 1;
     private final int[] permutation;
-
-    // Default values for terrain generation
-    private static final int DEFAULT_OCTAVES = 4;
-    private static final double DEFAULT_PERSISTENCE = 0.5;
-    private static final double DEFAULT_SCALE = 0.1;
-
-    /**
-     * Creates a new PerlinNoise generator with the specified seed.
-     * @param seed The seed for random number generation
-     */
     public PerlinNoise(int seed) {
         Random random = new Random(seed);
         this.permutation = new int[PERMUTATION_SIZE * 2];
@@ -40,11 +30,12 @@ public class PerlinNoise {
         }
     }
 
-
+    // In PerlinNoise class
     public double noise(double x, double y) {
-        // Add octaves for more natural-looking terrain
-        return noise(x, y, 4, 0.5, 1.0);
+        // Increase scale to spread out the noise values
+        return noise(x, y, 4, 0.5, 0.02); // Decrease scale from 0.1 to 0.02
     }
+
 
     public double noise(double x, double y, int octaves, double persistence, double scale) {
         double total = 0;
@@ -59,11 +50,9 @@ public class PerlinNoise {
             frequency *= 2;
         }
 
-        // Normalize the result to ensure it's between 0 and 1
-        return (total / maxValue + 1.0) / 2.0;
+        return total / maxValue;
     }
-
-    private double generateNoise(double x, double y) {
+private double generateNoise(double x, double y) {
         int X = fastFloor(x) & PERMUTATION_MASK;
         int Y = fastFloor(y) & PERMUTATION_MASK;
 
@@ -73,23 +62,21 @@ public class PerlinNoise {
         double u = fade(x);
         double v = fade(y);
 
-        int A = permutation[X] + Y;
-        int B = permutation[X + 1] + Y;
+        int aa = permutation[permutation[X] + Y];
+        int ab = permutation[permutation[X] + Y + 1];
+        int ba = permutation[permutation[X + 1] + Y];
+        int bb = permutation[permutation[X + 1] + Y + 1];
 
-        // Add more variation to the output
-        double result = lerp(v,
-            lerp(u,
-                grad(permutation[A], x, y),
-                grad(permutation[B], x - 1, y)
-            ),
-            lerp(u,
-                grad(permutation[A + 1], x, y - 1),
-                grad(permutation[B + 1], x - 1, y - 1)
-            )
-        );
+        double gradAA = grad(aa, x, y);
+        double gradBA = grad(ba, x - 1, y);
+        double gradAB = grad(ab, x, y - 1);
+        double gradBB = grad(bb, x - 1, y - 1);
 
-        // Ensure result is normalized between -1 and 1
-        return Math.max(-1, Math.min(1, result));
+        double lerpX1 = lerp(u, gradAA, gradBA);
+        double lerpX2 = lerp(u, gradAB, gradBB);
+
+    // The result is already between -1 and 1
+        return lerp(v, lerpX1, lerpX2);
     }
 
     private static double fade(double t) {
@@ -110,15 +97,5 @@ public class PerlinNoise {
     private static int fastFloor(double x) {
         int xi = (int) x;
         return x < xi ? xi - 1 : xi;
-    }
-
-    public double[][] generateTerrainMap(int width, int height, double scale) {
-        double[][] map = new double[width][height];
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                map[x][y] = noise(x * scale, y * scale);
-            }
-        }
-        return map;
     }
 }

@@ -9,6 +9,8 @@ import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.multiplayer.client.GameClient;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
+import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
+import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.textures.TextureManager;
 
 import java.util.*;
@@ -293,10 +295,18 @@ public class WorldObject {
     }
 
     public static class WorldObjectManager {
-        private static final float POKEBALL_SPAWN_CHANCE = 0.3f; // Reduced for better balance
+        private static final float POKEBALL_SPAWN_CHANCE = 0.1f; // Reduced for better balance
         private static final int MAX_POKEBALLS_PER_CHUNK = 2;
-        private static final int MIN_OBJECT_SPACING = 2; // Base spacing for small objects
-        private static final int MIN_TREE_SPACING = 4;   // Larger spacing for trees
+        private static final int MIN_OBJECT_SPACING = 2; // Base spacing for small objectsprivate static final int MIN_TREE_SPACING = 1; // Reduced from 2
+        private static final int MIN_TREE_SPACING = 1; // Reduced from 2
+        public void setObjectsForChunk(Vector2 chunkPos, List<WorldObject> objects) {
+            if (objects != null) {
+                objectsByChunk.put(chunkPos, new CopyOnWriteArrayList<>(objects));
+            } else {
+                objectsByChunk.remove(chunkPos);
+            }
+        }
+
         private final GameClient gameClient;
         private final Map<Vector2, List<WorldObject>> objectsByChunk = new ConcurrentHashMap<>();
         private final TextureAtlas atlas;
@@ -355,13 +365,22 @@ public class WorldObject {
         }
 
         public void generateObjectsForChunk(Vector2 chunkPos, Chunk chunk, Biome biome) {
-            List<WorldObject> objects = objectsByChunk.computeIfAbsent(chunkPos,
-                k -> new CopyOnWriteArrayList<>());
+            // Check if objects for this chunk have already been loaded
+            if (objectsByChunk.containsKey(chunkPos)) {
+                // Objects already exist for this chunk, do not regenerate
+                GameLogger.info("Objects for chunk " + chunkPos + " already loaded, skipping generation.");
+                return;
+            }
+
+            List<WorldObject> objects = new CopyOnWriteArrayList<>();
+            objectsByChunk.put(chunkPos, objects);
+
             Random random = new Random((long) (worldSeed + chunkPos.x * 31 + chunkPos.y * 17));
             List<String> spawnableObjects = biome.getSpawnableObjects().stream()
                 .filter(obj -> obj != ObjectType.VINES)
                 .map(Enum::name)
                 .collect(Collectors.toList());
+
             generateObjectClusters(chunk, chunkPos, objects, biome, random);
 
             // Handle individual objects
@@ -376,6 +395,7 @@ public class WorldObject {
                 tryPlaceVine(chunk, chunkPos, objects, random);
             }
         }
+
 
 
         public void renderTreeBase(SpriteBatch batch, WorldObject tree) {
@@ -704,30 +724,66 @@ public class WorldObject {
 
         private void generateObjectClusters(Chunk chunk, Vector2 chunkPos, List<WorldObject> objects,
                                             Biome biome, Random random) {
-            int clusterAttempts = Math.max(1, (int) (Chunk.CHUNK_SIZE * 5f));
+            // Adjust cluster parameters
+            int maxClusters = (Chunk.CHUNK_SIZE * Chunk.CHUNK_SIZE) / (MIN_TREE_SPACING * MIN_TREE_SPACING);int clusterAttempts = Math.min(maxClusters, 10); // Increased from 5
 
             for (int i = 0; i < clusterAttempts; i++) {
-                if (random.nextFloat() < 0.3f) { // Cluster formation chance
-                    int centerX = random.nextInt(Chunk.CHUNK_SIZE);
-                    int centerY = random.nextInt(Chunk.CHUNK_SIZE);
-                    int clusterSize = random.nextInt(3) + 2; // 2-4 objects per cluster
+                if (random.nextFloat() < 0.4f) { // Increased cluster chance
+                    // Ensure clusters start on even coordinates
+                    int centerX = random.nextInt(Chunk.CHUNK_SIZE / 2) * 2;
+                    int centerY = random.nextInt(Chunk.CHUNK_SIZE / 2) * 2;
 
-                    // Select a random object type for the cluster
-                    List<WorldObject.ObjectType> spawnableObjects = biome.getSpawnableObjects();
-                    if (!spawnableObjects.isEmpty()) {
-                        WorldObject.ObjectType selectedType = spawnableObjects.get(
-                            random.nextInt(spawnableObjects.size()));
-
-                        // Check spawn chance for the cluster
-                        if (biome.shouldSpawnObject(selectedType, random)) {
-                            generateCluster(chunk, chunkPos, objects, biome, random,
-                                centerX, centerY, clusterSize);
-                        }
-                    }
+                    generateCluster(chunk, chunkPos, objects, biome, random,
+                        centerX, centerY, random.nextInt(2) + 2); // 2-3 trees per cluster
                 }
             }
         }
 
+        private void generateCluster(Chunk chunk, Vector2 chunkPos, List<WorldObject> objects,
+                                     Biome biome, Random random, int centerX, int centerY, int clusterSize) {
+            List<Point> potentialSpots = new ArrayList<>();
+
+            // Generate potential spots on grid
+            for (int dx = -2; dx <= 2; dx += 2) {
+                for (int dy = -2; dy <= 2; dy += 2) {
+                    int newX = centerX + dx;
+                    int newY = centerY + dy;
+
+                    if (newX >= 0 && newX < Chunk.CHUNK_SIZE - 1 &&
+                        newY >= 0 && newY < Chunk.CHUNK_SIZE - 1) {
+                        potentialSpots.add(new Point(newX, newY));
+                    }
+                }
+            }
+
+            // Shuffle spots and try to place trees
+            Collections.shuffle(potentialSpots, random);
+            int treesPlaced = 0;
+
+            for (Point spot : potentialSpots) {
+                if (treesPlaced >= clusterSize) break;
+
+                if (canPlaceTree(chunk, spot.x, spot.y, objects, biome)) {
+                    placeTree(chunk, spot.x, spot.y, objects, biome, chunkPos);
+                    treesPlaced++;
+                }
+            }
+        }  private void placeTree(Chunk chunk, int x, int y, List<WorldObject> objects,
+                                  Biome biome, Vector2 chunkPos) {
+            int worldTileX = (int) (chunkPos.x * Chunk.CHUNK_SIZE + x);
+            int worldTileY = (int) (chunkPos.y * Chunk.CHUNK_SIZE + y);
+
+            ObjectType treeType = biome.getType() == BiomeType.SNOW ? ObjectType.SNOW_TREE :
+                biome.getType() == BiomeType.HAUNTED ? ObjectType.HAUNTED_TREE :
+                    biome.getType() == BiomeType.RAIN_FOREST ? ObjectType.RAIN_TREE :
+                        ObjectType.TREE;
+
+            TextureRegion texture = objectTextures.get(treeType);
+            if (texture != null) {
+                WorldObject tree = new WorldObject(worldTileX, worldTileY, texture, treeType);
+                objects.add(tree);
+            }
+        }
         private void placeObject(Chunk chunk, int x, int y, List<WorldObject> objects,
                                  ObjectType objectType, Vector2 chunkPos, boolean[][] occupiedTiles) {
             // Convert to world coordinates
@@ -805,6 +861,53 @@ public class WorldObject {
             // Check tile type
             int tileType = chunk.getTileType(x, y);
             return biome.getAllowedTileTypes().contains(tileType);
+        }  private boolean canPlaceTree(Chunk chunk, int localX, int localY, List<WorldObject> existingObjects, Biome biome) {
+            int treeBaseWidth = 2;
+            int treeBaseHeight = 2;
+            int edgeBuffer = 1;
+
+            // Check chunk bounds
+            if (localX < edgeBuffer || localY < edgeBuffer ||
+                localX + treeBaseWidth >= Chunk.CHUNK_SIZE - edgeBuffer ||
+                localY + treeBaseHeight >= Chunk.CHUNK_SIZE - edgeBuffer) {
+                return false;
+            }
+
+            // Convert to world coordinates for consistent spacing check
+            int worldX = chunk.getChunkX() * Chunk.CHUNK_SIZE + localX;
+            int worldY = chunk.getChunkY() * Chunk.CHUNK_SIZE + localY;
+
+            // Check surrounding area including neighboring chunks
+            for (WorldObject obj : existingObjects) {
+                if (obj.getType() == ObjectType.TREE ||
+                    obj.getType() == ObjectType.SNOW_TREE ||
+                    obj.getType() == ObjectType.HAUNTED_TREE ||
+                    obj.getType() == ObjectType.RAIN_TREE) {
+
+                    // Calculate distance in world coordinates
+                    int dx = Math.abs(obj.getTileX() - worldX);
+                    int dy = Math.abs(obj.getTileY() - worldY);
+
+                    if (dx < MIN_TREE_SPACING * 2 && dy < MIN_TREE_SPACING * 2) {
+                        return false;
+                    }
+                }
+            }
+
+            // Check base tiles for valid placement
+            for (int dx = 0; dx < treeBaseWidth; dx++) {
+                for (int dy = 0; dy < treeBaseHeight; dy++) {
+                    int checkX = localX + dx;
+                    int checkY = localY + dy;
+
+                    int tileType = chunk.getTileType(checkX, checkY);
+                    if (!biome.getAllowedTileTypes().contains(tileType)) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
         }
 
         private void placeSmallObjects(Chunk chunk, Vector2 chunkPos, List<WorldObject> objects,
@@ -860,56 +963,7 @@ public class WorldObject {
             return true;
         }
 
-        private void generateCluster(Chunk chunk, Vector2 chunkPos, List<WorldObject> objects,
-                                     Biome biome, Random random, int centerX, int centerY, int clusterSize) {
-            // Define cluster spread radius
-            int spreadRadius = 3;
 
-            // Keep track of placed object positions to avoid overlaps
-            Set<Point> occupiedPositions = new HashSet<>();
-
-            // Try to place objects around the center point
-            for (int i = 0; i < clusterSize; i++) {
-                // Try several times to find a valid position
-                for (int attempts = 0; attempts < 10; attempts++) {
-                    // Calculate random offset from center
-                    int offsetX = random.nextInt(spreadRadius * 2) - spreadRadius;
-                    int offsetY = random.nextInt(spreadRadius * 2) - spreadRadius;
-
-                    int newX = centerX + offsetX;
-                    int newY = centerY + offsetY;
-
-                    // Check if position is within chunk bounds
-                    if (newX >= 0 && newX < Chunk.CHUNK_SIZE &&
-                        newY >= 0 && newY < Chunk.CHUNK_SIZE) {
-
-                        Point position = new Point(newX, newY);
-
-                        // Check if position is not occupied and placement is valid
-                        if (!occupiedPositions.contains(position) &&
-                            canPlaceObjectAt(chunk, newX, newY, biome)) {
-
-                            // Convert to world coordinates
-                            int worldTileX = (int) (chunkPos.x * Chunk.CHUNK_SIZE + newX);
-                            int worldTileY = (int) (chunkPos.y * Chunk.CHUNK_SIZE + newY);
-
-                            // Create and add the object
-                            WorldObject.ObjectType objType = biome.getSpawnableObjects().get(
-                                random.nextInt(biome.getSpawnableObjects().size())
-                            );
-
-                            TextureRegion texture = TextureManager.getTextureForObjectType(objType);
-                            if (texture != null) {
-                                WorldObject object = new WorldObject(worldTileX, worldTileY, texture, objType);
-                                objects.add(object);
-                                occupiedPositions.add(position);
-                                break; // Successfully placed object, move to next one
-                            }
-                        }
-                    }
-                }
-            }
-        }// Helper class for position tracking
 
         private boolean canPlaceObjectAt(Chunk chunk, int localX, int localY, Biome biome) {
             // Get tile type at position
@@ -970,9 +1024,8 @@ public class WorldObject {
             if (!biome.getAllowedTileTypes().contains(tileType)) {
                 return false;
             }
+            int minSpacing = 1; // Reduced from 2
 
-            // Check spacing between objects
-            int minSpacing = 2; // Default spacing
             if (objects != null) {
                 int worldX = (int) (chunk.getChunkX() * Chunk.CHUNK_SIZE + x);
                 int worldY = (int) (chunk.getChunkY() * Chunk.CHUNK_SIZE + y);
@@ -982,11 +1035,6 @@ public class WorldObject {
                     int dy = Math.abs(obj.getTileY() - worldY);
 
                     // Adjust spacing based on object type
-                    if (obj.getType() == ObjectType.TREE ||
-                        obj.getType() == ObjectType.SNOW_TREE ||
-                        obj.getType() == ObjectType.HAUNTED_TREE) {
-                        minSpacing = MIN_TREE_SPACING;
-                    }
 
                     if (dx < minSpacing && dy < minSpacing) {
                         return false;
@@ -995,20 +1043,6 @@ public class WorldObject {
             }
 
             return true;
-        }
-
-        private void tryPlaceTree(Chunk chunk, int x, int y, List<WorldObject> objects,
-                                  Biome biome, Vector2 chunkPos, WorldObject.ObjectType treeType) {
-            if (canPlaceTree(chunk, x, y, objects, biome)) {
-                int worldTileX = (int) ((chunkPos.x * Chunk.CHUNK_SIZE) + x);
-                int worldTileY = (int) ((chunkPos.y * Chunk.CHUNK_SIZE) + y);
-
-                TextureRegion texture = objectTextures.get(treeType);
-                if (texture != null) {
-                    WorldObject tree = new WorldObject(worldTileX, worldTileY, texture, treeType);
-                    objects.add(tree);
-                }
-            }
         }
 
         private float getSpawnChance(Biome biome) {
@@ -1035,47 +1069,6 @@ public class WorldObject {
             return random.nextFloat() < spawnChance;
         }
 
-        private boolean canPlaceTree(Chunk chunk, int localX, int localY, List<WorldObject> existingObjects, Biome biome) {
-            int treeBaseWidth = 2;  // Base is 2x2 tiles
-            int treeBaseHeight = 2;
-            int treeTopHeight = 1;  // Top is 2x1 tiles
-            int edgeBuffer = 1;
-
-            // Check if tree base fits within chunk bounds
-            if (localX < edgeBuffer || localY < edgeBuffer ||
-                localX + treeBaseWidth > Chunk.CHUNK_SIZE - edgeBuffer ||
-                localY + treeBaseHeight > Chunk.CHUNK_SIZE - edgeBuffer) {
-                return false;
-            }
-
-            // Check base tiles (2x2)
-            for (int x = localX; x < localX + treeBaseWidth; x++) {
-                for (int y = localY; y < localY + treeBaseHeight; y++) {
-                    int tileType = chunk.getTileType(x, y);
-                    if (!biome.getAllowedTileTypes().contains(tileType)) {
-                        return false;
-                    }
-                }
-            }
-            int chunkWorldX = chunk.getChunkX() * Chunk.CHUNK_SIZE;
-            int chunkWorldY = chunk.getChunkY() * Chunk.CHUNK_SIZE;
-            int treeWorldX = chunkWorldX + localX;
-            int treeWorldY = chunkWorldY + localY;
-            int minSpacing = MIN_TREE_SPACING;
-            for (WorldObject obj : existingObjects) {
-                if (obj.getType() == ObjectType.TREE ||
-                    obj.getType() == ObjectType.SNOW_TREE ||
-                    obj.getType() == ObjectType.HAUNTED_TREE) {
-                    int dx = Math.abs(obj.getTileX() - treeWorldX);
-                    int dy = Math.abs(obj.getTileY() - treeWorldY);
-                    if (dx < minSpacing && dy < minSpacing) {
-                        return false;
-                    }
-                }
-            }
-
-            return true;
-        }
 
         private static class Point {
             final int x, y;

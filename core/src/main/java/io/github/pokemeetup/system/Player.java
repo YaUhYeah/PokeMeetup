@@ -343,7 +343,7 @@ public class Player {
         if (world != null && world.getWorldData() != null) {
             PlayerData savedData = world.getWorldData().getPlayerData(username);
             if (savedData != null) {
-                playerData.applyToPlayer(this);
+                savedData.applyToPlayer(this);
                 GameLogger.info("Loaded saved state for player: " + username);
             } else {
                 this.playerData = new PlayerData(username);

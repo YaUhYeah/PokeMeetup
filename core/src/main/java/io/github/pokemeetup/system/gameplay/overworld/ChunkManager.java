@@ -2,6 +2,8 @@ package io.github.pokemeetup.system.gameplay.overworld;
 
 import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.math.Vector2;
+import io.github.pokemeetup.utils.ChunkPos;
+
 import java.util.*;
 
 import static io.github.pokemeetup.system.gameplay.overworld.World.TILE_SIZE;
@@ -12,7 +14,7 @@ public class ChunkManager {
     private static final int LOAD_RADIUS = 3;
     public static final float VISIBILITY_BUFFER = 2f * CHUNK_PIXEL_SIZE;
 
-    public static boolean isChunkVisible(Vector2 chunkPos, Rectangle viewBounds) {
+    public static boolean isChunkVisible(ChunkPos chunkPos, Rectangle viewBounds) {
         // Convert chunk position to world coordinates
         float chunkWorldX = chunkPos.x * CHUNK_PIXEL_SIZE;
         float chunkWorldY = chunkPos.y * CHUNK_PIXEL_SIZE;

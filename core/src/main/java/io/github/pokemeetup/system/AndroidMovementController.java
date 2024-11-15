@@ -12,6 +12,11 @@ public class AndroidMovementController {
     public AndroidMovementController(Player player) {
         this.player = player;
     }
+
+    public void reset() {
+        queuedDirection = null;
+    }
+
     private void updateMovement() {
         float dx = currentTouch.x - touchDown.x;
         float dy = currentTouch.y - touchDown.y;
@@ -56,5 +61,4 @@ public class AndroidMovementController {
             player.move(queuedDirection);
         }
     }
-
 }

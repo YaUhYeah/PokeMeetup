@@ -7,9 +7,6 @@ import io.github.pokemeetup.utils.GameLogger;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-
-import static android.content.ContentValues.TAG;
 
 public class AndroidFileSystemDelegate implements FileSystemDelegate {
     private static final String TAG = "AndroidFileSystem";
@@ -143,8 +140,8 @@ public class AndroidFileSystemDelegate implements FileSystemDelegate {
         String[] variants = {
             path,
             path.toLowerCase(),
-            path.replace("Data/", "data/"),
-            path.replace("/Data/", "/data/"),
+            path.replace("data/", "data/"),
+            path.replace("/data/", "/data/"),
             path.substring(path.lastIndexOf("/") + 1)
         };
 
@@ -166,8 +163,8 @@ public class AndroidFileSystemDelegate implements FileSystemDelegate {
 
     private String readBiomesJson() throws IOException {
         String[] biomePaths = {
-            "Data/biomes.json",
-            "data/biomes.json",
+                "data/biomes.json",
+                "data/biomes.json",
             "biomes.json",
             "assets/Data/biomes.json"
         };
@@ -206,7 +203,7 @@ public class AndroidFileSystemDelegate implements FileSystemDelegate {
 
         // Handle special directories like "Data"
         if (path.startsWith("data/")) {
-            path = "Data/" + path.substring(5);
+            path = "data/" + path.substring(5);
         }
 
         return path;
@@ -281,8 +278,8 @@ public class AndroidFileSystemDelegate implements FileSystemDelegate {
             assetPath,
             assetPath.toLowerCase(),
             "assets/" + assetPath,
-            assetPath.replace("Data/", "data/"),
-            assetPath.replace("data/", "Data/")
+            assetPath.replace("data/", "data/"),
+            assetPath.replace("data/", "data/")
         };
 
         for (String tryPath : possiblePaths) {

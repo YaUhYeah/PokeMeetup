@@ -3,6 +3,7 @@ package io.github.pokemeetup.multiplayer.network;
 import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
+import com.esotericsoftware.kryonet.FrameworkMessage;
 import io.github.pokemeetup.multiplayer.server.entity.CreatureEntity;
 import io.github.pokemeetup.multiplayer.server.entity.Entity;
 import io.github.pokemeetup.multiplayer.server.entity.EntityType;
@@ -14,6 +15,8 @@ import io.github.pokemeetup.system.data.PlayerData;
 import io.github.pokemeetup.system.data.PokemonData;
 import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
+import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
+import io.github.pokemeetup.utils.ChunkPos;
 import io.github.pokemeetup.utils.UUIDSerializer;
 
 import java.io.Serializable;
@@ -26,10 +29,16 @@ public class NetworkProtocol {
         kryo.register(Vector2.class);
         kryo.register(ArrayList.class);
         kryo.register(List.class);
+        kryo.register(ChunkPos.class);
+        kryo.register(int[][].class); // For the tileData 2D array
         kryo.register(HashMap.class);
         kryo.register(Map.class);
         kryo.register(java.util.concurrent.ConcurrentHashMap.class);
-
+        kryo.register(PokemonData.Stats.class);
+        kryo.register(WorldData.class);
+        kryo.register(io.github.pokemeetup.system.data.WorldData.class);
+        kryo.register(io.github.pokemeetup.system.data.WorldData.WorldObjectData.class);
+        kryo.register(io.github.pokemeetup.system.data.WorldData.WorldConfig.class);
 
         // Enums
         kryo.register(NetworkObjectUpdateType.class);
@@ -46,6 +55,8 @@ public class NetworkProtocol {
         kryo.register(ItemData[].class);
         kryo.register(UUID.class);
         kryo.register(InventoryUpdate.class);
+        kryo.register(ChunkData.class);
+        kryo.register(BiomeType.class);
         // Game state and network classes
         kryo.register(PlayerPosition.class);
         kryo.register(PlayerUpdate.class);
@@ -57,6 +68,8 @@ public class NetworkProtocol {
         // Complex data models and entities
         kryo.register(WorldState.class);
         kryo.register(PlayerState.class);
+        kryo.register(ChunkUpdate.class);
+        kryo.register(ChunkRequest.class);
         kryo.register(EntityUpdate.class);
         kryo.register(Entity.class);
         kryo.register(EntityType.class);
@@ -79,7 +92,6 @@ public class NetworkProtocol {
         // Miscellaneous
         kryo.register(io.github.pokemeetup.system.data.WorldData.WorldConfig.class);
 
-        kryo.register(ChunkUpdate.class);
         kryo.register(TeamCreate.class);
 
         kryo.register(ServerShutdown.class);
@@ -90,8 +102,14 @@ public class NetworkProtocol {
         kryo.register(ChatMessage.class);
         kryo.register(TeamInvite.class);
         kryo.register(TeamHQUpdate.class);
+        kryo.register(ChunkDataFragment.class);
+        kryo.register(ChunkDataComplete.class);
         kryo.register(ServerInfoRequest.class);
         kryo.register(ServerInfoResponse.class);
+        kryo.register(FrameworkMessage.KeepAlive.class);
+        kryo.register(FrameworkMessage.Ping.class);
+        kryo.register(FrameworkMessage.RegisterTCP.class);
+        kryo.register(FrameworkMessage.RegisterUDP.class);
         kryo.register(ServerInfo.class);
         // Additional Entity subclasses
         kryo.register(CreatureEntity.class);
@@ -117,6 +135,35 @@ public class NetworkProtocol {
                 return new UUID(input.readLong(), input.readLong());
             }
         });
+        kryo.setRegistrationRequired(false); // Important for framework messages
+        kryo.setReferences(true);
+    }
+    public static class ChunkRequest {
+        public int chunkX;
+        public int chunkY;
+        public int fragmentSize = 8; // Size of each fragment
+        public long timestamp;
+    }public static class ChunkData {
+        public int chunkX;
+        public int chunkY;
+        public BiomeType biomeType;
+        public int[][] tileData;
+        // Include any other necessary data
+    }
+    public static class ChunkDataFragment {
+        public int chunkX;
+        public int chunkY;
+        public int startX;
+        public int startY;
+        public int fragmentSize;
+        public int[][] tileData;
+        public BiomeType biomeType;
+        public int fragmentIndex;
+        public int totalFragments;
+    }
+    public static class ChunkDataComplete {
+        public int chunkX;
+        public int chunkY;
     }
 
     public static void registerPokemonClasses(Kryo kryo) {
@@ -152,11 +199,13 @@ public class NetworkProtocol {
         public boolean success;
         public String message;
     }
+
     public static class ConnectionValidation {
         public String username;
         public long timestamp;
         public String sessionId; // Add a unique session ID for each connection
     }
+
     public static class ClientMessage {
         public static final int TYPE_LOGOUT = 1;
 

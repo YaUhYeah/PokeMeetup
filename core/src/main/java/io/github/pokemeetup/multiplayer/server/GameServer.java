@@ -1,5 +1,6 @@
 package io.github.pokemeetup.multiplayer.server;
 
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Json;
@@ -7,6 +8,7 @@ import com.esotericsoftware.kryonet.Server;
 import com.esotericsoftware.kryonet.Connection;
 import com.esotericsoftware.kryonet.Listener;
 import com.esotericsoftware.minlog.Log;
+import com.sun.org.apache.bcel.internal.generic.ObjectType;
 import com.sun.tools.jconsole.JConsoleContext;
 import io.github.pokemeetup.CreatureCaptureGame;
 import io.github.pokemeetup.managers.BiomeManager;
@@ -29,6 +31,7 @@ import io.github.pokemeetup.system.gameplay.overworld.Chunk;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
+import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.PasswordUtils;
@@ -45,11 +48,14 @@ import java.util.stream.Collectors;
 
 public class GameServer {
     private static final long CONNECTION_TIMEOUT = 1000;
-    private static final int SCHEDULER_POOL_SIZE = 3;
+    private static final int SCHEDULER_POOL_SIZE = 3;// At the start of GameServer class, update constants
+    private static final int WRITE_BUFFER = 65536; // Increased for larger chunks
+    private static final int OBJECT_BUFFER = 32768; // Increased for larger chunks
     private static final long AUTH_TIMEOUT = 10000;
     private static final long CLEANUP_INTERVAL = 60000; // 1 minute
     private static final int SYNC_BATCH_SIZE = 10;
     private static final float SYNC_INTERVAL = 1 / 20f; // 20Hz sync rate
+    private static final long JOIN_COOLDOWN = 5000; // 5 seconds cooldown between join attempts
     private final Map<Integer, ConnectionState> connectionStates = new ConcurrentHashMap<>();
     private final Server networkServer;
     private final ServerConnectionConfig config;
@@ -63,7 +69,10 @@ public class GameServer {
     private final PlayerManager playerManager;
     private final ScheduledExecutorService scheduler;
     private final Queue<NetworkProtocol.PlayerUpdate> pendingUpdates = new ConcurrentLinkedQueue<>();
-    private final Map<String, Integer> activeUserConnections = new ConcurrentHashMap<>(); // Map username to connection ID
+    private final Map<String, Integer> activeUserConnections = new ConcurrentHashMap<>();
+    private final Map<String, ServerPlayer> activePlayers = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastJoinTime = new ConcurrentHashMap<>();
+    private final Map<Vector2, Chunk> generatedChunks = new ConcurrentHashMap<>();
     private PluginManager pluginManager = null;
     private WorldData multiplayerWorld;
     private volatile boolean running;
@@ -79,8 +88,13 @@ public class GameServer {
         Log.set(Log.LEVEL_DEBUG);
         this.config = config;
         this.storageSystem = new ServerStorageSystem();
-        this.networkServer = new Server(16384, 2048); // Initialize KryoNet Server with send and receive buffers
-        this.databaseManager = new DatabaseManager(); // Initialize DatabaseManager
+        this.networkServer = new Server(WRITE_BUFFER, OBJECT_BUFFER);
+        NetworkProtocol.registerClasses(networkServer.getKryo());
+
+        // Enable chunked/fragmented transfers for large packets
+        networkServer.getKryo().setReferences(true);
+        networkServer.getKryo().setRegistrationRequired(false);
+        this.databaseManager = new DatabaseManager();
         this.storage = new FileStorage(config.getDataDirectory());
         this.eventManager = new EventManager();
         this.connectedPlayers = new ConcurrentHashMap<>();
@@ -93,10 +107,6 @@ public class GameServer {
 
             this.multiplayerWorld = initializeMultiplayerWorld();
 
-            if (this.multiplayerWorld == null) {
-                throw new RuntimeException("Failed to initialize multiplayer world");
-            }
-
             setupNetworkListener();
             this.pluginManager = new PluginManager(this, multiplayerWorld);
             this.biomeManager = new BiomeManager(multiplayerWorld.getConfig().getSeed());
@@ -105,6 +115,7 @@ public class GameServer {
             throw new RuntimeException("Failed to initialize server world", e);
         }
     }
+
     private WorldData initializeMultiplayerWorld() {
         try {
             // First try to load existing world
@@ -120,14 +131,13 @@ public class GameServer {
                     0.05f   // pokemon spawn rate
                 );
 
-                // Initialize world data
-                world.setWorldTimeInMinutes(480.0); // Start at 8:00 AM
-                world.setDayLength(24.0f);          // 24 minutes per day
+                world.setWorldTimeInMinutes(480.0);
+                world.setDayLength(24.0f);
                 world.setPlayedTime(0);
 
                 // Set spawn point
-                world.setSpawnX(500); // Adjust based on your world size
-                world.setSpawnY(500);
+                world.setSpawnX(0);
+                world.setSpawnY(0);
 
                 // Save the initialized world
                 worldManager.saveWorld(world);
@@ -172,93 +182,7 @@ public class GameServer {
         }
     }
 
-    private void initializeWorldData(WorldData worldData) {
-        try {
-            // Set up spawn point (center of world)
-            int spawnX = World.WORLD_SIZE / 2;
-            int spawnY = World.WORLD_SIZE / 2;
-            worldData.setSpawnX(spawnX);
-            worldData.setSpawnY(spawnY);
 
-            // Initialize time values
-            worldData.setWorldTimeInMinutes(480.0); // Start at 8:00 AM
-            worldData.setDayLength(24.0f); // 24 minutes = 1 game day
-            worldData.setPlayedTime(0);
-
-            // Generate initial chunks around spawn
-            int spawnChunkRadius = 3;
-            for (int x = -spawnChunkRadius; x <= spawnChunkRadius; x++) {
-                for (int y = -spawnChunkRadius; y <= spawnChunkRadius; y++) {
-                    Vector2 chunkPos = new Vector2(x, y);
-                    BiomeTransitionResult biomeTransition = biomeManager.getBiomeAt(
-                        x * Chunk.CHUNK_SIZE * World.TILE_SIZE,
-                        y * Chunk.CHUNK_SIZE * World.TILE_SIZE
-                    );
-
-                    Chunk chunk = new Chunk(
-                        x, y,
-                        biomeTransition.getPrimaryBiome(),
-                        worldData.getConfig().getSeed(),
-                        biomeManager
-                    );
-
-                    worldData.addChunk(chunkPos, chunk);
-
-                    // Generate and add objects for this chunk
-                    List<WorldObject> objects = generateChunkObjects(chunk, chunkPos, worldData.getConfig());
-                    worldData.addChunkObjects(chunkPos, objects);
-                }
-            }
-
-            GameLogger.info("World data initialized successfully");
-
-        } catch (Exception e) {
-            GameLogger.error("Failed to initialize world data: " + e.getMessage());
-            throw new RuntimeException("World initialization failed", e);
-        }
-    }
-
-    private List<WorldObject> generateChunkObjects(Chunk chunk, Vector2 chunkPos, WorldData.WorldConfig config) {
-        List<WorldObject> objects = new ArrayList<>();
-        Random random = new Random((long) (config.getSeed() + chunkPos.x * 31 + chunkPos.y * 17)); // Use seed from config
-
-        float worldX = chunkPos.x * Chunk.CHUNK_SIZE * World.TILE_SIZE;
-        float worldY = chunkPos.y * Chunk.CHUNK_SIZE * World.TILE_SIZE;
-
-        Biome biome = chunk.getBiome();
-        float objectDensity = config.getTreeSpawnRate(); // Use the density from WorldConfig
-
-        // Adjust density based on biome
-        switch (biome.getType()) {
-            case FOREST:
-                objectDensity *= 1.5f;
-                break;
-            case DESERT:
-                objectDensity *= 0.5f;
-                break;
-            case SNOW:
-                objectDensity *= 0.8f;
-                break;
-        }
-
-        for (int x = 0; x < Chunk.CHUNK_SIZE; x++) {
-            for (int y = 0; y < Chunk.CHUNK_SIZE; y++) {
-                if (random.nextFloat() < objectDensity) {
-                    WorldObject object = generateObjectForBiome(
-                        biome,
-                        worldX + x * World.TILE_SIZE,
-                        worldY + y * World.TILE_SIZE,
-                        random
-                    );
-                    if (object != null) {
-                        objects.add(object);
-                    }
-                }
-            }
-        }
-
-        return objects;
-    }
 
     private void broadcastPlayerStates() {
         scheduler.scheduleAtFixedRate(() -> {
@@ -273,7 +197,6 @@ public class GameServer {
 
                 if (updates.isEmpty()) return;
 
-                // Create combined update packet
                 NetworkProtocol.PlayerPosition position = new NetworkProtocol.PlayerPosition();
                 position.players = new HashMap<>();
                 updates.forEach(u -> position.players.put(u.username, u));
@@ -318,7 +241,7 @@ public class GameServer {
             GameLogger.error("Error handling server info request: " + e.getMessage());
         }
     }
-    private final Map<String, ServerPlayer> activePlayers = new ConcurrentHashMap<>();
+
     private boolean isUserAlreadyConnected(String username) {
         synchronized (activeUserConnections) {
             Integer connectionId = activeUserConnections.get(username);
@@ -329,6 +252,7 @@ public class GameServer {
             return false;
         }
     }
+
     private void handleLoginRequest(Connection connection, NetworkProtocol.LoginRequest request) {
         try {
             GameLogger.info("Processing login request for: " + request.username);
@@ -387,6 +311,7 @@ public class GameServer {
             sendLoginFailure(connection, "Server error occurred");
         }
     }
+
     private WorldData cloneWorldDataWithoutOtherPlayers(WorldData originalWorldData, String currentUsername) {
         // Use serialization-deserialization for deep copy
         try {
@@ -412,6 +337,7 @@ public class GameServer {
             return null;
         }
     }
+
     private void forceDisconnectUser(String username) {
         synchronized (activeUserConnections) {
             Integer connectionId = activeUserConnections.get(username);
@@ -425,56 +351,47 @@ public class GameServer {
                 }
                 activeUserConnections.remove(username);
                 activePlayers.remove(username);
+                connectedPlayers.remove(connectionId); // Add this line
             }
         }
     }
 
+
     private void handleSuccessfulLogin(Connection connection, ServerPlayer player) {
-            try {
-                // Ensure world is initialized
-                if (multiplayerWorld == null) {
-                    throw new RuntimeException("Multiplayer world not initialized");
-                }
+        try {
+            // Send the full world data without removing other players
+            NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
+            response.success = true;
+            response.username = player.getUsername();
+            response.message = "Login successful";
 
-                // Create login response with world data
-                WorldData worldDataToSend = cloneWorldDataWithoutOtherPlayers(multiplayerWorld, player.getUsername());
+            // Set world data
+            response.worldData = multiplayerWorld; // Send the shared world data
 
-                // Create login response with world data
-                NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
-                response.success = true;
-                response.username = player.getUsername();
-                response.message = "Login successful";
+            // Set player data
+            response.playerData = player.getData();
+            response.x = (int) player.getPosition().x;
+            response.y = (int) player.getPosition().y;
+            response.timestamp = System.currentTimeMillis();
 
-                // Set world data
-                response.worldData = worldDataToSend;
+            // Send response
+            connection.sendTCP(response);
 
-                // Set player data
-                response.playerData = player.getData();
-                response.x = (int) player.getPosition().x;
-                response.y = (int) player.getPosition().y;
-                response.timestamp = System.currentTimeMillis();
+            // Update server state
+            connectedPlayers.put(connection.getID(), player.getUsername());
+            GameLogger.info("Player logged in successfully: " + player.getUsername());
 
-                // Send response
-                connection.sendTCP(response);
+            // Send existing players to new player
+            sendExistingPlayersToNewPlayer(connection);
 
-                // Update server state
-                connectedPlayers.put(connection.getID(), player.getUsername());
-                GameLogger.info("Player logged in successfully: " + player.getUsername());
+            // Broadcast new player to others
+            broadcastNewPlayerToOthers(connection, player);
 
-                // Send existing players to new player
-                sendExistingPlayersToNewPlayer(connection);
-
-                // Broadcast new player to others
-                broadcastNewPlayerToOthers(connection, player);
-
-                // Send current world state
-                sendWorldState(connection,player.getUsername());
-
-            } catch (Exception e) {
-                GameLogger.error("Error during login completion: " + e.getMessage());
-                handleLoginError(connection, player, e);
-            }
+        } catch (Exception e) {
+            GameLogger.error("Error during login completion: " + e.getMessage());
+            handleLoginError(connection, player, e);
         }
+    }
 
     private void sendExistingPlayersToNewPlayer(Connection connection) {
         try {
@@ -498,88 +415,70 @@ public class GameServer {
         }
     }
 
-
     private void broadcastNewPlayerToOthers(Connection connection, ServerPlayer newPlayer) {
-            try {
-                NetworkProtocol.PlayerJoined joinMessage = new NetworkProtocol.PlayerJoined();
-                joinMessage.username = newPlayer.getUsername();
-                joinMessage.x = newPlayer.getPosition().x;
-                joinMessage.y = newPlayer.getPosition().y;
-                joinMessage.direction = newPlayer.getDirection();
-                joinMessage.isMoving = newPlayer.isMoving();
-                joinMessage.timestamp = System.currentTimeMillis();
-
-                // Send player joined message to all except new player
-                networkServer.sendToAllExceptTCP(connection.getID(), joinMessage);
-
-                // Send system message about new player
-                NetworkProtocol.ChatMessage systemMessage = new NetworkProtocol.ChatMessage();
-                systemMessage.sender = "System";
-                systemMessage.content = newPlayer.getUsername() + " has joined the game";
-                systemMessage.type = NetworkProtocol.ChatType.SYSTEM;
-                systemMessage.timestamp = System.currentTimeMillis();
-
-                networkServer.sendToAllTCP(systemMessage);
-                GameLogger.info("Broadcast new player join: " + newPlayer.getUsername());
-
-            } catch (Exception e) {
-                GameLogger.error("Error broadcasting new player: " + e.getMessage());
-            }
-        }
-
-    private void sendWorldState(Connection connection, String currentUsername) {
         try {
-            WorldData worldDataToSend = cloneWorldDataWithoutOtherPlayers(multiplayerWorld, currentUsername);
+            NetworkProtocol.PlayerJoined joinMessage = new NetworkProtocol.PlayerJoined();
+            joinMessage.username = newPlayer.getUsername();
+            joinMessage.x = newPlayer.getPosition().x;
+            joinMessage.y = newPlayer.getPosition().y;
+            joinMessage.direction = newPlayer.getDirection();
+            joinMessage.isMoving = newPlayer.isMoving();
+            joinMessage.timestamp = System.currentTimeMillis();
 
-            NetworkProtocol.WorldStateUpdate worldUpdate = new NetworkProtocol.WorldStateUpdate();
-            worldUpdate.worldData = worldDataToSend;
-            worldUpdate.timestamp = System.currentTimeMillis();
+            // Send player joined message to all except new player
+            networkServer.sendToAllExceptTCP(connection.getID(), joinMessage);
 
-            connection.sendTCP(worldUpdate);
-            GameLogger.info("Sent world state to connection: " + connection.getID());
+            // Send system message about new player
+            NetworkProtocol.ChatMessage systemMessage = new NetworkProtocol.ChatMessage();
+            systemMessage.sender = "System";
+            systemMessage.content = newPlayer.getUsername() + " has joined the game";
+            systemMessage.type = NetworkProtocol.ChatType.SYSTEM;
+            systemMessage.timestamp = System.currentTimeMillis();
+
+            networkServer.sendToAllTCP(systemMessage);
+            GameLogger.info("Broadcast new player join: " + newPlayer.getUsername());
 
         } catch (Exception e) {
-            GameLogger.error("Error sending world state: " + e.getMessage());
+            GameLogger.error("Error broadcasting new player: " + e.getMessage());
         }
     }
 
-
     private NetworkProtocol.PlayerUpdate createPlayerUpdate(ServerPlayer player) {
-            NetworkProtocol.PlayerUpdate update = new NetworkProtocol.PlayerUpdate();
-            update.username = player.getUsername();
-            update.x = player.getPosition().x;
-            update.y = player.getPosition().y;
-            update.direction = player.getDirection();
-            update.isMoving = player.isMoving();
-            update.wantsToRun = player.isRunning();
-            update.timestamp = System.currentTimeMillis();
+        NetworkProtocol.PlayerUpdate update = new NetworkProtocol.PlayerUpdate();
+        update.username = player.getUsername();
+        update.x = player.getPosition().x;
+        update.y = player.getPosition().y;
+        update.direction = player.getDirection();
+        update.isMoving = player.isMoving();
+        update.wantsToRun = player.isRunning();
+        update.timestamp = System.currentTimeMillis();
 
-            // Include inventory if available
-            List<ItemData> inventory = player.getInventoryItems();
-            if (inventory != null) {
-                update.inventoryItems = inventory.toArray(new ItemData[0]);
-            }
-
-            return update;
+        // Include inventory if available
+        List<ItemData> inventory = player.getInventoryItems();
+        if (inventory != null) {
+            update.inventoryItems = inventory.toArray(new ItemData[0]);
         }
 
-        private void handleLoginError(Connection connection, ServerPlayer player, Exception e) {
-            GameLogger.error("Login error for " + player.getUsername() + ": " + e.getMessage());
+        return update;
+    }
 
-            // Clean up any partial state
-            activeUserConnections.remove(player.getUsername());
-            activePlayers.remove(player.getUsername());
-            connectedPlayers.remove(connection.getID());
+    private void handleLoginError(Connection connection, ServerPlayer player, Exception e) {
+        GameLogger.error("Login error for " + player.getUsername() + ": " + e.getMessage());
 
-            // Send error response
-            NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
-            response.success = false;
-            response.message = "Server error during login process";
-            connection.sendTCP(response);
+        // Clean up any partial state
+        activeUserConnections.remove(player.getUsername());
+        activePlayers.remove(player.getUsername());
+        connectedPlayers.remove(connection.getID());
 
-            // Consider disconnecting the client
-            connection.close();
-        }
+        // Send error response
+        NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
+        response.success = false;
+        response.message = "Server error during login process";
+        connection.sendTCP(response);
+
+        // Consider disconnecting the client
+        connection.close();
+    }
 
     private Connection findConnection(int connectionId) {
         return Arrays.stream(networkServer.getConnections())
@@ -587,9 +486,6 @@ public class GameServer {
             .findFirst()
             .orElse(null);
     }
-
-    private final Map<String, Long> lastJoinTime = new ConcurrentHashMap<>();
-    private static final long JOIN_COOLDOWN = 5000; // 5 seconds cooldown between join attempts
 
     private void handlePlayerDisconnect(Connection connection) {
         String username = null;
@@ -623,7 +519,6 @@ public class GameServer {
             }
         }
     }
-
 
     private void handlePlayerUpdate(Connection connection, NetworkProtocol.PlayerUpdate update) {
         try {
@@ -707,15 +602,6 @@ public class GameServer {
         }, 1000, 1000, TimeUnit.MILLISECONDS);
     }
 
-    private WorldObject generateObjectForBiome(Biome biome, float x, float y, Random random) {
-        WorldObject.ObjectType objectType = getObjectTypeForBiome(biome, random);
-        if (objectType == null) return null;
-
-        TextureRegion texture = TextureManager.getTextureForObjectType(objectType);
-        if (texture == null) return null;
-
-        return new WorldObject((int) x, (int) y, texture, objectType);
-    }
 
     private void handlePokemonSpawn(Connection connection, NetworkProtocol.WildPokemonSpawn spawnRequest) {
         try {
@@ -839,21 +725,6 @@ public class GameServer {
         }
     }
 
-    private WorldObject.ObjectType getObjectTypeForBiome(Biome biome, Random random) {
-        switch (biome.getType()) {
-            case FOREST:
-                return WorldObject.ObjectType.TREE;
-            case SNOW:
-                return WorldObject.ObjectType.SNOW_TREE;
-            case DESERT:
-                return WorldObject.ObjectType.CACTUS;
-            case HAUNTED:
-                return WorldObject.ObjectType.HAUNTED_TREE;
-            default:
-                return random.nextFloat() < 0.3f ? WorldObject.ObjectType.TREE : null;
-        }
-    }
-
     private void sendLoginSuccess(Connection connection, String username) {
         if (worldManager.getCurrentWorld() == null) {
             GameLogger.error("Current world is null in sendLoginSuccess");
@@ -945,8 +816,6 @@ public class GameServer {
         return PasswordUtils.verifyPassword(password, storedHash);
     }
 
-
-
     private void sendLoginFailure(Connection connection, String message) {
         NetworkProtocol.LoginResponse response = new NetworkProtocol.LoginResponse();
         response.success = false;
@@ -1022,10 +891,10 @@ public class GameServer {
                         GameLogger.error("Received unauthorized message from: " + connection.getID());
                     } else if (object instanceof NetworkProtocol.ServerInfoRequest) {
                         handleServerInfoRequest(connection, (NetworkProtocol.ServerInfoRequest) object);
-                    }  else if (object instanceof NetworkProtocol.Logout) {
+                    } else if (object instanceof NetworkProtocol.Logout) {
 
                         handleLogout(connection, (NetworkProtocol.Logout) object);
-                    }  else {
+                    } else {
                         handleNetworkMessage(connection, object);
                     }
                 } catch (Exception e) {
@@ -1076,8 +945,6 @@ public class GameServer {
         }
     }
 
-
-
     private void sendConnectionResponse(Connection connection, boolean success, String message) {
         NetworkProtocol.ConnectionResponse response = new NetworkProtocol.ConnectionResponse();
         response.success = success;
@@ -1089,7 +956,6 @@ public class GameServer {
             GameLogger.error("Error sending connection response: " + e.getMessage());
         }
     }
-
 
     private void handleChatMessage(Connection connection, NetworkProtocol.ChatMessage message) {
         // Validate message
@@ -1111,7 +977,6 @@ public class GameServer {
             }
         }
     }
-
 
     private void sendRegistrationResponse(Connection connection, boolean success, String message) {
         NetworkProtocol.RegisterResponse response = new NetworkProtocol.RegisterResponse();
@@ -1283,7 +1148,6 @@ public class GameServer {
         GameLogger.info("Server shutdown complete.");
     }
 
-
     private void handleNetworkMessage(Connection connection, Object object) {
         try {
             if (object instanceof NetworkProtocol.Keepalive) {
@@ -1295,6 +1159,8 @@ public class GameServer {
                 // Echo keepalive back to client
                 connection.sendTCP(object);
                 return;
+            } else if (object instanceof NetworkProtocol.ChunkRequest) {
+                handleChunkRequest(connection, (NetworkProtocol.ChunkRequest) object);
             }
             if (object instanceof NetworkProtocol.PlayerUpdate) {
                 NetworkProtocol.PlayerUpdate update = (NetworkProtocol.PlayerUpdate) object;
@@ -1322,6 +1188,458 @@ public class GameServer {
         } catch (Exception e) {
             GameLogger.error("Error handling network message: " + e.getMessage());
             e.printStackTrace();
+        }
+    }
+    private int selectTileTypeFromNoise(Biome primaryBiome, Biome secondaryBiome,
+                                        float noise, float elevation, float transitionFactor) {
+
+        // Get distributions
+        Map<Integer, Integer> primaryDist = primaryBiome.getTileDistribution();
+        Map<Integer, Integer> secondaryDist = secondaryBiome != null ?
+            secondaryBiome.getTileDistribution() : null;
+
+        // Use noise value to select tile
+        float threshold = noise;
+
+        // Modify threshold based on elevation
+        if (elevation > 0.8f) {
+            // More rocks/mountains at high elevation
+            threshold = Math.min(1.0f, threshold + 0.2f);
+        } else if (elevation < 0.2f) {
+            // More water/sand at low elevation
+            threshold = Math.max(0.0f, threshold - 0.2f);
+        }
+
+        // Select tile type based on threshold and distributions
+
+        return selectTileFromDistribution(
+            threshold < transitionFactor ? Objects.requireNonNull(secondaryDist) : primaryDist,
+            new Random()
+        );
+    }
+
+    private int generateTransitionTile(
+        Map<Integer, Integer> primaryDist,
+        Map<Integer, Integer> secondaryDist,
+        float transitionFactor,
+        Random random,
+        float worldX,
+        float worldY
+    ) {
+        // Use noise to create natural-looking transitions
+        float noise = biomeManager.getNoise(worldX / 100f, worldY / 100f);
+        float adjustedFactor = transitionFactor * (0.5f + (noise * 0.5f));
+
+        // Determine which distribution to use based on transition factor
+        if (random.nextFloat() > adjustedFactor) {
+            return generateBiomeTile(primaryDist, random, worldX, worldY);
+        } else {
+            return generateBiomeTile(secondaryDist, random, worldX, worldY);
+        }
+    }
+
+    private int generateBiomeTile(
+        Map<Integer, Integer> distribution,
+        Random random,
+        float worldX,
+        float worldY
+    ) {
+        // Add some noise-based variation
+        float noise = biomeManager.getNoise(worldX / 50f, worldY / 50f);
+
+        // Get base tile type from distribution
+        int tileType = selectTileFromDistribution(distribution, random);
+
+        // Potentially modify tile based on noise
+        if (noise > 0.7f && isValidTileVariation(tileType)) {
+            return getVariationForTile(tileType, random);
+        }
+
+        return tileType;
+    }
+
+    private int selectTileFromDistribution(Map<Integer, Integer> distribution, Random random) {
+        int roll = random.nextInt(100);
+        int currentTotal = 0;
+
+        for (Map.Entry<Integer, Integer> entry : distribution.entrySet()) {
+            currentTotal += entry.getValue();
+            if (roll < currentTotal) {
+                return entry.getKey();
+            }
+        }
+
+        // Fallback to first tile type if something goes wrong
+        return distribution.keySet().iterator().next();
+    }
+
+    private boolean isValidTileVariation(int baseTile) {
+        // Define which tiles can have variations
+        switch (baseTile) {
+            case Chunk.GRASS:
+            case Chunk.SAND:
+            case Chunk.ROCK:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private int getVariationForTile(int baseTile, Random random) {
+        // Add variation to base tiles
+        switch (baseTile) {
+            case Chunk.GRASS:
+                return random.nextFloat() < 0.3f ? Chunk.GRASS + 1 : baseTile;
+            case Chunk.SAND:
+                return random.nextFloat() < 0.2f ? Chunk.SAND + 1 : baseTile;
+            case Chunk.ROCK:
+                return random.nextFloat() < 0.25f ? Chunk.ROCK + 1 : baseTile;
+            default:
+                return baseTile;
+        }
+    }
+
+    private float getObjectDensityMultiplier(BiomeType biomeType) {
+        switch (biomeType) {
+            case FOREST:
+                return 1.5f;
+            case DESERT:
+                return 0.3f;
+            case SNOW:
+                return 0.8f;
+            case HAUNTED:
+                return 1.2f;
+            default:
+                return 1.0f;
+        }
+    }
+
+    private void handleChunkRequest(Connection connection, NetworkProtocol.ChunkRequest request) {
+        try {
+            Vector2 chunkPos = new Vector2(request.chunkX, request.chunkY);
+            GameLogger.info("Processing chunk request for: " + chunkPos);
+
+            Chunk chunk = generateNewChunk((int)chunkPos.x, (int)chunkPos.y);
+            if (chunk == null) {
+                GameLogger.error("Failed to generate chunk at: " + chunkPos);
+                return;
+            }
+
+            // Send data in fragments
+            int fragmentSize = request.fragmentSize;
+            int totalFragments = (World.CHUNK_SIZE / fragmentSize) * (World.CHUNK_SIZE / fragmentSize);
+
+            for (int i = 0; i < totalFragments; i++) {
+                NetworkProtocol.ChunkDataFragment fragment = new NetworkProtocol.ChunkDataFragment();
+                fragment.chunkX = request.chunkX;
+                fragment.chunkY = request.chunkY;
+                fragment.fragmentIndex = i;
+                fragment.totalFragments = totalFragments;
+                fragment.biomeType = chunk.getBiome().getType();
+
+                // Calculate fragment bounds
+                int startX = (i % (World.CHUNK_SIZE / fragmentSize)) * fragmentSize;
+                int startY = (i / (World.CHUNK_SIZE / fragmentSize)) * fragmentSize;
+                fragment.startX = startX;
+                fragment.startY = startY;
+
+                // Copy tile data for this fragment
+                fragment.tileData = new int[fragmentSize][fragmentSize];
+                for (int x = 0; x < fragmentSize; x++) {
+                    for (int y = 0; y < fragmentSize; y++) {
+                        if (startX + x < World.CHUNK_SIZE && startY + y < World.CHUNK_SIZE) {
+                            fragment.tileData[x][y] = chunk.getTileData()[startX + x][startY + y];
+                        }
+                    }
+                }
+
+                connection.sendTCP(fragment);
+            }
+
+            // Send completion message
+            NetworkProtocol.ChunkDataComplete complete = new NetworkProtocol.ChunkDataComplete();
+            complete.chunkX = request.chunkX;
+            complete.chunkY = request.chunkY;
+            connection.sendTCP(complete);
+
+        } catch (Exception e) {
+            GameLogger.error("Error processing chunk request: " + e.getMessage());
+        }
+    }
+
+    private void sendChunkDataSafely(Connection connection, NetworkProtocol.ChunkData data) {
+        try {
+            // Split large data if needed
+            if (isDataTooLarge(data)) {
+                sendFragmentedChunkData(connection, data);
+            } else {
+                connection.sendTCP(data);
+            }
+        } catch (Exception e) {
+            GameLogger.error("Error sending chunk data: " + e.getMessage());
+        }
+    }
+
+    private boolean isDataTooLarge(NetworkProtocol.ChunkData data) {
+        // Estimate size based on chunk data
+        int estimatedSize = 8 + // Basic fields
+            (World.CHUNK_SIZE * World.CHUNK_SIZE * 4) + // Tile data
+            1024; // Extra buffer for other data
+        return estimatedSize > OBJECT_BUFFER;
+    }
+
+    private void sendFragmentedChunkData(Connection connection, NetworkProtocol.ChunkData data) {
+        try {
+            // Create fragment info
+            NetworkProtocol.ChunkDataFragment fragment = new NetworkProtocol.ChunkDataFragment();
+            fragment.chunkX = data.chunkX;
+            fragment.chunkY = data.chunkY;
+            fragment.biomeType = data.biomeType;
+
+            // Send tile data in smaller chunks
+            int fragmentSize = World.CHUNK_SIZE / 2; // Split into 4 parts
+
+            for (int startX = 0; startX < World.CHUNK_SIZE; startX += fragmentSize) {
+                for (int startY = 0; startY < World.CHUNK_SIZE; startY += fragmentSize) {
+                    fragment.startX = startX;
+                    fragment.startY = startY;
+                    fragment.tileData = new int[fragmentSize][fragmentSize];
+
+                    // Copy portion of tile data
+                    for (int x = 0; x < fragmentSize; x++) {
+                        for (int y = 0; y < fragmentSize; y++) {
+                            if (startX + x < data.tileData.length &&
+                                startY + y < data.tileData[0].length) {
+                                fragment.tileData[x][y] = data.tileData[startX + x][startY + y];
+                            }
+                        }
+                    }
+
+                    connection.sendTCP(fragment);
+                }
+            }
+
+            // Send completion message
+            NetworkProtocol.ChunkDataComplete complete = new NetworkProtocol.ChunkDataComplete();
+            complete.chunkX = data.chunkX;
+            complete.chunkY = data.chunkY;
+            connection.sendTCP(complete);
+
+        } catch (Exception e) {
+            GameLogger.error("Error sending fragmented chunk data: " + e.getMessage());
+        }
+    }
+
+    // In GameServer.java
+    private Chunk generateNewChunk(int chunkX, int chunkY) {
+        try {
+            // Calculate world coordinates
+            float worldX = chunkX * World.CHUNK_SIZE * World.TILE_SIZE;
+            float worldY = chunkY * World.CHUNK_SIZE * World.TILE_SIZE;
+
+            // Get biome for chunk
+            BiomeTransitionResult biomeTransition = biomeManager.getBiomeAt(worldX, worldY);
+            if (biomeTransition == null || biomeTransition.getPrimaryBiome() == null) {
+                GameLogger.error("Invalid biome transition at: " + worldX + "," + worldY);
+                return null;
+            }
+
+            Biome biome = biomeTransition.getPrimaryBiome();
+            GameLogger.info("Generating chunk at (" + chunkX + "," + chunkY +
+                ") with biome: " + biome.getType());
+
+            // Create new chunk
+            Chunk chunk = new Chunk(chunkX, chunkY, biome, multiplayerWorld.getConfig().getSeed(), biomeManager);
+
+            // Generate chunk tile data
+            int[][] tileData = new int[World.CHUNK_SIZE][World.CHUNK_SIZE];
+            Random random = new Random(multiplayerWorld.getConfig().getSeed() + (chunkX * 31L + chunkY * 17L));
+
+            // Get tile distribution for biome
+            Map<Integer, Integer> distribution = biome.getTileDistribution();
+
+            // Fill chunk with tiles based on biome distribution
+            for (int x = 0; x < World.CHUNK_SIZE; x++) {
+                for (int y = 0; y < World.CHUNK_SIZE; y++) {
+                    int tileType = selectTileType(distribution, random);
+                    tileData[x][y] = tileType;
+                }
+            }
+
+            chunk.setTileData(tileData);
+
+            // Generate objects for chunk
+            try {
+                    List<io.github.pokemeetup.system.gameplay.overworld.WorldObject> objects = generateChunkObjects(chunk, new Vector2(chunkX, chunkY));
+                if (objects != null && !objects.isEmpty()) {
+                    Vector2 chunkPos = new Vector2(chunkX, chunkY);
+                    multiplayerWorld.addChunkObjects(chunkPos, objects);
+                }
+            } catch (Exception e) {
+                GameLogger.error("Error generating chunk objects: " + e.getMessage());
+            }
+
+            return chunk;
+
+        } catch (Exception e) {
+            GameLogger.error("Error generating chunk: " + e.getMessage());
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    private List<io.github.pokemeetup.system.gameplay.overworld.WorldObject> generateChunkObjects(Chunk chunk, Vector2 chunkPos) {
+        List<io.github.pokemeetup.system.gameplay.overworld.WorldObject> objects = new ArrayList<>();
+        Random random = new Random(multiplayerWorld.getConfig().getSeed() +
+            ((long)chunkPos.x * 31 + (long)chunkPos.y * 17));
+
+        float baseObjectDensity = multiplayerWorld.getConfig().getTreeSpawnRate();
+        float biomeMultiplier = getObjectDensityMultiplier(chunk.getBiome().getType());
+        float density = baseObjectDensity * biomeMultiplier;
+
+        // Get appropriate object types for this biome
+        List<io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType> possibleTypes = new ArrayList<>();
+        switch (chunk.getBiome().getType()) {
+            case FOREST:
+                possibleTypes.add(io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType.TREE);
+                possibleTypes.add(io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType.BUSH);
+                break;
+            case DESERT:
+                possibleTypes.add(io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType.CACTUS);
+                possibleTypes.add(io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType.DEAD_TREE);
+                break;
+            case SNOW:
+                possibleTypes.add(io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType.SNOW_TREE);
+                break;
+            case HAUNTED:
+                possibleTypes.add(io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType.HAUNTED_TREE);
+                possibleTypes.add(io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType.SMALL_HAUNTED_TREE);
+                break;
+            default:
+                possibleTypes.add(io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType.TREE);
+                possibleTypes.add(io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType.BUSH);
+        }
+
+        for (int x = 0; x < World.CHUNK_SIZE; x++) {
+            for (int y = 0; y < World.CHUNK_SIZE; y++) {
+                if (random.nextFloat() < density) {
+                    // Calculate world coordinates
+                    float worldX = (chunkPos.x * World.CHUNK_SIZE + x) * World.TILE_SIZE;
+                    float worldY = (chunkPos.y * World.CHUNK_SIZE + y) * World.TILE_SIZE;
+
+                    // Select random object type from possible types for this biome
+                io.github.pokemeetup.system.gameplay.overworld.WorldObject.ObjectType type = possibleTypes.get(random.nextInt(possibleTypes.size()));
+
+                    // Create WorldObject without texture - clients will add textures
+                    io.github.pokemeetup.system.gameplay.overworld.WorldObject obj = new io.github.pokemeetup.system.gameplay.overworld.WorldObject(
+                        (int)worldX / World.TILE_SIZE, // Convert back to tile coordinates
+                        (int)worldY / World.TILE_SIZE,
+                        null,  // No texture on server
+                        type
+                    );
+
+                    objects.add(obj);
+                }
+            }
+        }
+
+        return objects;
+    }
+
+    private int selectTileType(Map<Integer, Integer> distribution, Random random) {
+        int roll = random.nextInt(100);
+        int total = 0;
+
+        for (Map.Entry<Integer, Integer> entry : distribution.entrySet()) {
+            total += entry.getValue();
+            if (roll < total) {
+                return entry.getKey();
+            }
+        }
+
+        // Default to most common tile if something goes wrong
+        return distribution.keySet().iterator().next();
+    }
+
+    private List<ObjectType> getObjectTypesForBiome(BiomeType biomeType) {
+        List<ObjectType> types = new ArrayList<>();
+        switch (biomeType) {
+            case FOREST:
+                types.add(ObjectType.TREE);
+                types.add(ObjectType.BUSH);
+                break;
+            case DESERT:
+                types.add(ObjectType.CACTUS);
+                types.add(ObjectType.DEAD_TREE);
+                break;
+            case SNOW:
+                types.add(ObjectType.SNOW_TREE);
+                break;
+            case HAUNTED:
+                types.add(ObjectType.HAUNTED_TREE);
+                break;
+            default:
+                types.add(ObjectType.TREE);
+                break;
+        }
+        return types;
+    }
+
+
+    private List<WorldObject> generateChunkObjects(
+        int chunkX,
+        int chunkY,
+        BiomeType biomeType,
+        float density
+    ) {
+        List<WorldObject> objects = new ArrayList<>();
+        Random random = new Random(multiplayerWorld.getConfig().getSeed() + (chunkX * 31L + chunkY * 17L));
+
+        // Calculate world coordinates
+        float worldX = chunkX * World.CHUNK_SIZE * World.TILE_SIZE;
+        float worldY = chunkY * World.CHUNK_SIZE * World.TILE_SIZE;
+
+        // Get appropriate object types for this biome
+        List<ObjectType> possibleTypes = getObjectTypesForBiome(biomeType);
+
+        // Generate objects
+        for (int x = 0; x < World.CHUNK_SIZE; x++) {
+            for (int y = 0; y < World.CHUNK_SIZE; y++) {
+                if (random.nextFloat() < density) {
+                    float objX = worldX + (x * World.TILE_SIZE);
+                    float objY = worldY + (y * World.TILE_SIZE);
+
+                    // Select random object type appropriate for biome
+                    ObjectType type = possibleTypes.get(
+                        random.nextInt(possibleTypes.size())
+                    );
+
+                    WorldObject obj = new WorldObject();
+                    obj.x = objX;
+                    obj.y = objY;
+                    obj.type = type;
+                    obj.id = UUID.randomUUID();
+
+                    objects.add(obj);
+                }
+            }
+        }
+
+        return objects;
+    }
+
+    private ObjectType getAppropriateObjectType(Biome biome, Random random) {
+        switch (biome.getType()) {
+            case FOREST:
+                return random.nextFloat() < 0.8f ? ObjectType.TREE : ObjectType.BUSH;
+            case DESERT:
+                return random.nextFloat() < 0.7f ? ObjectType.CACTUS : ObjectType.DEAD_TREE;
+            case SNOW:
+                return ObjectType.SNOW_TREE;
+            case HAUNTED:
+                return ObjectType.HAUNTED_TREE;
+            default:
+                return random.nextFloat() < 0.5f ? ObjectType.TREE :ObjectType.BUSH;
         }
     }
 
@@ -1354,6 +1672,43 @@ public class GameServer {
 
     public ServerConnectionConfig getConfig() {
         return config;
+    }
+
+    public class WorldObject {
+        private float x, y;
+        private ObjectType type;
+        private UUID id;
+
+        // Simple enum for object types without texture dependencies
+
+    }
+    public enum ObjectType {
+        TREE,
+        BUSH,
+        CACTUS,
+        SNOW_TREE,
+        HAUNTED_TREE,
+        DEAD_TREE,
+        POKEBALL,
+        VINES;
+
+        // Optional density multipliers per type if needed
+        public float getDensityMultiplier() {
+            switch (this) {
+                case TREE:
+                    return 1.0f;
+                case BUSH:
+                    return 0.7f;
+                case CACTUS:
+                    return 0.3f;
+                case SNOW_TREE:
+                    return 0.8f;
+                case HAUNTED_TREE:
+                    return 1.2f;
+                default:
+                    return 1.0f;
+            }
+        }
     }
 
     private class ConnectionState {

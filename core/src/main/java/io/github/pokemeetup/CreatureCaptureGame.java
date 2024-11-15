@@ -10,8 +10,11 @@ import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import io.github.pokemeetup.audio.AudioManager;
 import io.github.pokemeetup.managers.BiomeManager;
 import io.github.pokemeetup.multiplayer.client.GameClient;
+import io.github.pokemeetup.multiplayer.client.GameClientSingleton;
 import io.github.pokemeetup.multiplayer.server.GameStateHandler;
 import io.github.pokemeetup.multiplayer.server.ServerStorageSystem;
+import io.github.pokemeetup.multiplayer.server.config.ServerConfigManager;
+import io.github.pokemeetup.multiplayer.server.config.ServerConnectionConfig;
 import io.github.pokemeetup.pokemon.data.PokemonDatabase;
 import io.github.pokemeetup.screens.*;
 import io.github.pokemeetup.system.Player;
@@ -201,6 +204,20 @@ public class CreatureCaptureGame extends Game implements GameStateHandler {
         this.isMultiplayerMode = isMultiplayer;
 
         try {
+            if (gameClient == null) {
+                if (isMultiplayer) {
+                    // For multiplayer, get from singleton with proper config
+                    ServerConnectionConfig config = ServerConfigManager.getDefaultServerConfig();
+                    gameClient = GameClientSingleton.getInstance(config);
+                } else {
+                    // For single player
+                    gameClient = GameClientSingleton.getSinglePlayerInstance();
+                }
+
+                if (gameClient == null) {
+                    throw new IllegalStateException("Failed to initialize GameClient");
+                }
+            }
             WorldData worldData = worldManager.loadAndValidateWorld(worldName);
             if (worldData == null) {
                 GameLogger.error("Failed to load world data for: " + worldName);

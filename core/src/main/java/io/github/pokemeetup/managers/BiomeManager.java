@@ -2,77 +2,247 @@ package io.github.pokemeetup.managers;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.files.FileHandle;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
+import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.utils.Json;
+import com.google.gson.*;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonWriter;
 import io.github.pokemeetup.FileSystemDelegate;
-import io.github.pokemeetup.audio.AudioManager;
+import io.github.pokemeetup.system.gameplay.overworld.Chunk;
 import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.PerlinNoise;
 
-import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
+import io.github.pokemeetup.utils.TileValidator;
 import io.github.pokemeetup.utils.storage.GameFileSystem;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
 
 public class BiomeManager {
+    private static final float BIOME_SCALE = 0.0015f;   // Adjusted from 0.002f
+    private static final float DETAIL_SCALE = 0.005f;   // Adjusted from 0.004f
+    private static final float WARP_SCALE = 0.0007f;    // Adjusted from 0.0005f
+
+    private static final float MOUNTAIN_THRESHOLD = 0.6f; // Lowered from 0.8f to 0.6fprivate static final int BIOME_OCTAVES = 6;           // Increased from 5 to 6
+    private static final double BIOME_PERSISTENCE = 0.5; // Adjusted from 0.45 to 0.5
+
+
+    private static final float TRANSITION_WIDTH = 0.2f;   // Wider transitions
+
+    private static final float MOUNTAIN_SCALE = 0.0005f;  // Larger mountain features
+    private static final int BIOME_OCTAVES = 6;           // Increase for more detail
+
+
     private static final String[] BIOME_FILE_PATHS = {
         "server/data/biomes.json",
         "data/biomes.json",
         "assets/data/biomes.json",
         "config/biomes.json"
     };
-    private static final float MOUNTAIN_BIAS_SCALE = 0.002f; // New scale for mountain bias
-    private static final float PLAINS_DOMINANCE = 0.6f;    // Plains biome dominance factor
-    private static final float MOUNTAIN_SCALE = 0.001f;  // Scale for mountain noise
-    private static final double BLEND_RADIUS = 8.0; // Blocks to blend over
-    private static final int NOISE_OCTAVES = 4;
-    private static final double EDGE_ROUGHNESS = 0.4;
-    private static final Map<String, Integer> TILE_TYPE_CACHE = new HashMap<>();
-    private static float BIOME_SCALE = 0.008f;       // Increased for smaller biomes
-    private static float WARP_SCALE = 0.002f;        // Adjusted for better variation
-    private static float DETAIL_SCALE = 0.01f;       // Increased detail variation
-    private static float MOUNTAIN_THRESHOLD = 0.85f;  // More mountains
-    private static float TRANSITION_WIDTH = 0.2f;     // Wider transitions
-    private static double BIOME_PERSISTENCE = 0.45f;  // More varied patterns
-    private static int BIOME_OCTAVES = 4;            // Simpler patterns
-    private static boolean DEBUG_ENABLED = false;
+    private static boolean DEBUG_ENABLED = true;
     final PerlinNoise detailNoise;
     private final PerlinNoise mountainNoise;  // Make sure this is declared
     private final PerlinNoise warpNoise;
-    private final double temperatureBias;
-    private final double moistureBias;
     private final PerlinNoise mountainBiasNoise;
     private final int DEBUG_SAMPLE_RATE = 1000; // Log every 1000th tile
-    private final Map<BiomeType, BiomeEnvironmentEffect> biomeEnvironmentEffects = new EnumMap<>(BiomeType.class);
+    private double temperatureBias;
+    private double moistureBias;
     private Map<BiomeType, Biome> biomes;
     private PerlinNoise temperatureNoise;
     private PerlinNoise moistureNoise;
     private long baseSeed;
     private int debugCounter = 0;
+    private double temperatureSum = 0;
+    private double moistureSum = 0;
+    private int sampleCount = 0;
 
     public BiomeManager(long baseSeed) {
         this.baseSeed = baseSeed;
         this.biomes = new HashMap<>();
-        this.mountainBiasNoise = new PerlinNoise((int) (baseSeed + 3));
-        this.temperatureNoise = new PerlinNoise((int) (baseSeed));
-        this.moistureNoise = new PerlinNoise((int) ((baseSeed >> 32)));
+        this.mountainBiasNoise = new PerlinNoise((int) (baseSeed + 3));// Adjust seed calculations
+        this.temperatureNoise = new PerlinNoise((int) (baseSeed & 0xFFFFFFFFL));
+        this.moistureNoise = new PerlinNoise((int) ((baseSeed >> 32) & 0xFFFFFFFFL));
+
         this.detailNoise = new PerlinNoise((int) ((baseSeed + 1) & 0xFFFFFFFFL));
         this.warpNoise = new PerlinNoise((int) ((baseSeed + 2) & 0xFFFFFFFFL));
         this.mountainNoise = new PerlinNoise((int) (baseSeed + 2));
-        Random seedRandom = new Random(baseSeed);
-        this.temperatureBias = seedRandom.nextDouble() * 0.2 - 0.1; // [-0.1, 0.1]
-        this.moistureBias = seedRandom.nextDouble() * 0.2 - 0.1;    // [-0.1, 0.1]
+        this.temperatureBias = 0.0;
+        this.moistureBias = 0.0;
         loadBiomesFromJson();
     }
+
+    public void saveChunkBiomeData(Vector2 chunkPos, Chunk chunk, String worldName, boolean isMultiplayer) {
+        if (isMultiplayer) {
+            return;
+        }
+
+        try {
+            String baseDir = isMultiplayer ?
+                "worlds/" + worldName + "/biomes/" :
+                "worlds/singleplayer/" + worldName + "/biomes/";
+
+            FileHandle saveDir = Gdx.files.local(baseDir);
+            if (!saveDir.exists()) {
+                saveDir.mkdirs();
+            }
+
+            BiomeData biomeData = new BiomeData();
+            biomeData.chunkX = (int) chunkPos.x;
+            biomeData.chunkY = (int) chunkPos.y;
+            biomeData.primaryBiomeType = chunk.getBiome().getType();
+            biomeData.lastModified = System.currentTimeMillis();
+
+            // Create new mutable collections
+            HashMap<Integer, Integer> distribution = new HashMap<>(chunk.getBiome().getTileDistribution());
+            biomeData.setTileDistribution(distribution);
+
+            ArrayList<Integer> allowedTypes = new ArrayList<>(chunk.getBiome().getAllowedTileTypes());
+            biomeData.setAllowedTileTypes(allowedTypes);
+
+            String filename = String.format("biome_%d_%d.json", (int) chunkPos.x, (int) chunkPos.y);
+            FileHandle biomeFile = saveDir.child(filename);
+
+            // Use Gson for serialization
+            Gson gson = new GsonBuilder()
+                .registerTypeAdapter(BiomeData.class, new BiomeDataTypeAdapter())
+                .setPrettyPrinting()
+                .create();
+
+            String jsonContent = gson.toJson(biomeData);
+            biomeFile.writeString(jsonContent, false);
+
+            GameLogger.info("Saved biome data for chunk at: " + chunkPos);
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to save biome data: " + e.getMessage());
+        }
+    }
+
+    public float getNoise(float x, float y) {
+        try {
+            // Create octave-based noise
+            float noise = 0f;
+            float amplitude = 1.0f;
+            float frequency = 1.0f;
+            float maxValue = 0f;
+
+            // Use our detail noise for additional variation
+            for (int i = 0; i < BIOME_OCTAVES; i++) {
+                noise += (float) (amplitude * detailNoise.noise(
+                    x * frequency,
+                    y * frequency
+                ));
+                maxValue += amplitude;
+                amplitude *= BIOME_PERSISTENCE;
+                frequency *= 2.0;
+            }
+
+            // Normalize to -1 to 1 range
+            noise = noise / maxValue;
+
+            // Add some warping
+            float warpX = (float) warpNoise.noise(x * WARP_SCALE, y * WARP_SCALE);
+            float warpY = (float) warpNoise.noise((x + 31.5f) * WARP_SCALE, (y + 31.5f) * WARP_SCALE);
+
+            // Apply warp
+            noise += (warpX + warpY) * 0.15f;
+
+            // Normalize to 0-1 range
+            return (noise + 1f) * 0.5f;
+
+        } catch (Exception e) {
+            GameLogger.error("Error generating noise: " + e.getMessage());
+            return 0.5f; // Safe fallback value
+        }
+    }
+
+    // Add helper method for biome-specific noise
+    public float getBiomeNoise(float x, float y, BiomeType biomeType) {
+        float baseNoise = getNoise(x, y);
+
+        // Modify noise based on biome type
+        switch (biomeType) {
+            case DESERT:
+                // More uniform, with occasional dunes
+                return smoothstep(0.3f, 0.7f, baseNoise);
+
+            case FOREST:
+                // More varied terrain
+                return baseNoise * 1.2f - 0.1f;
+
+            case SNOW:
+                // Smoother transitions
+                return smoothstep(0.2f, 0.8f, baseNoise);
+
+            case HAUNTED:
+                // More extreme variations
+                return (float) Math.pow(baseNoise, 1.5);
+
+            default:
+                return baseNoise;
+        }
+    }
+
+    // Add this method to generate elevation noise
+    public float getElevationNoise(float x, float y) {
+        float mountainInfluence = (float) mountainNoise.noise(
+            x * MOUNTAIN_SCALE,
+            y * MOUNTAIN_SCALE
+        );
+
+        float baseNoise = getNoise(x, y);
+
+        // Blend mountain and base noise
+        return mountainInfluence > MOUNTAIN_THRESHOLD ?
+            mountainInfluence :
+            baseNoise;
+    }
+
+    public BiomeType loadChunkBiomeData(Vector2 chunkPos, String worldName, boolean isMultiplayer) {
+        if (isMultiplayer) {
+            return null;
+        }
+        try {
+            String baseDir = isMultiplayer ?
+                "worlds/" + worldName + "/biomes/" :
+                "worlds/singleplayer/" + worldName + "/biomes/";
+
+            String filename = String.format("biome_%d_%d.json", (int) chunkPos.x, (int) chunkPos.y);
+            FileHandle biomeFile = Gdx.files.local(baseDir + filename);
+
+            if (!biomeFile.exists()) {
+                return null;
+            }
+
+            // Use Gson instead of libgdx Json
+            Gson gson = new GsonBuilder()
+                .registerTypeAdapter(BiomeData.class, new BiomeDataTypeAdapter())
+                .create();
+
+            BiomeData biomeData = gson.fromJson(biomeFile.readString(), BiomeData.class);
+
+            if (biomeData != null && biomeData.primaryBiomeType != null) {
+                GameLogger.info(String.format(
+                    "Loaded biome data for chunk (%d,%d): %s",
+                    biomeData.chunkX, biomeData.chunkY, biomeData.primaryBiomeType
+                ));
+                return biomeData.primaryBiomeType;
+            }
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to load biome data: " + e.getMessage());
+        }
+        return null;
+    }
+
 
     private float clamp(float value, float min, float max) {
         return Math.max(min, Math.min(max, value));
@@ -90,307 +260,147 @@ public class BiomeManager {
         return (dirX + dirY) * 0.5f;
     }
 
-    public BiomeTransitionResult calculateBiomeTransition(float worldX, float worldY) {
-        // Generate base noise values with multiple octaves for natural variation
-        double temperature = generateOctaveNoise(temperatureNoise, worldX, worldY, BIOME_SCALE);
-        double moisture = generateOctaveNoise(moistureNoise, worldX, worldY, BIOME_SCALE);
-
-        // Add warping for more natural boundaries
-        double warpX = warpNoise.noise(worldX * WARP_SCALE, worldY * WARP_SCALE) * 30;
-        double warpY = warpNoise.noise((worldX + 31.5f) * WARP_SCALE, (worldY + 31.5f) * WARP_SCALE) * 30;
-
-        // Apply warping to coordinates
-        double warpedX = worldX + warpX;
-        double warpedY = worldY + warpY;
-
-        // Calculate mountain influence with ridged noise
-        double mountainBase = Math.abs(mountainNoise.noise(worldX * MOUNTAIN_SCALE, worldY * MOUNTAIN_SCALE));
-        double mountainDetail = Math.abs(mountainNoise.noise(worldX * (MOUNTAIN_SCALE * 2), worldY * (MOUNTAIN_SCALE * 2))) * 0.5;
-        double mountainValue = (mountainBase + mountainDetail) * 1.5; // Amplify mountain effect
-
-        // Add edge variation using detail noise
-        double edgeNoise = detailNoise.noise(worldX * DETAIL_SCALE, worldY * DETAIL_SCALE) * EDGE_ROUGHNESS;
-
-        // Calculate biome weights for nearby points
-        Map<BiomeType, Double> biomeWeights = new HashMap<>();
-        for (double dx = -BLEND_RADIUS; dx <= BLEND_RADIUS; dx += 2.0) {
-            for (double dy = -BLEND_RADIUS; dy <= BLEND_RADIUS; dy += 2.0) {
-                // Calculate distance-based weight
-                double distance = Math.sqrt(dx * dx + dy * dy) / BLEND_RADIUS;
-                if (distance > 1.0) continue;
-
-                double weight = 1.0 - smoothstep(0.0, 1.0, distance);
-
-                // Sample biome at this point
-                double sampleX = warpedX + dx;
-                double sampleY = warpedY + dy;
-
-                // Get temperature and moisture for this sample point
-                double sampleTemp = temperature + detailNoise.noise(sampleX * DETAIL_SCALE, sampleY * DETAIL_SCALE) * 0.15;
-                double sampleMoist = moisture + detailNoise.noise((sampleX + 31.5) * DETAIL_SCALE, (sampleY + 31.5) * DETAIL_SCALE) * 0.15;
-
-                // Determine biome at this point
-                BiomeType biomeType = determineBiomeType(sampleTemp, sampleMoist, mountainValue + edgeNoise);
-
-                // Add weighted contribution
-                biomeWeights.merge(biomeType, weight, Double::sum);
-            }
-        }
-
-        // Normalize weights and find primary/secondary biomes
-        BiomeType primaryType = null;
-        BiomeType secondaryType = null;
-        double primaryWeight = 0.0;
-        double secondaryWeight = 0.0;
-
-        double totalWeight = biomeWeights.values().stream().mapToDouble(Double::doubleValue).sum();
-        for (Map.Entry<BiomeType, Double> entry : biomeWeights.entrySet()) {
-            double normalizedWeight = entry.getValue() / totalWeight;
-            if (normalizedWeight > primaryWeight) {
-                secondaryType = primaryType;
-                secondaryWeight = primaryWeight;
-                primaryType = entry.getKey();
-                primaryWeight = normalizedWeight;
-            } else if (normalizedWeight > secondaryWeight) {
-                secondaryType = entry.getKey();
-                secondaryWeight = normalizedWeight;
-            }
-        }
-
-        // Calculate transition factor
-        float transitionFactor = (float) (secondaryWeight / (primaryWeight + secondaryWeight));
-
-        // Add noise to transition factor for more natural blending
-        transitionFactor += (float) (detailNoise.noise(worldX * DETAIL_SCALE * 2, worldY * DETAIL_SCALE * 2) * 0.1);
-        transitionFactor = Math.max(0.0f, Math.min(1.0f, transitionFactor));
-
-        return new BiomeTransitionResult(
-            getBiome(primaryType),
-            getBiome(secondaryType),
-            transitionFactor,
-            (float) mountainValue,
-            (float) temperature,
-            (float) moisture
-        );
-    }
-
-    private double smoothstep(double edge0, double edge1, double x) {
-        x = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-        return x * x * x * (x * (x * 6 - 15) + 10);
-    }
-
     private double generateOctaveNoise(PerlinNoise noise, double x, double y, double scale) {
         double value = 0;
         double amplitude = 1.0;
         double frequency = 1.0;
         double maxValue = 0;
 
-        for (int i = 0; i < NOISE_OCTAVES; i++) {
-            value += amplitude * noise.noise(
-                x * scale * frequency + i * 31.5,
-                y * scale * frequency + i * 31.5
-            );
+        for (int i = 0; i < BIOME_OCTAVES; i++) {
+            value += amplitude * noise.noise(x * scale * frequency, y * scale * frequency);
             maxValue += amplitude;
-            amplitude *= 0.5;
+            amplitude *= BIOME_PERSISTENCE;
             frequency *= 2.0;
         }
 
         return value / maxValue;
     }
 
+
     public BiomeTransitionResult getBiomeAt(float worldX, float worldY) {
-        // Basic noise without warping first to check distribution
-        double rawTemperature = temperatureNoise.noise(worldX * BIOME_SCALE, worldY * BIOME_SCALE);
-        double rawMoisture = moistureNoise.noise(worldX * BIOME_SCALE, worldY * BIOME_SCALE);
-        // Generate mountain value first
-        double mountainBase = mountainNoise.noise(worldX * MOUNTAIN_SCALE, worldY * MOUNTAIN_SCALE);
-        double mountainDetail = mountainNoise.noise(worldX * (MOUNTAIN_SCALE * 2), worldY * (MOUNTAIN_SCALE * 2)) * 0.5;
+        // Generate base noise with reduced warping
+        double warpX = warpNoise.noise(worldX * WARP_SCALE, worldY * WARP_SCALE) * 10;
+        double warpY = warpNoise.noise((worldX + 31.5f) * WARP_SCALE, (worldY + 31.5f) * WARP_SCALE) * 10;
 
-        double mountainValue = (mountainBase + mountainDetail + 1.0) / 2.0;  // Normalize to 0-1
-        // Apply warping
-        double warpX = warpNoise.noise(worldX * WARP_SCALE, worldY * WARP_SCALE) * 30;
-        double warpY = warpNoise.noise((worldX + 31.5f) * WARP_SCALE, (worldY + 31.5f) * WARP_SCALE) * 30;
+        // Calculate temperature and moisture with octaves
+        double temperatureBase = generateOctaveNoise(temperatureNoise,
+            (worldX + warpX) * BIOME_SCALE,
+            (worldY + warpY) * BIOME_SCALE,
+            1.0);
 
-        // Get warped values
-        double temperature = temperatureNoise.noise((worldX + warpX) * BIOME_SCALE, (worldY + warpY) * BIOME_SCALE);
-        double moisture = moistureNoise.noise((worldX + warpX * 0.8) * BIOME_SCALE, (worldY + warpY * 0.8) * BIOME_SCALE);
+        double moistureBase = generateOctaveNoise(moistureNoise,
+            (worldX + warpX * 0.8) * BIOME_SCALE,
+            (worldY + warpY * 0.8) * BIOME_SCALE,
+            1.0);
 
-        // Force wider distribution by applying exponential scaling
-        temperature = Math.pow((temperature + 1.0) / 2.0, 0.8) + temperatureBias;
-        moisture = Math.pow((moisture + 1.0) / 2.0, 0.8) + moistureBias;
+        // Add subtle detail variation
+        double detailVar = detailNoise.noise(worldX * DETAIL_SCALE, worldY * DETAIL_SCALE) * 0.1;
 
-        // Add variation
-        double detailVar = detailNoise.noise(worldX * DETAIL_SCALE, worldY * DETAIL_SCALE) * 0.15;
-        temperature += detailVar;
-        moisture += detailVar;
+        // Calculate final values
+        double temperature = (temperatureBase + 1.0) / 2.0 + temperatureBias + (detailVar * 0.3);
+        double moisture = (moistureBase + 1.0) / 2.0 + moistureBias + (detailVar * 0.3);
 
-        // Ensure full range utilization
-        temperature = Math.max(0.1, Math.min(0.9, temperature));
-        moisture = Math.max(0.1, Math.min(0.9, moisture));
+        // Clamp values
+        temperature = Math.max(0.0, Math.min(1.0, temperature));
+        moisture = Math.max(0.0, Math.min(1.0, moisture));
 
-        // Debug logging
-        if (DEBUG_ENABLED && debugCounter++ % DEBUG_SAMPLE_RATE == 0) {
-            GameLogger.info(String.format("Biome Debug - Pos(%f,%f) Raw(T:%.2f,M:%.2f) Final(T:%.2f,M:%.2f)",
-                worldX, worldY, rawTemperature, rawMoisture, temperature, moisture));
-        }
+        // Mountain check
+        double mountainValue = generateMountainValue(worldX, worldY);
 
+        // Determine biomes
         BiomeType primaryType = determineBiomeType(temperature, moisture, mountainValue);
-
-        // Log biome distribution
-        if (DEBUG_ENABLED && debugCounter % DEBUG_SAMPLE_RATE == 0) {
-            GameLogger.info("Selected Biome: " + primaryType);
-        }
-        double normalizedTemp = (temperature + 1.0) / 2.0;
-        double normalizedMoisture = (moisture + 1.0) / 2.0;
-
         BiomeType secondaryType = getTransitionBiome(temperature, moisture, primaryType);
         float transitionFactor = calculateTransitionFactor(temperature, moisture);
-        return new BiomeTransitionResult(
-            getBiome(primaryType),                  // Primary biome
-            getBiome(secondaryType),                // Secondary biome
-            transitionFactor,                       // Transition blend factor
-            (float) mountainValue,                   // Mountain influence
-            (float) normalizedTemp,                  // Normalized temperature
-            (float) normalizedMoisture              // Normalized moisture
-        );
+
+
+        return new BiomeTransitionResult(getBiome(primaryType), getBiome(secondaryType), transitionFactor);
     }
 
-    private float calculateTransitionFactor(double temperature, double moisture) {
-        // Add detail variation to transition calculation
-        double detailVar = detailNoise.noise(temperature * 10, moisture * 10) * 0.15;
+    private double generateMountainValue(float worldX, float worldY) {
+        double mountainBase = mountainNoise.noise(worldX * MOUNTAIN_SCALE, worldY * MOUNTAIN_SCALE);
+        double mountainDetail = mountainNoise.noise(worldX * (MOUNTAIN_SCALE * 2), worldY * (MOUNTAIN_SCALE * 2)) * 0.3;
+        return (mountainBase + mountainDetail + 1.0) / 2.0;
+    }
 
+
+    private float calculateTransitionFactor(double temperature, double moisture) {
+        double detailVar = detailNoise.noise(temperature * 10, moisture * 10) * 0.1;
         double tempFactor = Math.abs(temperature - 0.5) * 2;
         double moistFactor = Math.abs(moisture - 0.5) * 2;
-
         double transitionStrength = Math.max(tempFactor, moistFactor) + Math.abs(detailVar);
-        return (float) Math.max(0, Math.min(1, transitionStrength / TRANSITION_WIDTH));
+
+        // Smoother transition calculation
+        return (float) smoothstep(0, TRANSITION_WIDTH, (float) transitionStrength);
     }
 
     private BiomeType determineBiomeType(double temperature, double moisture, double mountainValue) {
-        // Normalize temperature and moisture to 0-1 range
-        temperature = (temperature + 1.0) / 2.0;
-        moisture = (moisture + 1.0) / 2.0;
-
-        // Mountain checks first
         if (mountainValue > MOUNTAIN_THRESHOLD) {
-            if (temperature > 0.8) {
-                return BiomeType.VOLCANO;
-            }
-            if (temperature < 0.3) {
-                return BiomeType.SNOW;
-            }
-            return BiomeType.BIG_MOUNTAINS;
+            return temperature < 0.5 ? BiomeType.SNOW : BiomeType.BIG_MOUNTAINS;
         }
 
-        // Very Cold (0.0 - 0.2)
-        if (temperature < 0.2) {
-            return BiomeType.SNOW;
-        }
-
-        // Cold (0.2 - 0.4)
-        if (temperature < 0.4) {
+        if (temperature < 0.2) { // Lowered from 0.3 to 0.2
+            return moisture > 0.4 ? BiomeType.SNOW : BiomeType.DESERT;
+        } else if (temperature < 0.5) { // Adjusted to 0.5
             if (moisture < 0.3) {
-                return BiomeType.PLAINS;
+                return BiomeType.DESERT;
             } else if (moisture < 0.6) {
+                return BiomeType.PLAINS;
+            } else {
+                return BiomeType.FOREST;
+            }
+        } else if (temperature < 0.75) { // Added an extra range
+            if (moisture < 0.3) {
+                return BiomeType.DESERT;
+            } else if (moisture < 0.6) {
+                return BiomeType.PLAINS;
+            } else if (moisture < 0.8) {
                 return BiomeType.FOREST;
             } else {
-                return BiomeType.SWAMP;
+                return BiomeType.RAIN_FOREST;
             }
-        }
-
-        // Moderate (0.4 - 0.6)
-        if (temperature < 0.6) {
-            if (moisture < 0.2) {
-                return BiomeType.PLAINS;
-            } else if (moisture < 0.4) {
-                return BiomeType.FOREST;
+        } else {
+            if (moisture < 0.3) {
+                return BiomeType.DESERT;
             } else if (moisture < 0.6) {
-                return BiomeType.CHERRY_BLOSSOM;
+                return BiomeType.PLAINS;
             } else if (moisture < 0.8) {
-                return BiomeType.SWAMP;
+                return BiomeType.FOREST;
             } else {
                 return BiomeType.HAUNTED;
             }
         }
-
-        // Warm (0.6 - 0.8)
-        if (temperature < 0.8) {
-            if (moisture < 0.2) {
-                return BiomeType.DESERT;
-            } else if (moisture < 0.4) {
-                return BiomeType.PLAINS;
-            } else if (moisture < 0.6) {
-                return BiomeType.SAFARI;
-            } else if (moisture < 0.8) {
-                return BiomeType.FOREST;
-            } else {
-                return BiomeType.SWAMP;
-            }
-        }
-
-        // Hot (0.8 - 1.0)
-        if (moisture < 0.2) {
-            return BiomeType.DESERT;
-        } else if (moisture < 0.4) {
-            return BiomeType.SAFARI;
-        } else if (moisture < 0.6) {
-            return BiomeType.VOLCANO;
-        } else if (moisture < 0.8) {
-            return BiomeType.HAUNTED;
-        } else {
-            return BiomeType.SWAMP;
-        }
     }
 
-    // Update transition logic
+
     private BiomeType getTransitionBiome(double temperature, double moisture, BiomeType primary) {
-        temperature = (temperature + 1.0) / 2.0;
-        moisture = (moisture + 1.0) / 2.0;
-
         switch (primary) {
-            case SNOW:
-                return moisture > 0.5 ? BiomeType.FOREST : BiomeType.PLAINS;
-
-            case CHERRY_BLOSSOM:
-                return temperature < 0.5 ? BiomeType.FOREST : BiomeType.PLAINS;
+            case RAIN_FOREST:
+                if (moisture < 0.7) return BiomeType.FOREST;
+                if (temperature < 0.7) return BiomeType.FOREST;
+                return BiomeType.HAUNTED;
 
             case HAUNTED:
-                if (moisture < 0.4) return BiomeType.FOREST;
-                return temperature > 0.7 ? BiomeType.SWAMP : BiomeType.CHERRY_BLOSSOM;
+                if (moisture < 0.7) return BiomeType.FOREST;
+                return BiomeType.RAIN_FOREST;
 
             case FOREST:
-                if (temperature < 0.4) return BiomeType.SNOW;
-                if (moisture > 0.7) return BiomeType.SWAMP;
-                return BiomeType.PLAINS;
+                if (temperature > 0.7 && moisture > 0.7) return BiomeType.RAIN_FOREST;
+                if (moisture < 0.5) return BiomeType.PLAINS;
+                return BiomeType.RAIN_FOREST;
 
             case DESERT:
-                if (moisture > 0.3) return BiomeType.SAFARI;
-                return temperature < 0.7 ? BiomeType.PLAINS : BiomeType.VOLCANO;
-
-            case SAFARI:
-                if (moisture < 0.3) return BiomeType.DESERT;
-                if (moisture > 0.7) return BiomeType.FOREST;
                 return BiomeType.PLAINS;
 
-            case SWAMP:
-                if (moisture < 0.5) return BiomeType.FOREST;
-                return temperature > 0.6 ? BiomeType.HAUNTED : BiomeType.FOREST;
-
-            case VOLCANO:
-                if (temperature < 0.7) return BiomeType.DESERT;
-                return moisture > 0.5 ? BiomeType.HAUNTED : BiomeType.SAFARI;
-
-            case BIG_MOUNTAINS:
-                if (temperature < 0.3) return BiomeType.SNOW;
-                if (temperature > 0.8) return BiomeType.VOLCANO;
-                return moisture > 0.6 ? BiomeType.FOREST : BiomeType.PLAINS;
-
             case PLAINS:
-            default:
                 if (temperature < 0.3) return BiomeType.SNOW;
-                if (moisture > 0.7) return BiomeType.FOREST;
-                if (temperature > 0.8 && moisture < 0.3) return BiomeType.DESERT;
-                return BiomeType.FOREST;
+                if (moisture > 0.6) return BiomeType.FOREST;
+                return BiomeType.PLAINS;
+
+            case SNOW:
+                return BiomeType.PLAINS;
+
+            default:
+                return BiomeType.PLAINS;
         }
     }
 
@@ -403,536 +413,96 @@ public class BiomeManager {
         return biome;
     }
 
-    private void updateGlobalSettings(JsonBiomeConfig.GlobalSettings settings) {
-        if (settings != null) {
-            TRANSITION_WIDTH = settings.transitionWidth;
-            MOUNTAIN_THRESHOLD = settings.mountainThreshold;
-            BIOME_SCALE = settings.biomeScale;
-            DETAIL_SCALE = settings.detailScale;
-            WARP_SCALE = settings.warpScale;
-            BIOME_OCTAVES = settings.biomeOctaves;
-            BIOME_PERSISTENCE = settings.biomePersistence;
-
-            // Process environment effects if they exist
-            if (settings.environmentEffects != null) {
-                loadEnvironmentEffects(settings.environmentEffects);
-            }
-        }
-    }
-
-    private List<Integer> convertTileTypes(List<String> tileTypeNames) {
-        List<Integer> tileTypes = new ArrayList<>();
-
-        for (String tileName : tileTypeNames) {
-            // First check the cache
-            Integer tileType = TILE_TYPE_CACHE.get(tileName);
-
-            if (tileType == null) {
-                // If not in cache, convert and cache it
-                tileType = getTileTypeFromString(tileName);
-                if (tileType != -1) {
-                    TILE_TYPE_CACHE.put(tileName, tileType);
-                }
-            }
-
-            if (tileType != -1) {
-                tileTypes.add(tileType);
-            } else {
-                GameLogger.error("Invalid tile type name: " + tileName);
-            }
-        }
-
-        if (tileTypes.isEmpty()) {
-            GameLogger.error("No valid tile types converted from names");
-        }
-
-        return tileTypes;
-    }
-
-    private void loadEnvironmentEffects(Map<String, JsonBiomeConfig.EnvironmentEffectData> effectsData) {
-        if (effectsData == null) {
-            GameLogger.info("No environment effects data provided");
-            return;
-        }
-
-        for (Map.Entry<String, JsonBiomeConfig.EnvironmentEffectData> entry : effectsData.entrySet()) {
-            try {
-                BiomeType biomeType = BiomeType.valueOf(entry.getKey().toUpperCase());
-                JsonBiomeConfig.EnvironmentEffectData effectData = entry.getValue();
-
-                if (effectData == null) {
-                    GameLogger.info("Null effect data for biome: " + biomeType);
-                    continue;
-                }
-
-                // Validate effect data
-                if (effectData.particleEffect == null || effectData.ambientSound == null) {
-                    GameLogger.info("Missing required effect data for biome: " + biomeType);
-                    continue;
-                }
-
-                // Create and validate the effect
-                BiomeEnvironmentEffect effect = validateAndCreateEffect(biomeType, effectData);
-                if (effect != null) {
-                    biomeEnvironmentEffects.put(biomeType, effect);
-                    GameLogger.info("Loaded environment effect for " + biomeType +
-                        " - Particle: " + effectData.particleEffect +
-                        " Sound: " + effectData.ambientSound +
-                        " Chance: " + effectData.weatherChance);
-                }
-
-            } catch (IllegalArgumentException e) {
-                GameLogger.error("Invalid biome type for environment effect: " + entry.getKey());
-            } catch (Exception e) {
-                GameLogger.error("Error loading environment effect for " + entry.getKey() +
-                    ": " + e.getMessage());
-            }
-        }
-
-        // Log summary
-        GameLogger.info("Loaded " + biomeEnvironmentEffects.size() + " environment effects");
-    }
-
-    private BiomeEnvironmentEffect validateAndCreateEffect(
-        BiomeType biomeType,
-        JsonBiomeConfig.EnvironmentEffectData data) {
-
-        // Validate particle effect name
-        if (!isValidParticleEffect(data.particleEffect)) {
-            GameLogger.info("Invalid particle effect name for " + biomeType + ": " + data.particleEffect);
-            return null;
-        }
-
-        // Validate ambient sound name
-        if (!isValidAmbientSound(data.ambientSound)) {
-            GameLogger.info("Invalid ambient sound name for " + biomeType + ": " + data.ambientSound);
-            return null;
-        }
-
-        // Validate weather chance
-        float weatherChance = Math.max(0.0f, Math.min(1.0f, data.weatherChance));
-        if (weatherChance != data.weatherChance) {
-            GameLogger.error("Weather chance for " + biomeType + " clamped to valid range [0,1]");
-        }
-
-        return new BiomeEnvironmentEffect(
-            data.particleEffect,
-            data.ambientSound,
-            weatherChance
-        );
-    }
-
-    private boolean isValidParticleEffect(String effectName) {
-        // Add your particle effect validation logic here
-        // For example, check against a list of valid effect names
-        return effectName != null && !effectName.isEmpty() && (
-            effectName.equals("SNOW_FALL") ||
-                effectName.equals("RAIN_FALL") ||
-                effectName.equals("SAND_STORM") ||
-                effectName.equals("FOG") ||
-                effectName.equals("FIREFLY") ||
-                effectName.equals("LEAVES") ||
-                effectName.equals("THUNDER")
-        );
-    }
-
-    public void applyEffect(AudioManager audioManager, float intensity) {
-//        if (ambientSound != null) {
-//            audioManager.updateAmbientSound(ambientSound, intensity);
-//        }
-    }
-
-    private boolean isValidAmbientSound(String soundName) {
-        return soundName != null && !soundName.isEmpty() && (
-            soundName.equals("WINTER_WIND") ||
-                soundName.equals("RAIN_AMBIENT") ||
-                soundName.equals("DESERT_WIND") ||
-                soundName.equals("SPOOKY_AMBIENT") ||
-                soundName.equals("SWAMP_AMBIENT") ||
-                soundName.equals("FOREST_AMBIENT") ||
-                soundName.equals("THUNDER_AMBIENT")
-        );
-    }
-
-    private String loadJsonContent() throws IOException {
-        String jsonContent = null;
-        FileSystemDelegate delegate = GameFileSystem.getInstance().getDelegate();
-
-        try {
-            jsonContent = delegate.readString("Data/biomes.json");
-            GameLogger.info("Successfully loaded biomes via delegate");
-            return jsonContent;
-        } catch (IOException e) {
-            GameLogger.error("Could not load biomes via delegate, trying alternate paths");
-        }
-
-        // Try alternate paths if delegate fails
-        boolean isServer = Gdx.files == null;
-        if (isServer) {
-            for (String path : BIOME_FILE_PATHS) {
-                try {
-                    jsonContent = new String(Files.readAllBytes(Paths.get(path)));
-                    GameLogger.info("Server: Successfully loaded biomes from " + path);
-                    return jsonContent;
-                } catch (IOException e) {
-                    GameLogger.error("Server: Could not load biomes from " + path);
-                }
-            }
-        } else {
-            for (String path : BIOME_FILE_PATHS) {
-                try {
-                    FileHandle fileHandle = Gdx.files.internal(path);
-                    if (fileHandle.exists()) {
-                        jsonContent = fileHandle.readString();
-                        GameLogger.info("Client: Successfully loaded biomes from " + path);
-                        return jsonContent;
-                    }
-                } catch (Exception e) {
-                    GameLogger.error("Client: Could not load biomes from " + path);
-                }
-            }
-        }
-
-        if (jsonContent == null) {
-            throw new IOException("Could not load biomes.json from any location");
-        }
-
-        return jsonContent;
-    }
-
-    private void loadEnvironmentEffectsForBiome(Biome biome,
-                                                Map<String, JsonBiomeConfig.EnvironmentEffectData> effects) {
-
-        JsonBiomeConfig.EnvironmentEffectData effectData =
-            effects.get(biome.getType().name());
-
-        if (effectData != null) {
-            BiomeEnvironmentEffect effect = new BiomeEnvironmentEffect(
-                effectData.particleEffect,
-                effectData.ambientSound,
-                effectData.weatherChance
-            );
-            biome.setEnvironmentEffect(effect);
-        }
-    }
-
-
-    private void processBiomeData(BiomeData data) {
-        try {
-            BiomeType biomeType = BiomeType.valueOf(data.type);
-            Biome biome = new Biome(data.name, biomeType);
-
-            // Process allowed tile types
-            if (data.allowedTileTypes != null && !data.allowedTileTypes.isEmpty()) {
-                List<Integer> tileTypes = new ArrayList<>();
-                for (String tileType : data.allowedTileTypes) {
-                    int tileId = getTileTypeFromString(tileType);
-                    if (tileId != -1) {
-                        tileTypes.add(tileId);
-                        GameLogger.info("Added tile type: " + tileType + " -> " + tileId + " for biome " + data.name);
-                    } else {
-                        GameLogger.error("Failed to convert tile type: " + tileType + " for biome " + data.name);
-                    }
-                }
-                if (!tileTypes.isEmpty()) {
-                    biome.setAllowedTileTypes(tileTypes);
-                } else {
-                    GameLogger.error("No valid tile types found for biome " + data.name);
-                }
-            } else {
-                GameLogger.error("No allowed tile types specified for biome " + data.name);
-            }
-
-            // Process tile distribution with better error handling
-            if (data.tileDistribution != null) {
-                for (Map.Entry<String, Double> entry : data.tileDistribution.entrySet()) {
-                    int tileId = getTileTypeFromString(entry.getKey());
-                    if (tileId != -1) {
-                        biome.getTileDistribution().put(tileId, entry.getValue().intValue());
-                        GameLogger.info("Added tile distribution: " + entry.getKey() + " -> " + tileId +
-                            " (" + entry.getValue() + "%) for biome " + data.name);
-                    }
-                }
-            }
-
-            // Validate the biome data
-            if (biome.getAllowedTileTypes().isEmpty()) {
-                GameLogger.error("No valid tile types loaded for biome " + data.name + ", using defaults");
-                biome.setAllowedTileTypes(Arrays.asList(1, 2, 3));
-            }
-
-            biomes.put(biomeType, biome);
-            GameLogger.info("Successfully loaded biome: " + data.name + " with " +
-                biome.getAllowedTileTypes().size() + " tile types");
-
-        } catch (IllegalArgumentException e) {
-            GameLogger.error("Invalid biome type: " + data.type + " for biome " + data.name);
-        } catch (Exception e) {
-            GameLogger.error("Error processing biome " + data.name + ": " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
+    // In loadBiomesFromJson():
     private void loadBiomesFromJson() {
         try {
-            String jsonContent = loadJsonContent();
-            Gson gson = new GsonBuilder()
-                .setLenient()
-                .create();
+            String jsonContent = GameFileSystem.getInstance().getDelegate().readString("Data/biomes.json");
+            if (jsonContent == null) {
+                initializeDefaultBiomes();
+                return;
+            }
 
-            JsonObject root = gson.fromJson(jsonContent, JsonObject.class);
-            JsonArray biomesArray = root.getAsJsonArray("biomes");
+            GsonBuilder builder = new GsonBuilder()
+                .registerTypeAdapter(BiomeData.class, new BiomeDataTypeAdapter())
+                .enableComplexMapKeySerialization();
 
-            Type biomeListType = new TypeToken<List<BiomeData>>() {
+            Gson gson = builder.create();
+
+            Type listType = new TypeToken<ArrayList<BiomeData>>() {
             }.getType();
-            List<BiomeData> biomeDataList = gson.fromJson(biomesArray, biomeListType);
+            List<BiomeData> biomeDataList = gson.fromJson(jsonContent, listType);
 
-            if (root.has("globalSettings")) {
-                JsonBiomeConfig.GlobalSettings settings = gson.fromJson(
-                    root.get("globalSettings"),
-                    JsonBiomeConfig.GlobalSettings.class
-                );
-                updateGlobalSettings(settings);
+            if (biomeDataList == null || biomeDataList.isEmpty()) {
+                GameLogger.error("No biome data found in JSON");
+                initializeDefaultBiomes();
+                return;
             }
 
-            for (BiomeData biomeData : biomeDataList) {
-                processBiomeData(biomeData);
+            for (BiomeData data : biomeDataList) {
+                try {
+                    data.validate();
+                    BiomeType type = BiomeType.valueOf(data.getType().toUpperCase());
+                    Biome biome = new Biome(data.getName(), type);
+
+                    if (!data.getAllowedTileTypes().isEmpty()) {
+                        biome.setAllowedTileTypes(new ArrayList<>(data.getAllowedTileTypes()));
+                    }
+
+                    if (!data.getTileDistribution().isEmpty()) {
+                        biome.setTileDistribution(new HashMap<>(data.getTileDistribution()));
+                    }
+
+                    biomes.put(type, biome);
+                    GameLogger.info("Successfully loaded biome: " + data.getName());
+
+                } catch (Exception e) {
+                    GameLogger.error("Error processing biome " + data.getName() + ": " + e.getMessage());
+                }
             }
-
-            validateBiomes();
-
-            GameLogger.info("Successfully loaded " + biomes.size() + " biomes");
 
         } catch (Exception e) {
-            GameLogger.error("Failed to load biomes.json: " + e.getMessage());
-            e.printStackTrace();
+            GameLogger.error("Failed to load biomes: " + e.getMessage());
             initializeDefaultBiomes();
         }
     }
 
-    private int getTileTypeFromString(String tileType) {
-        // Handle numeric tile types (for backwards compatibility)
-        try {
-            if (tileType.matches("\\d+")) {
-                return Integer.parseInt(tileType);
-            }
-        } catch (NumberFormatException ignored) {
-        }
-
-        String[] parts = tileType.toLowerCase().split("_");
-        if (parts.length < 2) {
-            GameLogger.error("Invalid tile type format: " + tileType);
-            return -1;
-        }
-
-        Map<String, Integer> baseCategories = new HashMap<String, Integer>() {{
-            // Basic terrain (0-99)
-            put("grass", 10);
-            put("ground", 20);
-            put("water", 30);
-            put("wall", 430);                 // Base wall type
-            put("wall_stone", 431);           // Stone wall variant
-            put("wall_wood", 432);            // Wood wall variant
-            put("wall_decorated", 433);       // Decorated wall variant
-            put("platform", 420);
-            put("building", 440);
-            put("house", 450);
-
-            // Vegetation (100-199)
-            put("flower", 100);
-            put("flowers", 100);  // Alternative naming
-            put("flower_tall", 101);  // Added for forest
-            put("vegetation_small", 102);  // Added for forest
-            put("tree", 110);
-            put("tree_large", 111);  // Added for forest
-            put("tree_small", 112);
-            put("bush", 120);
-            put("vegetation", 130);
-            put("vegetation_dense", 131);  // Added for safari
-            put("roots", 140);
-
-            // Rocks and Formations (200-299)
-            put("rock", 200);
-            put("rock_small", 201);
-            put("rock_formation", 202);
-            put("rock_border", 203);
-            put("cliff", 210);
-            put("cave", 220);
-            put("formation", 230);
-
-            // Water Features (300-399)
-            put("waterfall", 300);
-            put("pool", 310);
-            put("ice", 320);
-
-            // Structures (400-499)
-            put("bridge", 400);
-            put("fence", 410);
-            put("platform_wood", 421);
-            put("platform_stone", 422);
-            put("window", 460);
-
-            // Special Features (500-599)
-            put("mushroom", 500);
-            put("cactus", 510);
-            put("planter", 520);
-            put("bench", 530);
-            put("lava", 540);
-            put("fountain", 550);  // Added for safari
-
-            // Decorative (600-699)
-            put("decoration", 600);
-            put("ground_decorated", 601);  // Added for forest ground variations
-            put("ground_detail", 602);
-            put("awning", 610);
-            put("tallgrass", 620);
-        }};
-
-// Update biome offsets to include all biomes
-        Map<String, Integer> biomeOffsets = new HashMap<String, Integer>() {{
-            put("plains", 1000);
-            put("desert", 2000);
-            put("forest", 3000);    // Changed to match your enum order
-            put("snow", 4000);
-            put("haunted", 5000);
-            put("mountain", 6000);
-            put("cherry", 7000);
-            put("safari", 8000);
-            put("swamp", 9000);
-            put("volcano", 10000);    // Basic terrain (0-99)
-            put("grass", 10);
-            put("ground", 20);
-            put("water", 30);
-
-            // Vegetation (100-199)
-            put("tree", 110);
-            put("tree_dark", 111);  // Added for haunted
-            put("tree_dead", 112);  // Added for haunted
-            put("vegetation", 130);
-
-            // Structures (400-499)
-            put("platform", 420);
-            put("wall", 430);
-            put("wall_stone", 431); // Added for haunted
-
-            // Decorative (600-699)
-            put("decoration", 600);
-
-            // Special Features (500-599)
-            put("mushroom", 500);   // Keep original for compatibility
-        }};
-        String biomePrefix = parts[0];
-        String baseType = parts[1];
-
-        // Handle special compound types (e.g., "lava_pool", "house_wood")
-        if (parts.length > 2) {
-            if (parts[1].equals("tree")) {
-                // Handle special tree types
-                if (parts[2].equals("green") || parts[2].equals("pink") ||
-                    parts[2].equals("snowy") || parts[2].equals("dead") ||
-                    parts[2].equals("mangrove")) {
-                    baseType = "tree";  // All tree variants use the base tree type
-                }
-            } else if (parts[1].equals("lava") && parts[2].equals("pool")) {
-                baseType = "lava";
-            } else if (parts[1].equals("ground") && parts.length > 2) {
-                // Handle ground variants (e.g., ground_decorated, ground_detail)
-                baseType = "ground";
-            } else if (parts[1].equals("house") && parts[2].equals("wood")) {
-                baseType = "house";
-            } else if (parts[1].equals("wall") && parts[2].equals("stone")) {
-                baseType = "wall_stone";
-            } else if (parts[1].equals("wall")) {
-                if (parts[2].equals("wood")) {
-                    baseType = "wall_wood";
-                } else if (parts[2].equals("decorated")) {
-                    baseType = "wall_decorated";
-                }
-            }
-        }
-
-        Integer baseValue = baseCategories.get(baseType);
-        Integer biomeValue = biomeOffsets.get(biomePrefix);
-
-        if (baseValue == null || biomeValue == null) {
-            GameLogger.error("Invalid base category (" + baseType + ") or biome prefix (" +
-                biomePrefix + ") for tile: " + tileType);
-            return -1;
-        }
-
-        return biomeValue + baseValue;
-    }
-
-    // Helper method to get tile type strings
-    public List<String> getDefaultTileTypes(BiomeType biomeType) {
-        String prefix = biomeType.name().toLowerCase();
-        switch (biomeType) {
-            case PLAINS:
-                return Arrays.asList(
-                    prefix + "_grass",
-                    prefix + "_ground",
-                    prefix + "_water",
-                    prefix + "_tree",
-                    prefix + "_rock",
-                    prefix + "_bridge",
-                    prefix + "_fence",
-                    prefix + "_decoration"
-                );
+    private List<Integer> getDefaultAllowedTypes(BiomeType type) {
+        switch (type) {
             case DESERT:
-                return Arrays.asList(
-                    prefix + "_ground",
-                    prefix + "_vegetation",
-                    prefix + "_rock",
-                    prefix + "_cactus",
-                    prefix + "_rock_small",
-                    prefix + "_platform",
-                    prefix + "_building",
-                    prefix + "_decoration"
-                );
-            // Add cases for other biomes...
+                return Arrays.asList(1, 2, 16); // grass, dirt, sand
+            case SNOW:
+                return Arrays.asList(1, 2, 3, 4); // grass, dirt, stone, snow
+            case HAUNTED:
+                return Arrays.asList(1, 2, 3, 8); // grass, dirt, stone, dark grass
             default:
-                return Arrays.asList(
-                    prefix + "_ground",
-                    prefix + "_grass",
-                    prefix + "_rock",
-                    prefix + "_tree",
-                    prefix + "_decoration"
-                );
+                return Arrays.asList(1, 2, 3); // grass, dirt, stone
         }
     }
 
-    private void validateBiomes() {
-        if (biomes.isEmpty()) {
-            GameLogger.error("No biomes loaded! Initializing defaults...");
-            initializeDefaultBiomes();
-            return;
+    private Map<Integer, Integer> getDefaultDistribution(BiomeType type) {
+        Map<Integer, Integer> dist = new HashMap<>();
+        switch (type) {
+            case DESERT:
+                dist.put(16, 70); // sand
+                dist.put(2, 20);  // dirt
+                dist.put(1, 10);  // grass
+                break;
+            case SNOW:
+                dist.put(4, 70);  // snow
+                dist.put(1, 20);  // grass
+                dist.put(3, 10);  // stone
+                break;
+            case HAUNTED:
+                dist.put(8, 70);  // dark grass
+                dist.put(2, 20);  // dirt
+                dist.put(3, 10);  // stone
+                break;
+            default:
+                dist.put(1, 70);  // grass
+                dist.put(2, 20);  // dirt
+                dist.put(3, 10);  // stone
         }
-
-        // Ensure all required biome types exist
-        for (BiomeType type : BiomeType.values()) {
-            if (!biomes.containsKey(type)) {
-                GameLogger.error("Missing required biome type: " + type + ". Creating default.");
-                Biome defaultBiome = createDefaultBiome(type);
-                biomes.put(type, defaultBiome);
-            }
-        }
-
-        // Validate each biome's data
-        for (Map.Entry<BiomeType, Biome> entry : biomes.entrySet()) {
-            Biome biome = entry.getValue();
-
-            if (biome.getTileDistribution().isEmpty()) {
-                GameLogger.error("Biome " + biome.getName() + " has no tile distribution. Adding defaults.");
-                biome.getTileDistribution().put(1, 70);
-                biome.getTileDistribution().put(2, 20);
-                biome.getTileDistribution().put(3, 10);
-            }
-
-            if (biome.getAllowedTileTypes().isEmpty()) {
-                GameLogger.error("Biome " + biome.getName() + " has no allowed tile types. Adding defaults.");
-                biome.setAllowedTileTypes(Arrays.asList(1, 2, 3));
-            }
-        }
+        return dist;
     }
 
     private Biome createDefaultBiome(BiomeType type) {
@@ -1020,62 +590,207 @@ public class BiomeManager {
         }
     }
 
-    // Helper class for environment effects
-    public static class BiomeEnvironmentEffect {
-        private final String particleEffect;
-        private final String ambientSound;
-        private final float weatherChance;
-
-        public BiomeEnvironmentEffect(String particleEffect, String ambientSound, float weatherChance) {
-            this.particleEffect = particleEffect;
-            this.ambientSound = ambientSound;
-            this.weatherChance = weatherChance;
-        }
-
-        public String getParticleEffect() {
-            return particleEffect;
-        }
-
-        public String getAmbientSound() {
-            return ambientSound;
-        }
-
-        public float getWeatherChance() {
-            return weatherChance;
+    private static class MapDeserializer implements JsonDeserializer<Map<?, ?>> {
+        @Override
+        public Map<?, ?> deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
+            throws JsonParseException {
+            return new HashMap<>(context.deserialize(json, HashMap.class));
         }
     }
 
-    private static class JsonBiomeConfig {
-        List<BiomeData> biomes;
-        GlobalSettings globalSettings;
+    public static class BiomeData implements Serializable {
+        private String name;
+        private String type;
+        private ArrayList<Integer> allowedTileTypes;
+        private HashMap<Integer, Integer> tileDistribution;
+        private ArrayList<String> spawnableObjects;
+        private int chunkX;
+        private int chunkY;
+        private BiomeType primaryBiomeType;
+        private long lastModified;
+        private HashMap<String, Double> spawnChances;
 
-        static class GlobalSettings {
-            float transitionWidth;
-            float mountainThreshold;
-            float biomeScale;
-            float detailScale;
-            float warpScale;
-            int biomeOctaves;
-            float biomePersistence;
-            Map<String, EnvironmentEffectData> environmentEffects;
+        // Required no-arg constructor
+        public BiomeData() {
+            this.tileDistribution = new HashMap<>();
+            this.allowedTileTypes = new ArrayList<>();
+            this.spawnableObjects = new ArrayList<>();
+            this.spawnChances = new HashMap<>();
         }
 
-        static class EnvironmentEffectData {
-            String particleEffect;
-            String ambientSound;
-            float weatherChance;
+        // Copy constructor
+        public BiomeData(BiomeData other) {
+            this();
+            if (other != null) {
+                this.name = other.name;
+                this.type = other.type;
+                this.allowedTileTypes.addAll(other.allowedTileTypes);
+                this.tileDistribution.putAll(other.tileDistribution);
+                this.spawnableObjects.addAll(other.spawnableObjects);
+                this.chunkX = other.chunkX;
+                this.chunkY = other.chunkY;
+                this.primaryBiomeType = other.primaryBiomeType;
+                this.lastModified = other.lastModified;
+                this.spawnChances.putAll(other.spawnChances);
+            }
+        }
+
+        // Getters and Setters
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public ArrayList<Integer> getAllowedTileTypes() {
+            return allowedTileTypes;
+        }
+
+        public void setAllowedTileTypes(List<Integer> types) {
+            if (types != null) {
+                this.allowedTileTypes.clear();
+                this.allowedTileTypes.addAll(types);
+            }
+        }
+
+        public HashMap<Integer, Integer> getTileDistribution() {
+            return tileDistribution;
+        }
+
+        public void setTileDistribution(Map<Integer, Integer> distribution) {
+            if (distribution != null) {
+                this.tileDistribution.clear();
+                this.tileDistribution.putAll(distribution);
+            }
+        }
+
+        public BiomeType getPrimaryBiomeType() {
+            return primaryBiomeType;
+        }
+
+        public void setPrimaryBiomeType(BiomeType type) {
+            this.primaryBiomeType = type;
+        }
+
+        public void validate() {
+            if (tileDistribution == null) tileDistribution = new HashMap<>();
+            if (allowedTileTypes == null) allowedTileTypes = new ArrayList<>();
+            if (spawnableObjects == null) spawnableObjects = new ArrayList<>();
+            if (spawnChances == null) spawnChances = new HashMap<>();
         }
     }
 
-    private static class BiomeData {
-        String name;
-        String type;
-        double weight;
-        List<String> allowedTileTypes;
-        Map<String, Double> tileDistribution;
-        List<String> spawnableObjects;
-        Map<String, Float> spawnChances;
-        Map<String, Map<String, String>> transitionMapping;
-        JsonBiomeConfig.GlobalSettings globalSettings; // For biome-specific settings
+    // Custom TypeAdapter for BiomeData
+    private static class BiomeDataTypeAdapter extends TypeAdapter<BiomeData> {
+        @Override
+        public void write(JsonWriter out, BiomeData value) throws IOException {
+            out.beginObject();
+
+            // Write basic properties
+            if (value.getName() != null) out.name("name").value(value.getName());
+            if (value.getType() != null) out.name("type").value(value.getType());
+
+            // Write allowed types
+            if (value.getAllowedTileTypes() != null && !value.getAllowedTileTypes().isEmpty()) {
+                out.name("allowedTileTypes");
+                out.beginArray();
+                for (Integer type : value.getAllowedTileTypes()) {
+                    if (type != null) out.value(type);
+                }
+                out.endArray();
+            }
+
+            // Write distribution
+            if (value.getTileDistribution() != null && !value.getTileDistribution().isEmpty()) {
+                out.name("tileDistribution");
+                out.beginObject();
+                for (Map.Entry<Integer, Integer> entry : value.getTileDistribution().entrySet()) {
+                    if (entry.getKey() != null && entry.getValue() != null) {
+                        out.name(entry.getKey().toString()).value(entry.getValue());
+                    }
+                }
+                out.endObject();
+            }
+
+            // Write optional properties
+            if (value.getPrimaryBiomeType() != null) {
+                out.name("primaryBiomeType").value(value.getPrimaryBiomeType().name());
+            }
+
+            out.endObject();
+        }
+
+        @Override
+        public BiomeData read(JsonReader in) throws IOException {
+            BiomeData data = new BiomeData();
+            in.beginObject();
+
+            while (in.hasNext()) {
+                String fieldName = in.nextName();
+                try {
+                    switch (fieldName) {
+                        case "name":
+                            data.setName(in.nextString());
+                            break;
+                        case "type":
+                            data.setType(in.nextString());
+                            break;
+                        case "allowedTileTypes":
+                            in.beginArray();
+                            while (in.hasNext()) {
+                                try {
+                                    data.getAllowedTileTypes().add(in.nextInt());
+                                } catch (Exception e) {
+                                    in.skipValue();
+                                    GameLogger.error("Skipped invalid allowed tile type");
+                                }
+                            }
+                            in.endArray();
+                            break;
+                        case "tileDistribution":
+                            in.beginObject();
+                            while (in.hasNext()) {
+                                try {
+                                    String key = in.nextName();
+                                    int value = in.nextInt();
+                                    data.getTileDistribution().put(Integer.parseInt(key), value);
+                                } catch (Exception e) {
+                                    in.skipValue();
+                                    GameLogger.error("Skipped invalid tile distribution entry");
+                                }
+                            }
+                            in.endObject();
+                            break;
+                        case "primaryBiomeType":
+                            try {
+                                data.setPrimaryBiomeType(BiomeType.valueOf(in.nextString()));
+                            } catch (Exception e) {
+                                in.skipValue();
+                            }
+                            break;
+                        default:
+                            in.skipValue();
+                            break;
+                    }
+                } catch (Exception e) {
+                    GameLogger.error("Error parsing field " + fieldName + ": " + e.getMessage());
+                    in.skipValue();
+                }
+            }
+
+            in.endObject();
+            data.validate();
+            return data;
+        }
     }
 }

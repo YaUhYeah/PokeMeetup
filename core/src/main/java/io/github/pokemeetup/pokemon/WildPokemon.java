@@ -11,88 +11,108 @@ import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.multiplayer.network.NetworkProtocol;
 import io.github.pokemeetup.pokemon.attacks.Move;
 import io.github.pokemeetup.pokemon.data.PokemonDatabase;
+import io.github.pokemeetup.screens.GameScreen;
 import io.github.pokemeetup.system.gameplay.PokemonAnimations;
 import io.github.pokemeetup.system.gameplay.overworld.PokemonSpawnManager;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.entityai.PokemonAI;
 import io.github.pokemeetup.utils.GameLogger;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Random;
+
+import static io.github.pokemeetup.system.gameplay.PokemonAnimations.IDLE_BOUNCE_DURATION;
+
 
 public class WildPokemon extends Pokemon {
-    public static final float MOVEMENT_INTERVAL = 3.0f;
     private static final float SCALE = 2.0f;
-    private static final float COLLISION_SCALE = 0.4f;
-    private static final float MOVEMENT_SPEED = 2f; // Reduced for smoother movement
-    private static final float ACCELERATION = 4f; // For smooth start/stop
-    private static final float DECELERATION = 3f; // For smooth stopping
-    private float currentSpeed = 0f;
-    private float targetSpeed = 0f;
-
-    // Add to existing variables
-    private Vector2 velocity;
-    private Vector2 currentPosition;
     private static final float TILE_SIZE = 32f;
-    private static final float MOVEMENT_DURATION = 0.4f; // Time to move one tile
-    private static final float MOVEMENT_THRESHOLD = 2f; // Distance threshold for reaching target
+    private static final float MOVEMENT_DURATION = 0.75f;  // Slower, smoother movement
+    private static final float MOVEMENT_SPEED = 32f;     // Pixels per second
+    private static final float RENDER_SCALE = 1.5f;
+    private static final float COLLISION_SCALE = 0.8f;
 
-    // Grid position (in tiles)
-    private int gridX;
-    private int gridY;
-
-    // Visual position (in pixels)
-    private float visualX;
-    private float visualY;
-
-    // Movement state
-    private boolean isMoving;
-    private float movementProgress;
-    private Vector2 startPosition;
-    private Vector2 targetPosition;
-    private String targetDirection;
+    private static final float FRAME_WIDTH = World.TILE_SIZE;
+    private static final float FRAME_HEIGHT = World.TILE_SIZE;
+    private static final float IDLE_BOUNCE_HEIGHT = 2f;
+    private static final float IDLE_SWAY_AMOUNT = 0.5f; // Horizontal sway amount
+    private static final float RANDOM_IDLE_INTERVAL = 3f; // Average seconds between idles
     private final PokemonAnimations animations;
     private final float width;
     private final float height;
     private final Rectangle boundingBox;
+    // Add to existing fields
+    private final Random random = new Random();
+    private float pixelX;  // Store exact pixel positions
+    private float pixelY;
+    private World world;
+    // Grid position (in tiles)
+    private int gridX;
+    private boolean isMoving;
+    private Vector2 startPosition;
+    private Vector2 targetPosition;
+    private float movementProgress;
+    private PokemonAI ai;
+    private int gridY;
+    // Visual position (in pixels)
+    private float visualX;
+    private float visualY;
+    // Movement state
+    private String targetDirection;
     private float x;
     private float y;
     private float movementTimer;
     private long spawnTime;
     private String direction;
     private boolean isExpired = false;
-    private PokemonAI ai;
     private boolean isAddedToParty = false;
     private boolean isDespawning = false;
     private float elapsedMovementTime = 0f;
     private PokemonDespawnAnimation despawnAnimation;
+    private float idleTimer = 0f;
+    private float idleAnimationTime = 0;
+    private boolean isIdling = false;
+    private float currentMoveTime = 0f;
+    private boolean isInterpolating = false;
+    private float lastUpdateX;
+    private float lastUpdateY;
 
-
-    public WildPokemon(String name, int level, int tileX, int tileY, TextureRegion overworldSprite) {
+    public WildPokemon(String name, int level, int pixelX, int pixelY, TextureRegion overworldSprite) {
         super(name, level);
-        this.gridX = tileX;
-        this.gridY = tileY;
-        this.visualX = tileX;
-        this.visualY = tileY;
-        this.startPosition = new Vector2();
-        this.targetPosition = new Vector2();
+        this.pixelX = pixelX;
+        this.pixelY = pixelY;
+        this.x = pixelX;
+        this.y = pixelY;
+        this.startPosition = new Vector2(pixelX, pixelY);
+        this.targetPosition = new Vector2(pixelX, pixelY);
         this.direction = "down";
         this.animations = new PokemonAnimations(overworldSprite);
-        this.ai = new PokemonAI(this);
         this.width = World.TILE_SIZE * SCALE;
         this.height = World.TILE_SIZE * SCALE;
-        // Initialize collision box
         float collisionWidth = TILE_SIZE * COLLISION_SCALE;
         float collisionHeight = TILE_SIZE * COLLISION_SCALE;
         this.boundingBox = new Rectangle(
-            this.visualX + (TILE_SIZE - collisionWidth) / 2f,
-            this.visualY + (height - collisionHeight) / 2f,
+            this.pixelX + (TILE_SIZE - collisionWidth) / 2f,
+            this.pixelY + (height - collisionHeight) / 2f,
             collisionWidth,
             collisionHeight
         );
+        GameLogger.info(String.format(
+            "%s initialized at pixel position (%.1f,%.1f)",
+            name, x, y
+        ));
+        setSpawnTime((long) (System.currentTimeMillis() / 1000f));
+        this.ai = new PokemonAI(this);
     }
 
+    public World getWorld() {
+        return world;
+    }
 
-
+    public void setWorld(World world) {
+        this.world = world;
+    }
 
     public void updateFromNetworkUpdate(NetworkProtocol.PokemonUpdate update) {
         if (update == null) {
@@ -143,7 +163,6 @@ public class WildPokemon extends Pokemon {
     public Rectangle getBoundingBox() {
         return boundingBox;
     }
-
 
     @Override
     public PokemonAnimations getAnimations() {
@@ -216,51 +235,154 @@ public class WildPokemon extends Pokemon {
         this.despawnAnimation = despawnAnimation;
     }
 
-    public void update(float delta, World world) {
-        if (isDespawning) {
-            if (despawnAnimation != null && despawnAnimation.update(delta)) {
-                isExpired = true;
-            }
-            return;
+    // Add collision check method
+    public boolean collidesWithPokemon(WildPokemon other) {
+        return this != other && boundingBox.overlaps(other.getBoundingBox());
+    }
+
+    public void updateBoundingBox() {
+        if (boundingBox != null) {
+            float collisionWidth = World.TILE_SIZE * COLLISION_SCALE;
+            float collisionHeight = World.TILE_SIZE * COLLISION_SCALE;
+
+            // Center the collision box regardless of render size
+            boundingBox.setPosition(
+                x + (World.TILE_SIZE - collisionWidth) / 2f,
+                y + (World.TILE_SIZE - collisionHeight) / 2f
+            );
+            boundingBox.setSize(collisionWidth, collisionHeight);
+        }
+    }
+
+    public TextureRegion getCurrentFrame() {
+        if (animations != null) {
+            return animations.getCurrentFrame(direction, isMoving, Gdx.graphics.getDeltaTime());
+        }
+        return null;
+    }
+
+    private void updateIdleAnimation(float delta) {
+        idleTimer += delta;
+
+        // Start new idle animation
+        if (!isIdling && idleTimer >= MathUtils.random(2f, 4f)) {
+            isIdling = true;
+            idleTimer = 0;
+            idleAnimationTime = 0;
         }
 
-        // Update AI
+        // Update current idle animation
+        if (isIdling) {
+            idleAnimationTime += delta;
+            if (idleAnimationTime >= IDLE_BOUNCE_DURATION) {
+                isIdling = false;
+                idleAnimationTime = 0;
+            }
+        }
+    }
+
+    public void update(float delta, World world) {
+        if (world == null) return;
+
+        // Update AI first
         if (ai != null) {
             ai.update(delta, world);
         }
 
-        // Update movement
+        // Update movement and animations
         if (isMoving) {
-            movementProgress += delta / MOVEMENT_DURATION;
-            if (movementProgress >= 1.0f) {
-                // Complete movement
-                movementProgress = 1.0f;
-                visualX = targetPosition.x;
-                visualY = targetPosition.y;
-                gridX = Math.round(visualX / TILE_SIZE);
-                gridY = Math.round(visualY / TILE_SIZE);
-                isMoving = false;
-                animations.stopMoving();
-            } else {
-                // Smooth interpolation between tiles
-                float smoothProgress = calculateSmoothProgress(movementProgress);
-                visualX = MathUtils.lerp(startPosition.x, targetPosition.x, smoothProgress);
-                visualY = MathUtils.lerp(startPosition.y, targetPosition.y, smoothProgress);
-            }
-
-            // Update bounding box with visual position
-            updateBoundingBox();
+            updateMovement(delta);
+            isIdling = false;
+            idleAnimationTime = 0;
+        } else {
+            updateIdleAnimation(delta);
         }
 
         // Update animations
         if (animations != null) {
             animations.update(delta);
+
+            // Sync animation state with movement
+            if (isMoving != animations.isMoving()) {
+                if (isMoving) {
+                    animations.startMoving(direction);
+                } else {
+                    animations.stopMoving();
+                }
+            }
         }
     }
 
     private float calculateSmoothProgress(float progress) {
-        // Smoothstep interpolation for more natural movement
+        // Smooth step interpolation for more natural movement
+        // Hermite interpolation: 3x^2 - 2x^3
         return progress * progress * (3 - 2 * progress);
+    }
+
+    private void updatePosition(float smoothProgress) {
+        // Calculate new position using smooth interpolation
+        float newX = MathUtils.lerp(startPosition.x, targetPosition.x, smoothProgress);
+        float newY = MathUtils.lerp(startPosition.y, targetPosition.y, smoothProgress);
+
+        // Convert to tile coordinates for collision check
+        int newTileX = (int) (newX / World.TILE_SIZE);
+        int newTileY = (int) (newY / World.TILE_SIZE);
+
+        if (world != null && world.isPassable(newTileX, newTileY) &&
+            !isCollidingWithOtherPokemon(newX, newY, world)) {
+            // Update position and collision box
+            setX(newX);
+            setY(newY);
+            updateBoundingBox();
+        } else {
+            // Movement blocked, complete current movement
+            completeMovement();
+            if (ai != null) {
+                ai.enterIdleState();
+            }
+        }
+    }
+
+    private void completeMovement() {
+        isInterpolating = false;
+        isMoving = false;
+        currentMoveTime = 0f;
+
+        // Ensure final position is exactly on target
+        setX(targetPosition.x);
+        setY(targetPosition.y);
+
+        // Stop walking animation
+        if (animations != null) {
+            animations.stopMoving();
+        }
+
+        updateBoundingBox();
+
+        GameLogger.error(String.format(
+            "%s completed movement at (%.1f,%.1f)",
+            getName(), x, y
+        ));
+    }
+
+    private boolean isCollidingWithOtherPokemon(float newX, float newY, World world) {
+        // Create temporary collision box at new position
+        Rectangle tempBox = new Rectangle(
+            newX + (World.TILE_SIZE - boundingBox.width) / 2f,
+            newY + (World.TILE_SIZE - boundingBox.height) / 2f,
+            boundingBox.width,
+            boundingBox.height
+        );
+
+        Collection<WildPokemon> nearbyPokemon = world.getPokemonSpawnManager()
+            .getPokemonInRange(newX, newY, World.TILE_SIZE * 2);
+
+        for (WildPokemon other : nearbyPokemon) {
+            if (other != this && other.getBoundingBox().overlaps(tempBox)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean canMoveToTile(int newGridX, int newGridY, World world) {
@@ -289,18 +411,71 @@ public class WildPokemon extends Pokemon {
         return true;
     }
 
+    private void updateMovement(float delta) {
+        if (!isMoving || !isInterpolating) return;
 
-    public void moveToTile(int newGridX, int newGridY, String newDirection) {
-        if (!isMoving) {
-            startPosition.set(visualX, visualY);
-            targetPosition.set(newGridX * TILE_SIZE, newGridY * TILE_SIZE);
-            direction = newDirection;
-            targetDirection = newDirection;
-            isMoving = true;
-            movementProgress = 0f;
-            animations.startMoving(direction);
+        currentMoveTime += delta;
+        movementProgress = Math.min(currentMoveTime / MOVEMENT_DURATION, 1.0f);
+
+        // Use smooth step interpolation
+        float smoothProgress = calculateSmoothProgress(movementProgress);
+
+        // Calculate new position
+        float newX = MathUtils.lerp(startPosition.x, targetPosition.x, smoothProgress);
+        float newY = MathUtils.lerp(startPosition.y, targetPosition.y, smoothProgress);
+
+        // Only update if position actually changed
+        if (newX != lastUpdateX || newY != lastUpdateY) {
+            setX(newX);
+            setY(newY);
+            lastUpdateX = newX;
+            lastUpdateY = newY;
+            updateBoundingBox();
         }
-    }   private void chooseNewTarget(World world) {
+
+        // Check if movement is complete
+        if (movementProgress >= 1.0f) {
+            completeMovement();
+        }
+    }
+
+    public void moveToTile(int targetTileX, int targetTileY, String newDirection) {
+        if (!isMoving) {
+            // Store current position as start
+            startPosition.set(x, y);
+            lastUpdateX = x;
+            lastUpdateY = y;
+
+            // Calculate target position in pixels
+            float targetPixelX = targetTileX * World.TILE_SIZE;
+            float targetPixelY = targetTileY * World.TILE_SIZE;
+            targetPosition.set(targetPixelX, targetPixelY);
+
+            // Set movement state
+            this.direction = newDirection;
+            this.isMoving = true;
+            this.isInterpolating = true;
+            this.currentMoveTime = 0f;
+
+            // Calculate actual distance for movement duration
+            float distance = Vector2.dst(startPosition.x, startPosition.y,
+                targetPosition.x, targetPosition.y);
+
+            // Adjust movement duration based on distance
+            this.movementProgress = 0f;
+
+            // Start walking animation
+            animations.startMoving(direction);
+
+            GameLogger.info(String.format(
+                "%s starting movement from (%.1f,%.1f) to (%.1f,%.1f) dir:%s distance:%.1f",
+                getName(), startPosition.x, startPosition.y,
+                targetPosition.x, targetPosition.y, direction, distance
+            ));
+        }
+    }
+
+    private void chooseNewTarget(World world) {
         if (isMoving) return;
 
         int[] dx = {0, 0, -1, 1}; // up, down, left, right
@@ -329,7 +504,9 @@ public class WildPokemon extends Pokemon {
             array[i] = array[j];
             array[j] = temp;
         }
-    }public void moveTo(float targetX, float targetY, String direction) {
+    }
+
+    public void moveTo(float targetX, float targetY, String direction) {
         if (!isMoving) {
             startPosition.set(x, y);
             targetPosition = new Vector2(targetX, targetY);
@@ -348,34 +525,70 @@ public class WildPokemon extends Pokemon {
         }
     }
 
-    public float getX() { return visualX; }
+    public float getX() {
+        return x;
+    }
 
-    public float getY() { return visualY; }
+    public void setX(float x) {
+        this.pixelX = x;
+        this.x = x;
+        updateBoundingBox();
+    }
 
-    public int getGridX() { return gridX; }
+    public float getY() {
+        return y;
+    }
 
-    public int getGridY() { return gridY; }
+    public void setY(float y) {
+        this.pixelY = y;
+        this.y = y;
+        updateBoundingBox();
+    }
 
-    public void updateBoundingBox() {
-        if (boundingBox != null) {
-            float collisionWidth = TILE_SIZE * COLLISION_SCALE;
-            float collisionHeight = TILE_SIZE * COLLISION_SCALE;
-            boundingBox.setPosition(
-                visualX + (TILE_SIZE - collisionWidth) / 2f,
-                visualY + (TILE_SIZE - collisionHeight) / 2f
-            );
-        }
+    public int getGridX() {
+        return gridX;
+    }
+
+    public int getGridY() {
+        return gridY;
+    }
+
+    public PokemonAI getAi() {
+        return ai;
     }
 
     public void render(SpriteBatch batch) {
-        if (isDespawning && despawnAnimation != null) {
-            despawnAnimation.render(batch, getCurrentFrame(), TILE_SIZE, TILE_SIZE);
+        if (isDespawning) {
+            if (despawnAnimation != null) {
+                despawnAnimation.render(batch, getCurrentFrame(), FRAME_WIDTH, FRAME_HEIGHT);
+            }
             return;
         }
 
         TextureRegion frame = getCurrentFrame();
         if (frame != null) {
-            batch.draw(frame, visualX, visualY, TILE_SIZE, TILE_SIZE);
+            float renderX = x;
+            float renderY = y;
+
+            // Apply idle bounce if not moving
+            if (!isMoving && isIdling) {
+                float bounceOffset = IDLE_BOUNCE_HEIGHT *
+                    MathUtils.sin(idleAnimationTime * MathUtils.PI2 / IDLE_BOUNCE_DURATION);
+                renderY += bounceOffset;
+            }
+
+            // Scale and center the sprite
+            float width = FRAME_WIDTH * RENDER_SCALE;
+            float height = FRAME_HEIGHT * RENDER_SCALE;
+            float offsetX = (width - FRAME_WIDTH) / 2f;
+            float offsetY = (height - FRAME_HEIGHT) / 2f;
+
+            // Draw with smooth interpolation
+            batch.draw(frame,
+                renderX - offsetX,
+                renderY - offsetY,
+                width,
+                height);
         }
     }
 
@@ -385,13 +598,11 @@ public class WildPokemon extends Pokemon {
         float currentTime = System.currentTimeMillis() / 1000f;
         return currentTime - spawnTime > PokemonSpawnManager.POKEMON_DESPAWN_TIME;
     }
-    private TextureRegion getCurrentFrame() {
-        if (animations == null) return null;
-        return animations.getCurrentFrame(direction, isMoving, Gdx.graphics.getDeltaTime());
-    }
+
     public void setExpired(boolean expired) {
         isExpired = expired;
     }
+
 
     public boolean isDespawning() {
         return isDespawning;
@@ -402,17 +613,6 @@ public class WildPokemon extends Pokemon {
             isDespawning = true;
             despawnAnimation = new PokemonDespawnAnimation(getX(), getY());
         }
-    }
-
-
-    // Getters and setters
-    public void setX(float x) {
-        this.x = x;
-        updateBoundingBox();
-    }
-    public void setY(float y) {
-        this.y = y;
-        updateBoundingBox();
     }
 
     public float getMovementTimer() {

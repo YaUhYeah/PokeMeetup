@@ -73,7 +73,7 @@ public class AndroidLauncher extends AndroidApplication {
             // Try both Data and data directories
             String[] dataFiles = null;
             try {
-                dataFiles = getAssets().list("Data");
+                dataFiles = getAssets().list("data");
                 Log.d("AndroidLauncher", "Files in Data/: " + Arrays.toString(dataFiles));
             } catch (IOException e) {
                 try {
@@ -87,8 +87,8 @@ public class AndroidLauncher extends AndroidApplication {
             // Specifically verify biomes.json
             boolean biomesFound = false;
             String[] biomePaths = {
-                "Data/biomes.json",
-                "data/biomes.json",
+                    "data/biomes.json",
+                    "data/biomes.json",
                 "biomes.json"
             };
 
@@ -116,7 +116,7 @@ public class AndroidLauncher extends AndroidApplication {
             path,
             path.toLowerCase(),
             "assets/" + path,
-            path.replace("Data/", "data/")
+            path.replace("data/", "data/")
         };
 
         boolean found = false;

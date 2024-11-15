@@ -7,13 +7,29 @@ import com.badlogic.gdx.graphics.g2d.Animation;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import io.github.pokemeetup.utils.GameLogger;
 
+import java.util.Random;
+
 public class PokemonAnimations {
-    // Constants for 256x256 sprite sheet with 4x4 grid
-    private static final int SPRITE_SHEET_SIZE = 256;
-    private static final int FRAMES_PER_DIRECTION = 4;
+    public static final float IDLE_BOUNCE_DURATION = 1.0f;
+    private static final float IDLE_BOUNCE_HEIGHT = 2f;
+    private static final float IDLE_ANIMATION_CHANCE = 0.01f; // Chance to start idle animation per frame
+
+    private float idleTime = 0f;
+    private boolean isIdling = false;
+
+    public boolean isIdling() {
+        return isIdling;
+    }
+
+    private float idleOffset = 0f;
+    private float timeSinceLastIdle = 0f;
+    private final Random random = new Random();
+        // Constants for 256x256 sprite sheet with 4x4 grid
+        private static final int SPRITE_SHEET_SIZE = 256;
+        private static final int FRAMES_PER_DIRECTION = 4;
     private static final int FRAME_WIDTH = SPRITE_SHEET_SIZE / FRAMES_PER_DIRECTION;  // 64
     private static final int FRAME_HEIGHT = SPRITE_SHEET_SIZE / FRAMES_PER_DIRECTION; // 64
-    private static final float FRAME_DURATION = 0.15f;
+    private static final float FRAME_DURATION = 0.2f;
 
     // Animations for each direction
     private Animation<TextureRegion> walkDownAnimation;  // Row 0
@@ -26,6 +42,11 @@ public class PokemonAnimations {
     private TextureRegion defaultFrame;
     private boolean isMoving;
     private String currentDirection;
+
+    public boolean isMoving() {
+        return isMoving;
+    }
+
     private boolean isInitialized;
 
     public PokemonAnimations(TextureRegion spriteSheet) {
@@ -116,22 +137,22 @@ public class PokemonAnimations {
         this.isMoving = isMoving;
         this.currentDirection = direction;
 
-        // Only update stateTime if we're moving
-        if (isMoving) {
-            stateTime += delta;
-        }
-
         TextureRegion frame;
         if (isMoving) {
+            stateTime += delta;
             Animation<TextureRegion> currentAnimation = getAnimationForDirection(direction);
             frame = currentAnimation.getKeyFrame(stateTime, true);
         } else {
             frame = getStandingFrame(direction);
         }
 
-        // Debug log
-
         return frame != null ? frame : defaultFrame;
+    }  public float getIdleOffset() {
+        if (!isIdling) return 0f;
+
+        // Create a smooth bounce effect using sine
+        float progress = idleTime / IDLE_BOUNCE_DURATION;
+        return IDLE_BOUNCE_HEIGHT * (float)Math.sin(progress * Math.PI * 2) * (1 - progress);
     }
 
     private TextureRegion getStandingFrame(String direction) {
@@ -179,6 +200,27 @@ public class PokemonAnimations {
     public void update(float delta) {
         if (isMoving) {
             stateTime += delta;
+            isIdling = false;
+            idleTime = 0f;
+            timeSinceLastIdle = 0f;
+        } else {
+            // Handle idle animation
+            timeSinceLastIdle += delta;
+
+            // Randomly start new idle animation
+            if (!isIdling && random.nextFloat() < IDLE_ANIMATION_CHANCE * delta) {
+                isIdling = true;
+                idleTime = 0f;
+            }
+
+            if (isIdling) {
+                idleTime += delta;
+                if (idleTime >= IDLE_BOUNCE_DURATION) {
+                    isIdling = false;
+                    idleTime = 0f;
+                    idleOffset = 0f;
+                }
+            }
         }
     }
 }

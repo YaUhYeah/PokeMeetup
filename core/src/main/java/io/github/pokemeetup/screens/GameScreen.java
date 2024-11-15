@@ -17,6 +17,7 @@ import com.badlogic.gdx.scenes.scene2d.actions.SequenceAction;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ClickListener;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
+import com.badlogic.gdx.utils.Align;
 import com.badlogic.gdx.utils.Scaling;
 import com.badlogic.gdx.utils.Timer;
 import com.badlogic.gdx.utils.viewport.FitViewport;
@@ -48,6 +49,7 @@ import io.github.pokemeetup.utils.textures.BattleAssets;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.storage.InventoryConverter;
 import io.github.pokemeetup.utils.textures.TextureManager;
+import sun.font.TextLabel;
 
 import java.util.List;
 import java.util.*;
@@ -61,31 +63,40 @@ import static io.github.pokemeetup.system.gameplay.overworld.World.TILE_SIZE;
 public class GameScreen implements Screen, PickupActionHandler, BattleInitiationHandler {
     private static final float TARGET_VIEWPORT_WIDTH_TILES = 24f; // Increased from 20
     private static final float UPDATE_INTERVAL = 0.1f; // 10 times per second
-    private static final float CAMERA_LERP = 5.0f;
+    private static final float CAMERA_LERP = 5.0f;// Constants for button sizes and padding
     private static final float TRANSITION_DURATION = 0.5f;
     private static final float TRANSITION_DELAY = 0.2f; // Add delay before screen switch=
     private static final float BATTLE_UI_FADE_DURATION = 0.5f;
     private static final float BATTLE_SCREEN_WIDTH = 800;
     private static final float BATTLE_SCREEN_HEIGHT = 480;
-    private static final float BUTTON_SIZE = 120f;  // Bigger buttons for touch
-    private static final float BUTTON_PADDING = 20f;
-    private static final float DPAD_SIZE = 300f;  // Make it bigger
     private static final float DPAD_CENTER_SIZE = 100f;
-    private static final float DPAD_BUTTON_SIZE = 145f; // Larger touch targets
     private static final float DEAD_ZONE = 10f;
     private static final float MOVEMENT_REPEAT_DELAY = 0.1f; // How often to trigger movement while holding
-    private static final float ACTION_BUTTON_SIZE = 80f;
+    private float ACTION_BUTTON_SIZE =80f;
     private static final float RUN_BUTTON_SIZE = 70f;
     private static final long SCREEN_INIT_TIMEOUT = 30000; // 30 seconds
     public static boolean SHOW_DEBUG_INFO = false; // Toggle flag for debug inforldName;
+    private static float BUTTON_SIZE = Gdx.graphics.getWidth() * 0.12f; // Adjust as needed
+    private static final float MAX_BUTTON_SIZE = 80f; // Adjust as needed
+
+    private static float DPAD_SIZE = Gdx.graphics.getWidth() * 0.25f;
+    private static float BUTTON_PADDING = Gdx.graphics.getWidth() * 0.02f;
+    private static float DPAD_BUTTON_SIZE = 145f; // Larger touch targets
     private final CreatureCaptureGame game;
     private final GameClient gameClient;
+
     private final Vector2 BATTLE_RESOLUTION = new Vector2(800, 480);
     private final SpriteBatch uiBatch; // Add separate batch for UI
     private final float BUTTON_ALPHA = 0.7f;
     private final float JOYSTICK_SIZE = 200f;
     private final float KNOB_SIZE = 80f;
     private final ScheduledExecutorService screenInitScheduler = Executors.newSingleThreadScheduledExecutor();
+    TextButton aButton;
+    TextButton bButton;
+    TextButton yButton;
+    TextButton startButton;
+    TextButton selectButton;
+    TextButton xButton;
     private Vector2 joystickCenter = new Vector2();
     private Vector2 joystickCurrent = new Vector2();
     private boolean joystickActive = false;
@@ -150,7 +161,6 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     private boolean battleInitialized = false;
     private boolean battleUIFading = false;
     private ScheduledFuture<?> screenInitTimeoutTask;
-
     private Table androidControls;
     private Image interactionButton;
     private float battleUIAlpha = 0f;
@@ -239,6 +249,7 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
     }
 
     private void handleClientInitialization(boolean success) {
+        setupCamera();
         if (success) {
             Gdx.app.postRunnable(() -> {
                 GameLogger.info("Client initialization complete - proceeding with setup");
@@ -320,7 +331,7 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
             player.setPokemonParty(party);
         }
 
-        if (party.getFirstPokemon()==null) {
+        if (party.getFirstPokemon() == null) {
             GameLogger.info("No Pokemon in party - initiating starter selection");
             initiateStarterSelection();
         } else {
@@ -535,34 +546,26 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
             inputMultiplexer = new InputMultiplexer();
         }
         inputMultiplexer.clear();
-        if (inventoryOpen && inventoryScreen != null) {
-            inputMultiplexer.addProcessor(inventoryScreen.getStage());
-            GameLogger.info("Added inventoryScreen stage to InputMultiplexer (first)");
-        }
-        if (battleStage != null) {
+        if (inBattle && battleStage != null) {
             inputMultiplexer.addProcessor(battleStage);
-        }
-        // Add uiStage first, ensuring it has higher priority
-        if (uiStage != null) {
-            inputMultiplexer.addProcessor(uiStage);
-            GameLogger.info("Added uiStage to InputMultiplexer");
-        }
-
-        // Add Game Menu Stage if it exists
-        if (gameMenu != null && gameMenu.getStage() != null) {
-            inputMultiplexer.addProcessor(gameMenu.getStage());
-            GameLogger.info("Added gameMenu stage to InputMultiplexer");
-        }
-        // Add inputHandler for game inputs
-        if (inputHandler != null) {
-            inputMultiplexer.addProcessor(inputHandler);
-            GameLogger.info("Added inputHandler to InputMultiplexer");
-        }
-
-        // Add Android Input Processor if applicable
-        if (Gdx.app.getType() == Application.ApplicationType.Android && controlsInitialized) {
-            inputMultiplexer.addProcessor(new AndroidInputProcessor());
-            GameLogger.info("Added AndroidInputProcessor to InputMultiplexer");
+        } else {
+            if (inventoryOpen && inventoryScreen != null) {
+                inputMultiplexer.addProcessor(inventoryScreen.getStage());
+            }
+            if (uiStage != null) {
+                inputMultiplexer.addProcessor(uiStage);
+            }
+            if (gameMenu != null && gameMenu.getStage() != null) {
+                inputMultiplexer.addProcessor(gameMenu.getStage());
+            }
+            if (inputHandler != null) {
+                inputMultiplexer.addProcessor(inputHandler);
+            }
+            if (Gdx.app.getType() == Application.ApplicationType.Android && controlsInitialized) {
+                AndroidInputProcessor androidInputProcessor = new AndroidInputProcessor(
+                    movementController, aButton, bButton, xButton, yButton, startButton);
+                inputMultiplexer.addProcessor(androidInputProcessor);
+            }
         }
 
         Gdx.input.setInputProcessor(inputMultiplexer);
@@ -1124,28 +1127,39 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         updateSlotVisuals();
     }
 
-    private void endBattle(boolean playerWon, WildPokemon pokemon) {
-        if (battleTable != null) {
-            // Add fade-out animation
+    private void endBattle(boolean playerWon, WildPokemon wildPokemon) {
+        if (battleTable != null && battleTable.hasParent()) {
             battleTable.addAction(Actions.sequence(
                 Actions.fadeOut(BATTLE_UI_FADE_DURATION),
                 Actions.run(() -> {
-                    inBattle = false;
-                    battleUIFading = false;
-                    cleanup();
+                    try {
+                        // Handle battle results
+                        if (playerWon) {
+                            handleBattleVictory(wildPokemon);
+                        } else {
+                            handleBattleDefeat();
+                        }
 
-                    // Handle battle results
-                    if (playerWon) {
-                        handleBattleVictory(pokemon);
-                    } else {
-                        handleBattleDefeat();
+                        // Clean up battle components
+                        cleanup();
+                    } catch (Exception e) {
+                        GameLogger.error("Error ending battle: " + e.getMessage());
+                        cleanup();
                     }
-
-                    // Restore normal game input
-                    setupInputProcessors();
                 })
             ));
             battleUIFading = true;
+        } else {
+            cleanup();
+        }
+    }
+
+    public void pauseWildPokemon(WildPokemon pokemon) {
+        if (pokemon != null) {
+            pokemon.setMoving(false);
+            if (pokemon.getAi() != null) {
+                pokemon.getAi().enterIdleState();
+            }
         }
     }
 
@@ -1178,59 +1192,49 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
 
     private void initiateBattle(WildPokemon wildPokemon) {
         try {
+            // Pause the wild Pokemon
+            if (wildPokemon != null) {
+                wildPokemon.setMoving(false);
+                if (wildPokemon.getAi() != null) {
+                    wildPokemon.getAi().enterIdleState();
+                    wildPokemon.getAi().setPaused(true);
+                }
+                wildPokemon.setX(wildPokemon.getX());
+                wildPokemon.setY(wildPokemon.getY());
+            }
 
+            // Create new battle stage if needed
             if (battleStage == null) {
                 battleStage = new Stage(new FitViewport(800, 480));
             }
-            battleStage.clear();
+            battleStage.clear(); // Clear any existing actors
 
-            // Create battle table
-            if (battleTable != null) {
-                battleTable.remove();
-                battleTable = null;
-            }
-            float screenWidth = Gdx.graphics.getWidth();
-            float screenHeight = Gdx.graphics.getHeight();
-            Table worldDim = new Table();
-            worldDim.setFillParent(true);
-            Pixmap dimPixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
-            dimPixmap.setColor(0, 0, 0, 0.5f);
-            dimPixmap.fill();
-            worldDim.setBackground(new TextureRegionDrawable(new TextureRegion(new Texture(dimPixmap))));
-            dimPixmap.dispose();
-            battleStage.addActor(worldDim);
-            // Add to stage
-            // Create and add battle table
+            // Create and setup battle table
             battleTable = new BattleTable(battleStage, battleSkin,
                 player.getPokemonParty().getFirstPokemon(),
                 wildPokemon);
             battleTable.setFillParent(true);
             battleStage.addActor(battleTable);
 
+            // Set up semi-transparent overlay
+            Table overlay = new Table();
+            overlay.setFillParent(true);
+            Pixmap dimPixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+            dimPixmap.setColor(0, 0, 0, 0.1f);
+            dimPixmap.fill();
+            overlay.setBackground(new TextureRegionDrawable(new TextureRegion(new Texture(dimPixmap))));
+            dimPixmap.dispose();
+            battleStage.addActor(overlay);
 
-            // Fade in battle UI
-            battleTable.getColor().a = 0f;
-            battleTable.addAction(Actions.fadeIn(0.5f));
-            setupBattleInput();
-            // Update viewport and layout
-            battleStage.getViewport().update(
-                (int) screenWidth,
-                (int) screenHeight,
-                true
-            );
+            // Initialize battle state
             battleTable.validate();
-
-            // Set battle state
             inBattle = true;
             battleInitialized = true;
 
             // Update input processors
-            setupInputProcessors();
-            // Log sizes to verify
-            GameLogger.info("Screen size: " + screenWidth + "x" + screenHeight);
-            GameLogger.info("Battle table size: " + battleTable.getWidth() + "x" + battleTable.getHeight());
+            setupBattleInput();
 
-            // Set up battle callback
+            // Set up callback
             battleTable.setCallback(new BattleTable.BattleCallback() {
                 @Override
                 public void onBattleEnd(boolean playerWon) {
@@ -1253,8 +1257,8 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
                 }
             });
 
-            // Update input processors to maintain menu functionality
-            inBattle = true;
+            // Update viewport
+            battleStage.getViewport().update(Gdx.graphics.getWidth(), Gdx.graphics.getHeight(), true);
 
             GameLogger.info("Battle initialization complete");
 
@@ -1270,6 +1274,7 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         int expGain = calculateExperienceGain(wildPokemon);
         player.getPokemonParty().getFirstPokemon().addExperience(expGain);
 
+        // Remove the defeated Pokémon from the game world
         world.getPokemonSpawnManager().removePokemon(wildPokemon.getUuid());
 
         // Show victory message
@@ -1514,23 +1519,20 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
 
-        if (inBattle && battleStage != null) {
-            battleStage.act(delta);
-            battleStage.draw();
-
-            // Debug touch input
-            if (Gdx.input.justTouched()) {
-                float x = Gdx.input.getX();
-                float y = Gdx.input.getY();
-                Vector2 stageCoords = battleStage.screenToStageCoordinates(new Vector2(x, y));
-                GameLogger.info("Touch at stage coordinates: " + stageCoords.x + ", " + stageCoords.y);
-            }
-        }
-        // UI Stage rendering
         if (uiStage != null) {
             uiStage.getViewport().apply();
             uiStage.act(delta);
             uiStage.draw();
+        }
+
+// Then draw battleStage
+        if (inBattle) {
+            if (battleStage != null && !isDisposing) {
+                battleStage.act(delta);
+                if (battleTable != null && battleTable.hasParent()) {
+                    battleStage.draw();
+                }
+            }
         }
 
 
@@ -1863,6 +1865,8 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         }
     }
 
+    // Add this helper method to clean up the render method
+
     private void renderButtonLabels() {
         if (batch == null || font == null || inventoryButton == null || menuButton == null) {
             GameLogger.error("Required resources for button labels not initialized");
@@ -1982,8 +1986,6 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         }
     }
 
-    // Add this helper method to clean up the render method
-
     private void closeInventory() {
         if (inventoryScreen != null) {
             inventoryScreen.hide();
@@ -2034,6 +2036,20 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         if (androidControls != null) {
             androidControls.invalidateHierarchy();
         }
+
+        BUTTON_SIZE = Math.min(height * 0.1f, MAX_BUTTON_SIZE);
+        ACTION_BUTTON_SIZE = BUTTON_SIZE / 2f; // Half the size of BUTTON_SIZE
+        DPAD_BUTTON_SIZE = BUTTON_SIZE * 0.8f;
+        DPAD_SIZE = DPAD_BUTTON_SIZE * 3;
+        BUTTON_PADDING = Math.min(width, height) * 0.02f;
+
+        // Recreate D-pad and buttons with new sizes
+        if (dpadTable != null) {
+            dpadTable.clear();
+            createDpad();
+        }
+
+
         // Update camera viewport
         cameraViewport.update(width, height, false);
 
@@ -2065,9 +2081,13 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
                     starterTable.getX() + "," + starterTable.getY());
             }
         }
-        if (battleTable != null) {
-            battleTable.resize(width, height);
+        if (battleStage != null) {
             battleStage.getViewport().update(width, height, true);
+            if (battleTable != null) {
+                // This will trigger sizeChanged() in BattleTable
+                battleTable.invalidate();
+                battleTable.validate();
+            }
         }
         if (uiStage != null) {
             uiStage.getViewport().update(width, height, true);
@@ -2102,6 +2122,8 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         ensureAndroidControlsInitialized();
         updateAndroidControlPositions();
 
+
+        // Similarly, update action buttons if needed
         updateCamera();
         GameLogger.info("Screen resized to: " + width + "x" + height);
     }
@@ -2275,85 +2297,189 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         }
     }
 
-    private void createDpad() {
-        float screenWidth = Gdx.graphics.getWidth();
-        float screenHeight = Gdx.graphics.getHeight();
+    private TextButton createActionButton(String label) {
+        // Create a drawable for the button background
+        Pixmap pixmap = new Pixmap((int) BUTTON_SIZE, (int) BUTTON_SIZE, Pixmap.Format.RGBA8888);
+        pixmap.setColor(0.8f, 0.8f, 0.8f, 0.6f); // Semi-transparent light gray
+        pixmap.fillCircle((int) BUTTON_SIZE / 2, (int) BUTTON_SIZE / 2, (int) BUTTON_SIZE / 2);
+        TextureRegionDrawable drawable = new TextureRegionDrawable(new Texture(pixmap));
+        pixmap.dispose();
 
-        // Adjust these percentages to move the D-pad
-        float paddingLeft = screenWidth * 0.05f; // Moves D-pad to the right
-        float paddingBottom = screenHeight * 0.05f; // Moves D-pad upwards
+        // Create button style
+        TextButton.TextButtonStyle style = new TextButton.TextButtonStyle();
+        style.up = drawable;
+        style.down = drawable.tint(Color.DARK_GRAY);
+        style.font = skin.getFont("default-font");
+        style.fontColor = Color.BLACK;
 
-        // Create d-pad container
-        dpadTable = new Table();
-        dpadTable.setBackground(createBackgroundDrawable(0.2f, 0.2f, 0.2f, 0.4f));
-        dpadTable.setBounds(paddingLeft, paddingBottom, DPAD_SIZE, DPAD_SIZE);
+        // Create the button
+        TextButton button = new TextButton(label, style);
 
+        // Adjust font size based on button size
+        float fontScale = BUTTON_SIZE / 50f; // Adjust as needed
+        button.getLabel().setFontScale(fontScale);
 
-        // Create run button
-        Table runButtonTable = new Table();
-        TextButton runBtn = createControlButton("RUN");
-        runBtn.getColor().set(0.2f, 0.7f, 0.2f, 0.8f); // Green tint
-        runButtonTable.add(runBtn).size(BUTTON_SIZE);
-        runButtonTable.setPosition(paddingLeft + DPAD_SIZE, paddingBottom);
+        // Center the label
+        button.getLabel().setAlignment(Align.center);
 
-        uiStage.addActor(dpadTable);
-        uiStage.addActor(runButtonTable);
+        // Set button size
+        button.setSize(BUTTON_SIZE, BUTTON_SIZE);
+
+        return button;
     }
+    private TextButton createColoredButton(String label, Color color, float size) {
+        // Create a drawable for the button background
+        Pixmap pixmap = new Pixmap((int) size, (int) size, Pixmap.Format.RGBA8888);
+        pixmap.setColor(color.r, color.g, color.b, 0.8f); // Semi-transparent color
+        pixmap.fillCircle((int) size / 2, (int) size / 2, (int) size / 2);
+        TextureRegionDrawable drawable = new TextureRegionDrawable(new Texture(pixmap));
+        pixmap.dispose();
 
+        // Create button style
+        TextButton.TextButtonStyle style = new TextButton.TextButtonStyle();
+        style.up = drawable;
+        style.down = drawable.tint(Color.DARK_GRAY);
+        style.font = skin.getFont("default-font");
+        style.fontColor = Color.WHITE;
 
+        // Create the button
+        TextButton button = new TextButton(label, style);
+
+        // Adjust font size based on button size
+        float fontScale = size / 60f; // Adjust as needed
+        button.getLabel().setFontScale(fontScale);
+
+        // Center the label
+        button.getLabel().setAlignment(Align.center);
+
+        // Set button size
+        button.setSize(size, size);
+
+        return button;
+    }
     private void createActionButtons() {
-        // Create main buttons container
-        buttonsTable = new Table();
-        buttonsTable.setFillParent(true);
+        // Create buttons with specified colors and adjusted sizes
+        aButton = createColoredButton("A", Color.GREEN, ACTION_BUTTON_SIZE);
+        bButton = createColoredButton("B", Color.RED, ACTION_BUTTON_SIZE);
+        xButton = createColoredButton("X", Color.BLUE, ACTION_BUTTON_SIZE);
+        yButton = createColoredButton("Y", Color.YELLOW, ACTION_BUTTON_SIZE);
+        startButton = createColoredButton("Start", Color.GRAY, ACTION_BUTTON_SIZE * 0.8f);
+        selectButton = createColoredButton("Select", Color.GRAY, ACTION_BUTTON_SIZE * 0.8f);
 
-        // Create all buttons
-        TextButton actionButton = createActionButton();
-        TextButton inventoryButton = createInventoryButton();
-        TextButton menuButton = createMenuButton();
-        TextButton chatButton = createChatButton();
-        TextButton debugButton = createDebugButton();
-        TextButton runButton = createRunButton();
+        // Set touchable
+        aButton.setTouchable(Touchable.enabled);
+        bButton.setTouchable(Touchable.enabled);
+        xButton.setTouchable(Touchable.enabled);
+        yButton.setTouchable(Touchable.enabled);
+        startButton.setTouchable(Touchable.enabled);
+        selectButton.setTouchable(Touchable.enabled);
 
-        // Create right-side grid container
-        Table buttonGrid = new Table();
-        buttonGrid.defaults().size(BUTTON_SIZE).pad(BUTTON_PADDING / 2);
+        // Position action buttons in the bottom right corner
+        Table actionButtonTable = new Table();
+        actionButtonTable.setFillParent(true);
+        actionButtonTable.bottom().right().pad(BUTTON_PADDING * 2);
 
-        // Organize buttons in a 2x3 grid based on importance:
-        // [ Menu    ][ Inventory ]
-        // [ Action  ][ Chat     ]
-        // [ Run     ][ Debug    ]
+        // Arrange buttons in a compact grid
+        actionButtonTable.add(startButton).size(ACTION_BUTTON_SIZE * 0.8f).pad(5).row();
+        actionButtonTable.add(xButton).size(ACTION_BUTTON_SIZE).pad(5);
+        actionButtonTable.add(yButton).size(ACTION_BUTTON_SIZE).pad(5);
+        actionButtonTable.add(selectButton).size(ACTION_BUTTON_SIZE * 0.8f).pad(5).row();
+        actionButtonTable.add(bButton).size(ACTION_BUTTON_SIZE).pad(5);
+        actionButtonTable.add(aButton).size(ACTION_BUTTON_SIZE).pad(5);
 
-        buttonGrid.add(menuButton).pad(5f);
-        buttonGrid.add(inventoryButton).pad(5f).row();
+        uiStage.addActor(actionButtonTable);
 
-        buttonGrid.add(actionButton).pad(5f);
-        buttonGrid.add(chatButton).pad(5f).row();
-
-        buttonGrid.add(runButton).pad(5f);
-        buttonGrid.add(debugButton).pad(5f);
-
-        // Position the grid container in top-right
-        buttonsTable.add(buttonGrid)
-            .expand()
-            .top()
-            .right()
-            .padRight(20f)
-            .padTop(100f); // Move buttons down to avoid status bar
-
-        uiStage.addActor(buttonsTable);
+        // Add listeners to buttons
+        addButtonListeners();
     }
 
 
-    private TextButton createActionButton() {
-        TextButton button = new TextButton("ACTION", skin);
-        button.addListener(new ClickListener() {
+
+    private void addButtonListeners() {
+        // "A" Button Listener
+        aButton.addListener(new ClickListener() {
             @Override
             public void clicked(InputEvent event, float x, float y) {
-                handleInteractionButton();
+                handleAButtonPress();
             }
         });
-        styleButton(button, Color.ROYAL);
-        return button;
+
+        // "B" Button Listener
+        bButton.addListener(new InputListener() {
+            @Override
+            public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                handleBButtonPress(true);
+                return true;
+            }
+
+            @Override
+            public void touchUp(InputEvent event, float x, float y, int pointer, int button) {
+                handleBButtonPress(false);
+            }
+        });
+
+        // "X" Button Listener
+        xButton.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                handleXButtonPress();
+            }
+        });
+
+        // "Y" Button Listener
+        yButton.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                handleYButtonPress();
+            }
+        });
+
+        // "Start" Button Listener
+        startButton.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                handleStartButtonPress();
+            }
+        });
+
+        // "Select" Button Listener
+        selectButton.addListener(new ClickListener() {
+            @Override
+            public void clicked(InputEvent event, float x, float y) {
+                handleSelectButtonPress();
+            }
+        });
+    }
+    private void handleAButtonPress() {
+        // Implement interaction logic (e.g., interact with objects)
+        handleInteractionButton();
+    }
+
+    private void handleBButtonPress(boolean isPressed) {
+        // Implement running logic
+        if (player != null) {
+            player.setRunning(isPressed);
+        }
+    }
+
+    private void handleXButtonPress() {
+        // Implement action for 'X' button (e.g., open game menu)
+        toggleGameMenu();
+    }
+
+    private void handleYButtonPress() {
+        // Implement action for 'Y' button (e.g., open inventory)
+        toggleInventory();
+    }
+
+    private void handleStartButtonPress() {
+        // Implement action for 'Start' button (e.g., pause the game)
+        toggleGameMenu();
+    }
+
+    private void handleSelectButtonPress() {
+
+        SHOW_DEBUG_INFO=!SHOW_DEBUG_INFO;
     }
 
     private TextButton createInventoryButton() {
@@ -2507,6 +2633,109 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         }
     }
 
+    private void createDpad() {
+        float screenWidth = Gdx.graphics.getWidth();
+        float screenHeight = Gdx.graphics.getHeight();
+
+        // Constants for D-pad positioning and size
+        float dpadSize = screenHeight * 0.3f; // Adjust size for ergonomics
+        float paddingLeft = screenWidth * 0.05f; // Left padding
+        float paddingBottom = screenHeight * 0.05f; // Bottom padding
+
+        // Create D-pad touch area
+        Image dpadTouchArea = new Image();
+        dpadTouchArea.setSize(dpadSize, dpadSize);
+        dpadTouchArea.setPosition(paddingLeft, paddingBottom);
+        dpadTouchArea.setColor(1, 1, 1, 0); // Fully transparent
+        dpadTouchArea.setTouchable(Touchable.enabled);
+
+        // Add touch listener to the D-pad area
+        dpadTouchArea.addListener(new InputListener() {
+            @Override
+            public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                float absoluteX = event.getStageX();
+                float absoluteY = event.getStageY();
+                movementController.handleTouchDown(absoluteX, absoluteY);
+                return true;
+            }
+
+            @Override
+            public void touchDragged(InputEvent event, float x, float y, int pointer) {
+                float absoluteX = event.getStageX();
+                float absoluteY = event.getStageY();
+                movementController.handleTouchDragged(absoluteX, absoluteY);
+            }
+
+            @Override
+            public void touchUp(InputEvent event, float x, float y, int pointer, int button) {
+                movementController.handleTouchUp();
+            }
+        });
+
+        uiStage.addActor(dpadTouchArea);
+    }
+
+    private ImageButton createDpadButton(String direction) {
+        // Create a drawable for the button background
+        Pixmap pixmap = new Pixmap((int) DPAD_BUTTON_SIZE, (int) DPAD_BUTTON_SIZE, Pixmap.Format.RGBA8888);
+        pixmap.setColor(0.7f, 0.7f, 0.7f, 0.5f); // Semi-transparent gray
+        pixmap.fillCircle((int) DPAD_BUTTON_SIZE / 2, (int) DPAD_BUTTON_SIZE / 2, (int) DPAD_BUTTON_SIZE / 2);
+        TextureRegionDrawable drawable = new TextureRegionDrawable(new Texture(pixmap));
+        pixmap.dispose();
+
+        // Create arrow image for the direction
+        Image arrowImage = createArrowImage(direction);
+
+        // Create button style
+        ImageButton.ImageButtonStyle style = new ImageButton.ImageButtonStyle();
+        style.up = drawable;
+        style.imageUp = arrowImage.getDrawable();
+
+        // Create the button
+        ImageButton button = new ImageButton(style);
+
+        return button;
+    }
+
+    private Image createArrowImage(String direction) {
+        // Create a Pixmap for the arrow
+        int size = (int) (DPAD_BUTTON_SIZE * 0.6f);
+        Pixmap pixmap = new Pixmap(size, size, Pixmap.Format.RGBA8888);
+        pixmap.setColor(Color.BLACK);
+
+        // Draw an arrow pointing in the given direction
+        pixmap.fillTriangle(
+            size / 2, 0,
+            0, size,
+            size, size
+        );
+
+        Texture arrowTexture = new Texture(pixmap);
+        pixmap.dispose();
+
+        // Rotate the image based on the direction
+        Image arrowImage = new Image(new TextureRegion(arrowTexture));
+        switch (direction) {
+            case "up":
+                arrowImage.setRotation(0);
+                break;
+            case "down":
+                arrowImage.setRotation(180);
+                break;
+            case "left":
+                arrowImage.setRotation(270);
+                break;
+            case "right":
+                arrowImage.setRotation(90);
+                break;
+        }
+
+        return arrowImage;
+    }
+
+
+
+
     private void createDpadHitboxes() {
         float screenWidth = Gdx.graphics.getWidth();
         float screenHeight = Gdx.graphics.getHeight();
@@ -2514,7 +2743,7 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
         // Calculate D-pad position (bottom left area)
         float dpadCenterX = screenWidth * 0.15f;
         float dpadCenterY = screenHeight * 0.2f;
-        float buttonSize = DPAD_BUTTON_SIZE * 1.2f; // Slightly larger hitboxes
+        float buttonSize = DPAD_BUTTON_SIZE; // Slightly larger hitboxes
 
         // Create hitboxes with proper spacing and overlap
         upButton = new Rectangle(
@@ -2777,37 +3006,117 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
 
     public class AndroidInputProcessor extends InputAdapter {
         private final Vector2 touchPos = new Vector2();
+        private final AndroidMovementController movementController;
+        private final TextButton aButton;
+        private final TextButton bButton;
+        private final TextButton xButton;
+        private final TextButton yButton;
+        private final TextButton startButton;
         private int activePointer = -1;
 
+        public AndroidInputProcessor(AndroidMovementController movementController,
+                                     TextButton aButton, TextButton bButton,
+                                     TextButton xButton, TextButton yButton,
+                                     TextButton startButton) {
+            this.movementController = movementController;
+            this.aButton = aButton;
+            this.bButton = bButton;
+            this.xButton = xButton;
+            this.yButton = yButton;
+            this.startButton = startButton;// "A" Button Listener
+
+
+// "B" Button Listener
+            bButton.addListener(new InputListener() {
+                @Override
+                public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                    handleBButtonPress(true);
+                    return true;
+                }
+
+                @Override
+                public void touchUp(InputEvent event, float x, float y, int pointer, int button) {
+                    handleBButtonPress(false);
+                }
+            });
+
+// "Start" Button Listener
+            startButton.addListener(new InputListener() {
+                @Override
+                public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                    handleStartButtonPress();
+                    return true;
+                }
+            });
+
+// "Select" Button Listener
+            selectButton.addListener(new InputListener() {
+                @Override
+                public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                    handleSelectButtonPress();
+                    return true;
+                }
+            });
+
+        }
 
         @Override
         public boolean touchDown(int screenX, int screenY, int pointer, int button) {
-            screenY = Gdx.graphics.getHeight() - screenY; // Flip Y coordinate
-            if (isDpadTouch(screenX, screenY)) {
-                movementController.handleTouchDown(screenX, screenY);
+            float touchX = screenX;
+            float touchY = Gdx.graphics.getHeight() - screenY; // Flip Y coordinate
+
+
+            if (isTouchOnButton(touchX, touchY, xButton)) {
+                handleXButtonPress();
                 return true;
             }
+
+            if (isTouchOnButton(touchX, touchY, yButton)) {
+                handleYButtonPress();
+                return true;
+            }
+
+            if (isTouchOnButton(touchX, touchY, startButton)) {
+                handleStartButtonPress();
+                return true;
+            }
+
+            // Existing D-pad handling
+            if (isDpadTouch(touchX, touchY)) {
+                movementController.handleTouchDown((int) touchX, (int) touchY);
+                return true;
+            }
+
             return false;
         }
 
         @Override
         public boolean touchDragged(int screenX, int screenY, int pointer) {
-            screenY = Gdx.graphics.getHeight() - screenY;
-            if (movementController != null) {
-                movementController.handleTouchDragged(screenX, screenY);
-                return true;
-            }
-            return false;
+            float touchX = screenX;
+            float touchY = Gdx.graphics.getHeight() - screenY;
+
+            movementController.handleTouchDragged((int) touchX, (int) touchY);
+            return true;
         }
 
         @Override
         public boolean touchUp(int screenX, int screenY, int pointer, int button) {
-            if (movementController != null) {
-                movementController.handleTouchUp();
+            float touchY = Gdx.graphics.getHeight() - screenY;
+
+            if (isTouchOnButton((float) screenX, touchY, bButton)) {
+                handleBButtonPress(false);
                 return true;
             }
+
+            movementController.handleTouchUp();
             return false;
         }
+
+        private boolean isTouchOnButton(float x, float y, Actor button) {
+            return x >= button.getX() && x <= button.getX() + button.getWidth()
+                && y >= button.getY() && y <= button.getY() + button.getHeight();
+        }
+
 
 
         private String getDpadDirection(float x, float y) {

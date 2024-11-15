@@ -25,6 +25,8 @@ import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.Chunk;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.WorldObject;
+import io.github.pokemeetup.system.gameplay.overworld.biomes.Biome;
+import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
 import io.github.pokemeetup.system.gameplay.overworld.multiworld.WorldManager;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.textures.TextureManager;
@@ -36,9 +38,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
+import static io.github.pokemeetup.system.gameplay.overworld.World.INITIAL_LOAD_RADIUS;
+
 public class GameClient {
-    private static final int BUFFER_SIZE = 16384;
-    private static final int OBJECT_BUFFER = 4096;
+    public static final int BUFFER_SIZE = 65536; // 64KB
+    public static final int OBJECT_BUFFER = 32768; // 32KB
+    public static final long INIT_TIMEOUT = 30000; // 30 second timeout
+    private static final int MAX_CHUNK_SIZE = 8192; // 8KB per fragment
     private static final int MAX_RECONNECT_ATTEMPTS = 5;
     private static final long RECONNECT_DELAY = 5000;
     private static final float SYNC_INTERVAL = 1 / 60f; // 60Hz sync rate
@@ -46,11 +52,15 @@ public class GameClient {
     private static final float UPDATE_INTERVAL = 1 / 20f;
     private static final int MAX_RETRIES = 5;
     private static final long RETRY_DELAY_MS = 2000;
-    private static final float TICK_RATE = 1 / 60f;
+    private static final float TICK_RATE = 1 / 60f;// At the start of GameServer class, update constants
+    private static final int WRITE_BUFFER = 65536; // Increased for larger chunks
     private static final int AUTH_TIMEOUT = 10000;
     private static final long KEEPALIVE_INTERVAL = 1000; // Every 1 second
     private static final long KEEPALIVE_TIMEOUT = 5000;  // 5 seconds threshold
     private static final int CONNECTION_TIMEOUT = 10000;
+    private static final int MAX_AUTH_ATTEMPTS = 3;
+    private static final long AUTH_RETRY_DELAY = 2000; // 2 seconds
+    private static final int MAX_CHUNK_RETRIES = 3;
     private final AtomicBoolean isAuthenticated = new AtomicBoolean(false);
     private final AtomicBoolean shouldReconnect = new AtomicBoolean(true);
     private final AtomicBoolean isDisposing = new AtomicBoolean(false);
@@ -72,6 +82,11 @@ public class GameClient {
     private final AtomicBoolean isConnected = new AtomicBoolean(false);
     private final Queue<Object> sendQueue = new ConcurrentLinkedQueue<>();
     private final GameStateHandler gameHandler;
+    private final AtomicBoolean isConnecting = new AtomicBoolean(false);
+    private final AtomicBoolean hasReceivedInitialJoin = new AtomicBoolean(false);
+    private final AtomicBoolean isMarkedForDisposal = new AtomicBoolean(false);
+    private final ExecutorService connectionExecutor = Executors.newSingleThreadExecutor();
+    private final Object loginLock = new Object();
     private volatile long lastKeepaliveReceived = System.currentTimeMillis();
     private ScheduledFuture<?> keepaliveTask;
     private volatile ConnectionState connectionState = ConnectionState.DISCONNECTED;
@@ -106,9 +121,11 @@ public class GameClient {
     private volatile boolean loginRequestSent = false;
     private String pendingRegistrationUsername;
     private String pendingRegistrationPassword;
-
-    public static final long INIT_TIMEOUT = 30000; // 30 second timeout
     private ScheduledFuture<?> initTimeoutTask;
+    private int authAttempts = 0;
+    private Map<Vector2, ChunkFragmentAssembler> fragmentAssemblers = new ConcurrentHashMap<>();
+    private Map<Vector2, Integer> chunkRetryCount = new ConcurrentHashMap<>();
+    private Map<Vector2, ChunkFragmentAssembler> chunkAssemblers = new ConcurrentHashMap<>();
 
     public GameClient(ServerConnectionConfig config, boolean isSinglePlayer, String serverIP, int tcpPort, int udpPort, GameStateHandler gameHandler) {
         this.gameHandler = gameHandler;
@@ -135,6 +152,151 @@ public class GameClient {
                 GameLogger.info("Failed to load server config, multiplayer disabled.");
             }
 
+        }
+    }
+
+    public void requestChunk(Vector2 chunkPos) {
+        if (!isConnected() || !isAuthenticated()) {
+            return;
+        }
+
+        try {
+            NetworkProtocol.ChunkRequest request = new NetworkProtocol.ChunkRequest();
+            request.chunkX = (int) chunkPos.x;
+            request.chunkY = (int) chunkPos.y;
+            request.fragmentSize = 4; // Request smaller fragments
+            request.timestamp = System.currentTimeMillis();
+
+            GameLogger.info("Requesting chunk at: " + chunkPos + " with fragment size: " + request.fragmentSize);
+            client.sendTCP(request);
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to request chunk: " + e.getMessage());
+        }
+    }
+
+    private void handleChunkData(NetworkProtocol.ChunkData chunkData) {
+        if (chunkData == null) {
+            GameLogger.error("Received null chunk data");
+            return;
+        }
+
+        try {
+            Gdx.app.postRunnable(() -> {
+                // Create chunk position vector
+                Vector2 chunkPos = new Vector2(chunkData.chunkX, chunkData.chunkY);
+
+                // Get biome from biome manager
+                Biome biome = biomeManager.getBiome(chunkData.biomeType);
+                if (biome == null) {
+                    GameLogger.error("Invalid biome type for chunk: " + chunkData.biomeType);
+                    return;
+                }
+
+                // Create new chunk
+                Chunk chunk = new Chunk(
+                    chunkData.chunkX,
+                    chunkData.chunkY,
+                    biome,
+                    worldSeed,
+                    biomeManager
+                );
+
+                // Set the tile data
+                chunk.setTileData(chunkData.tileData);
+
+                // Add chunk to world
+                if (currentWorld != null) {
+                    currentWorld.getChunks().put(chunkPos, chunk);
+                    GameLogger.info("Successfully loaded chunk at: " + chunkPos);
+                }
+
+                // Notify that chunk is loaded (if needed)
+                if (initializationListener != null && !isInitialized) {
+                    checkInitialChunksLoaded();
+                }
+            });
+
+        } catch (Exception e) {
+            GameLogger.error("Error processing chunk data: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void checkInitialChunksLoaded() {
+        if (currentWorld != null && areInitialChunksLoaded()) {
+            isInitialized = true;
+            notifyInitializationComplete(true);
+        }
+    }
+
+    private boolean areInitialChunksLoaded() {
+        int totalChunks = (INITIAL_LOAD_RADIUS * 2 + 1) * (INITIAL_LOAD_RADIUS * 2 + 1);
+        int loadedChunks = currentWorld.getChunks().size();
+        return loadedChunks >= totalChunks;
+    }
+
+    public void sendPokemonSpawn(NetworkProtocol.WildPokemonSpawn spawnData) {
+        if (!isConnected() || !isAuthenticated() || isSinglePlayer) {
+            return;
+        }
+
+        try {
+            // Validate spawn data
+            if (spawnData.data == null || spawnData.uuid == null) {
+                GameLogger.error("Invalid Pokemon spawn data");
+                return;
+            }
+
+            // Set timestamp if not already set
+            if (spawnData.timestamp == 0) {
+                spawnData.timestamp = System.currentTimeMillis();
+            }
+
+            // Send spawn data to server
+            client.sendTCP(spawnData);
+
+            // Track locally
+            if (!trackedWildPokemon.containsKey(spawnData.uuid)) {
+                // Create local Pokemon instance
+                TextureRegion overworldSprite = TextureManager.getOverworldSprite(spawnData.data.getName());
+                if (overworldSprite != null) {
+                    WildPokemon pokemon = new WildPokemon(
+                        spawnData.data.getName(),
+                        spawnData.data.getLevel(),
+                        (int) spawnData.x,
+                        (int) spawnData.y,
+                        overworldSprite
+                    );
+                    pokemon.setUuid(spawnData.uuid);
+                    pokemon.setSpawnTime(spawnData.timestamp / 1000L);
+
+                    if (currentWorld != null) {
+                        pokemon.setWorld(currentWorld);
+                        Vector2 chunkPos = new Vector2(
+                            Math.floorDiv((int) spawnData.x, World.CHUNK_SIZE * World.TILE_SIZE),
+                            Math.floorDiv((int) spawnData.y, World.CHUNK_SIZE * World.TILE_SIZE)
+                        );
+                        currentWorld.getPokemonSpawnManager().addPokemonToChunk(pokemon, chunkPos);
+                    }
+
+                    trackedWildPokemon.put(spawnData.uuid, pokemon);
+                    syncedPokemonData.put(spawnData.uuid, new NetworkSyncData());
+
+                    GameLogger.info("Sent and tracked new Pokemon spawn: " + spawnData.data.getName() +
+                        " at (" + spawnData.x + "," + spawnData.y + ")");
+                } else {
+                    GameLogger.error("Failed to load sprite for Pokemon: " + spawnData.data.getName());
+                }
+            } else {
+                GameLogger.info("Pokemon already tracked locally with UUID: " + spawnData.uuid);
+            }
+
+        } catch (Exception e) {
+            GameLogger.error("Failed to send Pokemon spawn: " + e.getMessage());
+            if (!isConnected()) {
+                handleConnectionFailure(e);
+            }
         }
     }
 
@@ -182,107 +344,139 @@ public class GameClient {
     }
 
     public void sendLoginRequest(String username, String password) throws IOException {
-        if (isAuthenticated.get()) {
-            GameLogger.info("Already authenticated");
-            return;
-        }
-        if (connectionState != ConnectionState.CONNECTED) {
-            GameLogger.error("Cannot send LoginRequest - not connected");
-            return;
-        }
+        synchronized (loginLock) {
+            if (loginRequestSent) {
+                GameLogger.info("Login request already sent, ignoring duplicate");
+                return;
+            }
 
-        if (!isConnected()) {
-            GameLogger.error("Not connected to server");
-            throw new IOException("Not connected to server");
-        }
+            if (isAuthenticated.get()) {
+                GameLogger.info("Already authenticated");
+                return;
+            }
 
-        try {
-            NetworkProtocol.LoginRequest request = new NetworkProtocol.LoginRequest();
-            request.username = username;
-            request.password = password;
-            request.timestamp = System.currentTimeMillis();
+            if (!isConnected()) {
+                GameLogger.error("Not connected to server");
+                throw new IOException("Not connected to server");
+            }
 
-            client.sendTCP(request);
-            GameLogger.info("Sent login request for: " + username);
+            try {
+                NetworkProtocol.LoginRequest request = new NetworkProtocol.LoginRequest();
+                request.username = username;
+                request.password = password;
+                request.timestamp = System.currentTimeMillis();
 
-            // Set authentication timeout
-            authTimer.schedule(() -> {
-                if (!isAuthenticated.get()) {
-                    GameLogger.error("Authentication timeout");
-                    handleConnectionFailure(new Exception("Authentication timeout"));
-                }
-            }, AUTH_TIMEOUT, TimeUnit.MILLISECONDS);
+                loginRequestSent = true;
+                client.sendTCP(request);
+                GameLogger.info("Sent login request for: " + username);
 
-        } catch (Exception e) {
-            GameLogger.error("Failed to send login request: " + e.getMessage());
-            throw new IOException("Failed to send login request", e);
+                // Set authentication timeout
+                scheduler.schedule(() -> {
+                    if (!isAuthenticated.get()) {
+                        GameLogger.error("Authentication timeout");
+                        handleConnectionFailure(new Exception("Authentication timeout"));
+                    }
+                }, AUTH_TIMEOUT, TimeUnit.MILLISECONDS);
+
+            } catch (Exception e) {
+                loginRequestSent = false;
+                GameLogger.error("Failed to send login request: " + e.getMessage());
+                throw new IOException("Failed to send login request", e);
+            }
         }
     }
 
     private void notifyInitializationComplete(boolean success) {
-        GameLogger.info("Notifying initialization complete: " + success);
+        if (success) {
+            isInitialized = true;
+            GameLogger.info("Processing " + pendingMessages.size() + " queued messages");
+
+            // Process any pending messages
+            Object message;
+            while ((message = pendingMessages.poll()) != null) {
+                handleReceivedMessage(message);
+            }
+        }
+
         if (initializationListener != null) {
-            Gdx.app.postRunnable(() -> {
-                try {
-                    initializationListener.onInitializationComplete(success);
-                } catch (Exception e) {
-                    GameLogger.error("Error notifying initialization listener: " + e.getMessage());
-                }
-            });
+            Gdx.app.postRunnable(() -> initializationListener.onInitializationComplete(success));
         }
     }
 
-    private int authAttempts = 0;
-    private static final int MAX_AUTH_ATTEMPTS = 3;
-    private static final long AUTH_RETRY_DELAY = 2000; // 2 seconds
-
     public void connect() {
-        synchronized (connectionLock) {
-            if (connectionState != ConnectionState.DISCONNECTED) {
-                GameLogger.info("Already " + connectionState.toString().toLowerCase());
-                return;
-            }
+        if (isConnecting.get() || isConnected()) {
+            return;
+        }
 
+        isConnecting.set(true);
+
+        connectionExecutor.submit(() -> {
             try {
-                // Reset state
-                hasReceivedInitialJoin.set(false);
-
-                // Clean up existing connection
+                // Clean up any existing client
                 cleanupExistingConnection();
 
-                connectionState = ConnectionState.CONNECTING;
-                GameLogger.info("Starting connection attempt...");
-
-                client = new Client(BUFFER_SIZE, OBJECT_BUFFER);
+                this.client = new Client(BUFFER_SIZE, OBJECT_BUFFER);
                 NetworkProtocol.registerClasses(client.getKryo());
 
-                // Add connection listener
+                // Add client update thread
+                Thread updateThread = new Thread(() -> {
+                    while (!Thread.interrupted() && client != null) {
+                        try {
+                            client.update(0);
+                            Thread.sleep(16); // ~60 FPS
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        } catch (Exception e) {
+                            GameLogger.error("Client update error: " + e.getMessage());
+                            break;
+                        }
+                    }
+                });
+                updateThread.setDaemon(true);
+                updateThread.start();
+
+                // Set up connection listener
                 client.addListener(new Listener() {
                     @Override
                     public void connected(Connection connection) {
-                        GameLogger.info("Raw TCP/UDP connection established");
-                        // Don't set connection state here - wait for ConnectionResponse
-                    }
+                        Gdx.app.postRunnable(() -> {
+                            try {
+                                GameLogger.info("TCP/UDP connection established");
+                                connectionState = ConnectionState.CONNECTED;
+                                isConnected.set(true);
 
-                    @Override
-                    public void received(Connection connection, Object object) {
-                        handleNetworkMessage(object);
+                                // Start keepalive
+                                startKeepalive();
+
+                                // Try login if credentials exist
+                                if (pendingUsername != null && pendingPassword != null) {
+                                    sendLoginRequest(pendingUsername, pendingPassword);
+                                }
+                            } catch (Exception e) {
+                                GameLogger.error("Error in connection handler: " + e.getMessage());
+                                handleConnectionFailure(e);
+                            }
+                        });
                     }
 
                     @Override
                     public void disconnected(Connection connection) {
-                        handleDisconnect();
+                        Gdx.app.postRunnable(() -> handleDisconnect());
+                    }
+
+                    @Override
+                    public void received(Connection connection, Object object) {
+                        Gdx.app.postRunnable(() -> handleNetworkMessage(object));
                     }
                 });
 
                 client.start();
 
-                client.connect(CONNECTION_TIMEOUT,
-                    serverConfig.getServerIP(),
-                    serverConfig.getTcpPort(),
-                    serverConfig.getUdpPort());
+                // Connect with timeout
+                client.connect(CONNECTION_TIMEOUT, serverConfig.getServerIP(),
+                    serverConfig.getTcpPort(), serverConfig.getUdpPort());
 
-                GameLogger.info("Initial TCP/UDP connection established, waiting for server response");
 
             } catch (Exception e) {
                 GameLogger.error("Connection failed: " + e.getMessage());
@@ -290,7 +484,7 @@ public class GameClient {
             } finally {
                 isConnecting.set(false);
             }
-        }
+        });
     }
 
     private void handleNetworkMessage(Object object) {
@@ -514,21 +708,13 @@ public class GameClient {
 
         Gdx.app.postRunnable(() -> {
             try {
-                // Update time
-                if (currentWorld != null) {
-                    currentWorld.getWorldData().setWorldTimeInMinutes(update.worldData.getWorldTimeInMinutes());
-                    currentWorld.getWorldData().setDayLength(update.worldData.getDayLength());
-                    currentWorld.getWorldData().setPlayedTime(update.worldData.getPlayedTime());
-                }
+                // Replace the current world's data with the new data
+                currentWorld.setWorldData(update.worldData);
 
-                // Update other world state
-                if (update.worldData.getPlayers() != null) {
-                    for (Map.Entry<String, PlayerData> entry : update.worldData.getPlayers().entrySet()) {
-                        if (!entry.getKey().equals(localUsername)) {
-                            updateOtherPlayerData(entry.getKey(), entry.getValue());
-                        }
-                    }
-                }
+                // Optionally, reinitialize world components if needed
+                currentWorld.initializeWorldFromData(update.worldData);
+
+                GameLogger.info("World state updated from server.");
 
             } catch (Exception e) {
                 GameLogger.error("Error handling world state update: " + e.getMessage());
@@ -567,7 +753,6 @@ public class GameClient {
             }
         }, RECONNECT_DELAY, RECONNECT_DELAY, TimeUnit.MILLISECONDS);
     }
-
 
     public void setServerConfig(ServerConnectionConfig serverConfig) {
         this.serverConfig = serverConfig;
@@ -708,6 +893,7 @@ public class GameClient {
 
             isDisposing.set(true);
             shouldReconnect.set(false);
+            connectionExecutor.shutdownNow();
             cleanupExistingConnection();
             GameLogger.info("GameClient disposed");
             isDisposing.set(true);
@@ -865,11 +1051,29 @@ public class GameClient {
         }
     }
 
+
     private void handleReceivedMessage(Object object) {
         if (!isInitialized) {
             GameLogger.info("Received message before initialization: " + object.getClass().getName());
 
         }
+        if (object instanceof NetworkProtocol.ChunkDataFragment) {
+            GameLogger.info("Received chunk fragment");
+            handleChunkDataFragment((NetworkProtocol.ChunkDataFragment) object);
+            return;
+        }
+        if (object instanceof NetworkProtocol.ChunkDataComplete) {
+            GameLogger.info("Received chunk complete signal");
+            handleChunkDataComplete((NetworkProtocol.ChunkDataComplete) object);
+            return;
+        }
+        if (object instanceof NetworkProtocol.Keepalive) {
+            lastKeepaliveReceived = System.currentTimeMillis();
+            // Echo keepalive back
+            client.sendTCP(object);
+            return;
+        }
+
         GameLogger.info("Received message: " + object.getClass().getName());
         try {
             if (object instanceof NetworkProtocol.LoginResponse) {
@@ -895,10 +1099,13 @@ public class GameClient {
                 handlePokemonUpdate((NetworkProtocol.PokemonUpdate) object);
             } else if (object instanceof NetworkProtocol.WorldStateUpdate) {
                 handleWorldStateUpdate((NetworkProtocol.WorldStateUpdate) object);
+            } else if (object instanceof NetworkProtocol.ChunkData) {
+                handleChunkData((NetworkProtocol.ChunkData) object);
             }
         } catch (Exception e) {
             GameLogger.error("Error handling network message: " + e.getMessage());
         }
+
     }
 
     // Update handlePlayerPosition method
@@ -932,35 +1139,19 @@ public class GameClient {
         });
     }
 
-
     private void handleDisconnect() {
         GameLogger.info("Handling disconnect - Current state: " + connectionState);
         synchronized (connectionLock) {
-            boolean wasConnected = connectionState == ConnectionState.CONNECTED ||
-                connectionState == ConnectionState.AUTHENTICATED;
-
             connectionState = ConnectionState.DISCONNECTED;
             isConnected.set(false);
             isAuthenticated.set(false);
-            loginRequestSent = false;
+            loginRequestSent = false; // Reset the flag
 
-            if (wasConnected) {
-                GameLogger.info("Lost established connection - will attempt reconnect");
-                // Only attempt reconnect if we were previously connected
-                if (!isDisposing.get() && shouldReconnect.get()) {
-                    scheduleReconnection();
-                }
-            } else {
-                GameLogger.info("Connection attempt failed - will retry from scratch");
-                // Failed during connection attempt
-                handleConnectionFailure(new Exception("Connection attempt failed"));
+            if (!isDisposing.get() && shouldReconnect.get()) {
+                scheduleReconnection();
             }
-
-            // **Do not dispose gameClient here**
-            // Instead, mark it for disposal after pending operations are complete
         }
     }
-
 
     public void setPendingCredentials(String username, String password) {
         GameLogger.info("Setting pending credentials for: " + username);
@@ -1065,7 +1256,7 @@ public class GameClient {
                 isInitializing = true;
                 setServerConfig(config);
 
-                client = new Client(BUFFER_SIZE, OBJECT_BUFFER);
+                client = new Client(WRITE_BUFFER, OBJECT_BUFFER);
                 NetworkProtocol.registerClasses(client.getKryo());
                 client.start();
 
@@ -1215,7 +1406,6 @@ public class GameClient {
         });
     }
 
-
     private void handleForceDisconnect(NetworkProtocol.ForceDisconnect message) {
         GameLogger.info("Received force disconnect: " + message.reason);
 
@@ -1245,6 +1435,8 @@ public class GameClient {
         this.isInitialized = initialized;
     }
 
+    // In GameClient.java - modify handleConnectionResponse()
+
     public boolean isInitializing() {
         return isInitializing;
     }
@@ -1255,12 +1447,25 @@ public class GameClient {
             return;
         }
 
-        GameLogger.info("Scheduling player initialization on the main rendering thread");
+        GameLogger.info("Initializing player on main thread");
 
         Gdx.app.postRunnable(() -> {
             try {
+                // First initialize world if needed
+                if (currentWorld == null) {
+                    GameLogger.info("Initializing world from response data");
+                    initializeWorld(response);
+                }
+
+                if (currentWorld == null) {
+                    GameLogger.error("Failed to initialize world");
+                    notifyInitializationComplete(false);
+                    return;
+                }
+
                 GameLogger.info("Creating new player: " + response.username);
 
+                // Create/load player
                 PlayerData playerData = currentWorld.getWorldData().getPlayerData(response.username);
                 if (playerData == null) {
                     playerData = new PlayerData(response.username);
@@ -1270,7 +1475,6 @@ public class GameClient {
                 }
 
                 Player player = new Player(response.username, currentWorld);
-
                 player.setX(response.x);
                 player.setY(response.y);
                 this.activePlayer = player;
@@ -1278,73 +1482,49 @@ public class GameClient {
 
                 currentWorld.setPlayer(player);
 
-                // Notify that initialization is complete
+                // After player is fully initialized, request chunks
+                initializeChunks();
+
+                // Finally notify completion
                 notifyInitializationComplete(true);
+
             } catch (Exception e) {
-                GameLogger.error("Error initializing player on rendering thread: " + e.getMessage());
+                GameLogger.error("Error initializing player: " + e.getMessage());
                 notifyInitializationComplete(false);
             }
         });
     }
 
-
     private void cleanupExistingConnection() {
-        synchronized (connectionLock) {
+        if (client != null) {
             try {
-                if (keepaliveTask != null) {
-                    keepaliveTask.cancel(true);
-                    keepaliveTask = null;
+                if (client.isConnected()) {
+                    client.close();
                 }
-                if (client != null) {
-                    if (client.isConnected()) {
-                        client.close();
-                    }
-                    client.stop();
-                    client = null;
-                }
-
-                connectionState = ConnectionState.DISCONNECTED;
-                isConnected.set(false);
-                isAuthenticated.set(false);
-                lastKeepaliveReceived = System.currentTimeMillis();
-
-                GameLogger.info("Connection cleanup complete");
-
+                client.stop();
+                client = null;
             } catch (Exception e) {
-                GameLogger.error("Error during cleanup: " + e.getMessage());
+                GameLogger.error("Error cleaning up connection: " + e.getMessage());
             }
         }
     }
-
 
     private void handleConnectionResponse(NetworkProtocol.ConnectionResponse response) {
         synchronized (connectionLock) {
             GameLogger.info("Handling connection response - Success: " + response.success);
 
             if (response.success) {
-                // IMPORTANT: Set connection state BEFORE attempting to send login
                 connectionState = ConnectionState.CONNECTED;
                 isConnected.set(true);
 
-                // Immediately attempt authentication
-                if (pendingUsername != null && pendingPassword != null) {
-                    GameLogger.info("Sending login request with pending credentials");
-                    NetworkProtocol.LoginRequest request = new NetworkProtocol.LoginRequest();
-                    request.username = pendingUsername;
-                    request.password = pendingPassword;
-                    request.timestamp = System.currentTimeMillis();
-
+                // Only send login if not already sent
+                if (pendingUsername != null && pendingPassword != null && !loginRequestSent) {
                     try {
-                        client.sendTCP(request);
-                        loginRequestSent = true;
-                        GameLogger.info("Login request sent for: " + pendingUsername);
+                        sendLoginRequest(pendingUsername, pendingPassword);
                     } catch (Exception e) {
                         GameLogger.error("Failed to send login request: " + e.getMessage());
                         handleConnectionFailure(e);
                     }
-                } else {
-                    GameLogger.error("No credentials available after successful connection");
-                    handleConnectionFailure(new Exception("No credentials available"));
                 }
             } else {
                 GameLogger.error("Connection response indicated failure: " + response.message);
@@ -1411,44 +1591,46 @@ public class GameClient {
                 isAuthenticated.set(true);
                 localUsername = response.username;
 
-                // Start the keepalive mechanism
-                startKeepalive(); // Add this line
+                // Start keepalive
+                startKeepalive();
 
-                // Schedule world initialization on main thread
-                Gdx.app.postRunnable(() -> {
-                    if (currentWorld == null) {
-                        initializeWorld(response);
-                    }
+                // Initialize player (which will also handle world and chunk initialization)
+                initializePlayer(response);
 
-                    if (currentWorld == null) {
-                        GameLogger.error("Failed to initialize world, currentWorld is null");
-                        handleLoginFailure("Failed to initialize world");
-                        return;
-                    }
-
-                    // Initialize player
-                    initializePlayer(response);
-
-                    // Set state flags AFTER initialization
-                    fullyInitialized = true;
-                    isInitialized = true;
-
-                    // Notify on main thread
-                    Gdx.app.postRunnable(() -> {
-                        GameLogger.info("Notifying login response listener");
-                        if (loginResponseListener != null) {
-                            loginResponseListener.onResponse(response);
-                        } else {
-                            GameLogger.error("No login response listener set!");
-                        }
-                    });
-                });
             } else {
                 handleLoginFailure(response.message);
             }
         }
     }
 
+    private void initializeChunks() {
+        if (!isAuthenticated() || currentWorld == null || activePlayer == null) {
+            GameLogger.error("Cannot initialize chunks - prerequisites not met");
+            GameLogger.info("Auth status: " + isAuthenticated());
+            GameLogger.info("World status: " + (currentWorld != null));
+            GameLogger.info("Player status: " + (activePlayer != null));
+            return;
+        }
+
+        GameLogger.info("Beginning chunk initialization...");
+
+        // Calculate player chunk position
+        int playerChunkX = (int) Math.floor(activePlayer.getX() / (Chunk.CHUNK_SIZE * World.TILE_SIZE));
+        int playerChunkY = (int) Math.floor(activePlayer.getY() / (Chunk.CHUNK_SIZE * World.TILE_SIZE));
+
+        // Request chunks in a spiral pattern around player
+        for (int radius = 0; radius <= INITIAL_LOAD_RADIUS; radius++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dy = -radius; dy <= radius; dy++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dy)) == radius) {
+                        Vector2 chunkPos = new Vector2(playerChunkX + dx, playerChunkY + dy);
+                        GameLogger.info("Requesting chunk at: " + chunkPos);
+                        requestChunk(chunkPos);
+                    }
+                }
+            }
+        }
+    }
 
     private void handleLoginFailure(String message) {
         GameLogger.error("Login failure: " + message);
@@ -1514,29 +1696,21 @@ public class GameClient {
 
         try {
             if (currentWorld == null) {
-                GameLogger.info("Creating new World instance...");
-                currentWorld = new World(
-                    "multiplayer_world",
-                    response.worldSeed,
-                    this,
-                    new BiomeManager(response.worldSeed)
-                );
-                GameLogger.info("World instance created successfully.");
+                GameLogger.info("Creating new World instance from server data...");
+
+                // Create a new World instance using the worldData from the server
+                currentWorld = new World(response.worldData, this);
+                GameLogger.info("World instance created successfully from server data.");
+            } else {
+                // If currentWorld already exists, update its data
+                currentWorld.setWorldData(response.worldData);
+                GameLogger.info("Updated existing world with server data.");
             }
 
-            GameLogger.info("Initializing world from server data...");
-            currentWorld.initializeFromServer(
-                response.worldSeed,
-                response.worldTimeInMinutes,
-                response.dayLength
-            );
-            GameLogger.info("World initialized from server.");
         } catch (Exception e) {
             GameLogger.error("Error initializing world: " + e.getMessage() + e);
-            // Optionally rethrow or handle the exception as needed
         }
     }
-
 
     // In GameClient
     private void handlePlayerUpdate(NetworkProtocol.PlayerUpdate update) {
@@ -1562,8 +1736,6 @@ public class GameClient {
             }
         });
     }
-    private final AtomicBoolean isConnecting = new AtomicBoolean(false);
-    private final AtomicBoolean hasReceivedInitialJoin = new AtomicBoolean(false);
 
     private void handlePlayerJoined(NetworkProtocol.PlayerJoined joinMsg) {
         if (joinMsg.username.equals(localUsername)) {
@@ -1652,6 +1824,7 @@ public class GameClient {
                     (int) spawnData.y,
                     overworldSprite
                 );
+                pokemon.setWorld(currentWorld);
 
                 pokemon.setUuid(spawnData.uuid);
                 pokemon.setDirection("down");
@@ -1759,7 +1932,6 @@ public class GameClient {
             GameLogger.error("Failed to request Pokemon spawn data: " + e.getMessage());
         }
     }
-
 
     public void sendWorldObjectUpdate(NetworkProtocol.WorldObjectUpdate update) {
         if (isSinglePlayer || !isConnected() || !isAuthenticated()) {
@@ -1911,14 +2083,12 @@ public class GameClient {
             scheduleReconnection();
         }
     }
-    private final AtomicBoolean isMarkedForDisposal = new AtomicBoolean(false);
 
     public void disposeIfNeeded() {
         //        if (isMarkedForDisposal.get() && !isProcessingPendingOperations()) {
         //            dispose();
         //        }
     }
-
 
     public void setChatMessageHandler(Consumer<NetworkProtocol.ChatMessage> handler) {
         this.chatMessageHandler = handler;
@@ -1948,6 +2118,44 @@ public class GameClient {
         return connectionState == ConnectionState.CONNECTED || connectionState == ConnectionState.AUTHENTICATED;
     }
 
+
+    private void handleChunkDataFragment(NetworkProtocol.ChunkDataFragment fragment) {
+        try {
+            Vector2 chunkPos = new Vector2(fragment.chunkX, fragment.chunkY);
+            ChunkFragmentAssembler assembler = chunkAssemblers.computeIfAbsent(chunkPos,
+                k -> new ChunkFragmentAssembler(fragment.totalFragments,fragment.totalFragments));
+
+            GameLogger.info("Adding fragment " + fragment.fragmentIndex + "/" + fragment.totalFragments +
+                " for chunk " + chunkPos);
+
+            assembler.addFragment(fragment);
+        } catch (Exception e) {
+            GameLogger.error("Error handling chunk fragment: " + e.getMessage());
+        }
+    }
+
+
+    private void handleChunkDataComplete(NetworkProtocol.ChunkDataComplete complete) {
+        try {
+            Vector2 chunkPos = new Vector2(complete.chunkX, complete.chunkY);
+            ChunkFragmentAssembler assembler = chunkAssemblers.get(chunkPos);
+
+            if (assembler != null) {
+                if (assembler.isComplete()) {
+                    NetworkProtocol.ChunkData fullChunk = assembler.buildCompleteChunk(complete.chunkX, complete.chunkY);
+                    handleChunkData(fullChunk);
+                    chunkAssemblers.remove(chunkPos);
+                    GameLogger.info("Successfully assembled and processed chunk at " + chunkPos);
+                } else {
+                    GameLogger.error("Received complete signal but chunk assembly not finished at " + chunkPos);
+                }
+            } else {
+                GameLogger.error("No assembler found for chunk at " + chunkPos);
+            }
+        } catch (Exception e) {
+            GameLogger.error("Error handling chunk complete: " + e.getMessage());
+        }
+    }
 
     private enum ConnectionState {
         DISCONNECTED,
@@ -2001,4 +2209,101 @@ public class GameClient {
         }
     }
 
+    private class ChunkAssembler {
+        private final int[][] tileData = new int[World.CHUNK_SIZE][World.CHUNK_SIZE];
+        private BiomeType biomeType;
+        private boolean isComplete = false;
+
+        public void addFragment(NetworkProtocol.ChunkDataFragment fragment) {
+            if (biomeType == null) {
+                biomeType = fragment.biomeType;
+            }
+
+            // Copy fragment data
+            for (int x = 0; x < fragment.tileData.length; x++) {
+                for (int y = 0; y < fragment.tileData[x].length; y++) {
+                    int worldX = fragment.startX + x;
+                    int worldY = fragment.startY + y;
+                    if (worldX < World.CHUNK_SIZE && worldY < World.CHUNK_SIZE) {
+                        tileData[worldX][worldY] = fragment.tileData[x][y];
+                    }
+                }
+            }
+        }
+
+        public NetworkProtocol.ChunkData buildCompleteChunk(int chunkX, int chunkY) {
+            NetworkProtocol.ChunkData data = new NetworkProtocol.ChunkData();
+            data.chunkX = chunkX;
+            data.chunkY = chunkY;
+            data.biomeType = biomeType;
+            data.tileData = tileData;
+            return data;
+        }
+    }
+
+
+    private class ChunkFragmentAssembler {
+        private final int[][] tileData = new int[World.CHUNK_SIZE][World.CHUNK_SIZE];
+        private final BitSet receivedFragments;
+        private final int totalFragments;
+        private final int fragmentSize;
+        private BiomeType biomeType;
+        private int fragmentsReceived = 0;
+
+        ChunkFragmentAssembler(int totalFragments, int fragmentSize) {
+            this.totalFragments = totalFragments;
+            this.fragmentSize = fragmentSize;
+            this.receivedFragments = new BitSet(totalFragments);
+        }
+
+        void addFragment(NetworkProtocol.ChunkDataFragment fragment) {
+            if (fragment.fragmentIndex >= totalFragments) {
+                GameLogger.error("Invalid fragment index: " + fragment.fragmentIndex + "/" + totalFragments);
+                return;
+            }
+
+            if (!receivedFragments.get(fragment.fragmentIndex)) {
+                try {
+                    // Calculate fragment bounds
+                    int startX = (fragment.fragmentIndex % (World.CHUNK_SIZE / fragmentSize)) * fragmentSize;
+                    int startY = (fragment.fragmentIndex / (World.CHUNK_SIZE / fragmentSize)) * fragmentSize;
+
+                    // Copy fragment data
+                    for (int x = 0; x < fragmentSize && x + startX < World.CHUNK_SIZE; x++) {
+                        for (int y = 0; y < fragmentSize && y + startY < World.CHUNK_SIZE; y++) {
+                            tileData[x + startX][y + startY] = fragment.tileData[x][y];
+                        }
+                    }
+
+                    biomeType = fragment.biomeType;
+                    receivedFragments.set(fragment.fragmentIndex);
+                    fragmentsReceived++;
+
+                    GameLogger.info(String.format("Added fragment %d/%d for chunk at (%d,%d)",
+                        fragmentsReceived, totalFragments, fragment.chunkX, fragment.chunkY));
+
+                } catch (Exception e) {
+                    GameLogger.error("Error processing fragment " + fragment.fragmentIndex + ": " + e.getMessage());
+                }
+            }
+        }
+
+        boolean isComplete() {
+            return fragmentsReceived == totalFragments;
+        }
+
+        NetworkProtocol.ChunkData buildCompleteChunk(int chunkX, int chunkY) {
+            if (!isComplete()) {
+                GameLogger.error("Attempting to build incomplete chunk!");
+                return null;
+            }
+
+            NetworkProtocol.ChunkData data = new NetworkProtocol.ChunkData();
+            data.chunkX = chunkX;
+            data.chunkY = chunkY;
+            data.biomeType = biomeType;
+            data.tileData = tileData;
+            return data;
+        }
+    }
 }
