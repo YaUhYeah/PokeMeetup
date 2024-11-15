@@ -10,6 +10,7 @@ import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.system.data.BlockSaveData;
+import io.github.pokemeetup.system.Player;
 
 import java.util.List;
 import java.util.Map;
@@ -17,7 +18,15 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class BlockManager {
     private final Map<Vector2, PlaceableBlock> placedBlocks = new ConcurrentHashMap<>();
+    private final Map<Vector2, Float> breakingProgress = new ConcurrentHashMap<>();
     private final TextureAtlas atlas;
+    private final TextureRegion breakingOverlay;
+
+    public BlockManager(TextureAtlas atlas) {
+        this.atlas = atlas;
+        this.breakingOverlay = atlas.findRegion("block_breaking");
+    }
+
     public boolean placeBlock(PlaceableBlock.BlockType type, int tileX, int tileY, World world) {
         Vector2 pos = new Vector2(tileX, tileY);
 
@@ -54,11 +63,6 @@ public class BlockManager {
         GameLogger.info("Placed " + type.id + " at " + tileX + "," + tileY);
         return true;
     }
-    public BlockManager(TextureAtlas atlas) {
-        this.atlas = atlas;
-    }
-
-    // ... existing code ...
 
     public void saveBlocks(WorldData worldData) {
         BlockSaveData saveData = new BlockSaveData();
@@ -128,12 +132,40 @@ public class BlockManager {
         GameLogger.info("Loaded " + placedBlocks.size() + " blocks from save data");
     }
 
+    public void startBreakingBlock(int tileX, int tileY, Player player) {
+        Vector2 pos = new Vector2(tileX, tileY);
+        PlaceableBlock block = placedBlocks.get(pos);
+        
+        if (block != null && block.isBreakable()) {
+            breakingProgress.put(pos, 0f);
+        }
+    }
+
+    public void updateBlockBreaking(float deltaTime) {
+        breakingProgress.forEach((pos, progress) -> {
+            PlaceableBlock block = placedBlocks.get(pos);
+            if (block != null) {
+                float newProgress = progress + deltaTime;
+                if (newProgress >= block.getHardness()) {
+                    removeBlock((int)pos.x, (int)pos.y);
+                    breakingProgress.remove(pos);
+                } else {
+                    breakingProgress.put(pos, newProgress);
+                }
+            }
+        });
+    }
+
+    public void stopBreakingBlock(int tileX, int tileY) {
+        breakingProgress.remove(new Vector2(tileX, tileY));
+    }
 
     public void removeBlock(int tileX, int tileY) {
         Vector2 pos = new Vector2(tileX, tileY);
         PlaceableBlock removed = placedBlocks.remove(pos);
         if (removed != null) {
             GameLogger.info("Removed " + removed.getId() + " at " + tileX + "," + tileY);
+            // TODO: Add block to player's inventory
         }
     }
 
@@ -143,10 +175,21 @@ public class BlockManager {
 
     public void render(SpriteBatch batch) {
         for (PlaceableBlock block : placedBlocks.values()) {
+            Vector2 pos = block.getPosition();
             batch.draw(block.getTexture(),
-                block.getPosition().x * World.TILE_SIZE,
-                block.getPosition().y * World.TILE_SIZE,
+                pos.x * World.TILE_SIZE,
+                pos.y * World.TILE_SIZE,
                 World.TILE_SIZE, World.TILE_SIZE);
+
+            // Render breaking animation if block is being broken
+            Float progress = breakingProgress.get(pos);
+            if (progress != null && breakingOverlay != null) {
+                batch.draw(breakingOverlay,
+                    pos.x * World.TILE_SIZE,
+                    pos.y * World.TILE_SIZE,
+                    World.TILE_SIZE, World.TILE_SIZE);
+            }
         }
     }
 }
+

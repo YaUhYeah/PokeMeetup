@@ -59,10 +59,14 @@ public class BuildModeUI {
 
     private Map<Integer, PlaceableBlock.BlockType> initializeBlockMap() {
         Map<Integer, PlaceableBlock.BlockType> map = new HashMap<>();
-        map.put(0, PlaceableBlock.BlockType.CRAFTING_TABLE);
-        map.put(1, PlaceableBlock.BlockType.CHEST);
+        map.put(0, PlaceableBlock.BlockType.DIRT);
+        map.put(1, PlaceableBlock.BlockType.STONE);
+        map.put(2, PlaceableBlock.BlockType.WOOD);
+        map.put(3, PlaceableBlock.BlockType.CRAFTING_TABLE);
+        map.put(4, PlaceableBlock.BlockType.CHEST);
         return map;
     }
+
 
     private void initializeBuildInventory() {
         // Clear existing inventory
@@ -184,3 +188,4 @@ public class BuildModeUI {
         return false;
     }
 }
+
