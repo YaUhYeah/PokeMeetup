@@ -96,7 +96,7 @@ public class WeatherSystem {
         }
     }
     private float weatherStateTimer = 0;
-    private static final float MIN_WEATHER_DURATION = 60.0f; // Minimum weather duration in seconds
+    private static final float MIN_WEATHER_DURATION = 45.0f; // Minimum weather duration in seconds
 
     public void update(float delta, BiomeTransitionResult biomeTransition, float temperature, float timeOfDay) {
         weatherStateTimer += delta;
@@ -258,8 +258,7 @@ class WeatherParticle {
     }
 
     public boolean isOutOfBounds() {
-        return y < -100 || y > World.WORLD_SIZE * World.TILE_SIZE + 100 ||
-            x < -100 || x > World.WORLD_SIZE * World.TILE_SIZE + 100;
+        return false;
     }
 
     public boolean isInView(float left, float right, float bottom, float top) {

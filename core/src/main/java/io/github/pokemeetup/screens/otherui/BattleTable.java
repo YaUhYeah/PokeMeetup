@@ -412,34 +412,11 @@ public class BattleTable extends Table {
     }
     private void setupContainer() {
         setFillParent(true);
-
         setTouchable(Touchable.childrenOnly);
-
-        // Set the battle background as the background of the BattleTable
-        setBackground(new TextureRegionDrawable(battleBackground));
-
-        // Ensure battle elements are above background
         setZIndex(100);
     }
 
 
-    private void setupBattleContainer() {
-        // Calculate dimensions for battle container
-        float stageWidth = stage.getWidth();
-        float stageHeight = stage.getHeight();
-        float battleWidth = stageWidth * BATTLE_TABLE_WIDTH_RATIO;
-        float battleHeight = stageHeight * BATTLE_TABLE_HEIGHT_RATIO;
-
-        // Set up semi-transparent background
-        setBackground(createBattleBackground(0.5f));
-
-        // Position the battle table in the center of the screen
-        setSize(battleWidth, battleHeight);
-        setPosition((stageWidth - battleWidth) / 2, (stageHeight - battleHeight) / 2);
-
-        // Add padding for content
-        pad(20);
-    }
 
     private Drawable createBattleBackground(float alpha) {
         Pixmap bgPixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
@@ -491,16 +468,18 @@ public class BattleTable extends Table {
         if (!initialized) return;
 
         clear();
+        Image backgroundImage = new Image(battleBackground);
+        backgroundImage.setFillParent(true);
+        backgroundImage.setColor(1, 1, 1, 0.5f); // Adjust alpha as needed
+        backgroundImage.setTouchable(Touchable.disabled);
+        addActorAt(0, backgroundImage); // Add behind other actors
 
         Table mainContainer = new Table();
         mainContainer.setFillParent(true);
         mainContainer.setTouchable(Touchable.childrenOnly);
 
-        // Semi-transparent overlay (optional)
-        Image dimOverlay = new Image(createTranslucentBackground(0.3f));
-        dimOverlay.setFillParent(true);
+        // Create a background Image with transparency
 
-        addActor(dimOverlay);
         // Add top padding to move everything down
         mainContainer.padTop(20); // Adjust the value (e.g., 20 pixels) as needed
         // Enemy section (top right)

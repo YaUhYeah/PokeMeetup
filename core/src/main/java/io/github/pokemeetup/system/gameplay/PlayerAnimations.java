@@ -6,7 +6,7 @@ import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import io.github.pokemeetup.utils.GameLogger;
 import io.github.pokemeetup.utils.textures.TextureManager;
 public class PlayerAnimations {
-    public static final float BASE_MOVE_TIME = 0.35f;
+    public static final float BASE_MOVE_TIME = 0.45f;
     public static final float RUN_SPEED_MULTIPLIER = 1.5f;
     public static final float WALK_FRAME_DURATION = BASE_MOVE_TIME / 4;
     public static final float RUN_FRAME_DURATION = (BASE_MOVE_TIME / RUN_SPEED_MULTIPLIER) / 4;

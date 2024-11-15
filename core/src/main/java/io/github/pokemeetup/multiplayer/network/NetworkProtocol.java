@@ -13,7 +13,6 @@ import io.github.pokemeetup.system.data.ItemData;
 import com.badlogic.gdx.math.Vector2;
 import io.github.pokemeetup.system.data.PlayerData;
 import io.github.pokemeetup.system.data.PokemonData;
-import io.github.pokemeetup.system.data.WorldData;
 import io.github.pokemeetup.system.gameplay.overworld.World;
 import io.github.pokemeetup.system.gameplay.overworld.biomes.BiomeType;
 import io.github.pokemeetup.utils.ChunkPos;

@@ -50,7 +50,16 @@ public class WorldObject {
         this.renderOrder = type == ObjectType.TREE ? pixelY + World.TILE_SIZE : pixelY;
         this.isDirty = true;
     }
-
+    public WorldObject() {
+        // Initialize default values if necessary
+        this.id = UUID.randomUUID().toString();
+        this.isDirty = true;
+        this.isCollidable = false;
+        this.spawnTime = 0f;
+        this.renderOrder = 0f;
+        this.attachedTo = null;
+        // Set other default values as needed
+    }
     public String getId() {
         return id;
     }

@@ -1485,6 +1485,8 @@ public class GameScreen implements Screen, PickupActionHandler, BattleInitiation
 
             if (!gameClient.isSinglePlayer()) {
                 renderOtherPlayers(batch, viewBounds);
+
+                gameClient.processChunkQueue();
             }
         }           // Debug info
         if (SHOW_DEBUG_INFO) {

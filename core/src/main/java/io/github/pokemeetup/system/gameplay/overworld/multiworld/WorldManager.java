@@ -82,25 +82,29 @@ public class WorldManager {
         }
     }
 
+
     private void initializeMultiplayerMode() {
         try {
             if (storage != null) {
+                // Server-side initialization
                 Map<String, WorldData> serverWorlds = storage.getAllWorlds();
                 if (serverWorlds != null && !serverWorlds.isEmpty()) {
                     worlds.putAll(serverWorlds);
                     GameLogger.info("Loaded " + serverWorlds.size() + " worlds from server");
                 }
 
-                // Check if multiplayer world exists
                 WorldData multiplayerWorld = worlds.get(CreatureCaptureGame.MULTIPLAYER_WORLD_NAME);
                 if (multiplayerWorld == null) {
                     createDefaultMultiplayerWorld();
                 } else {
-                    currentWorld = multiplayerWorld; // Add this line to set currentWorld
+                    currentWorld = multiplayerWorld;
                 }
             } else {
-                // Clients should not create or save world data
-                GameLogger.info("Client-side multiplayer initialization - waiting for server data");
+                // Client-side: Do NOT create local storage
+                GameLogger.info("Client-side multiplayer initialization - deferring to server");
+                // Clear any local world data to ensure we only use server data
+                worlds.clear();
+                worldCache.clear();
             }
         } catch (Exception e) {
             GameLogger.error("Error initializing multiplayer mode: " + e.getMessage());
@@ -139,15 +143,23 @@ public class WorldManager {
         }
     }
 
-    private void createDirectoryStructure() {
-        try {
-            fs.createDirectory(WORLDS_BASE_DIR);
-            fs.createDirectory(baseDirectory);
-            fs.createDirectory(baseDirectory + "backups/");
-            GameLogger.info("Directory structure initialized: " + baseDirectory);
-        } catch (Exception e) {
-            GameLogger.error("Failed to create directory structure: " + e.getMessage());
-            throw new RuntimeException("Failed to initialize directory structure", e);
+    public void checkAutoSave() {
+        if (isMultiplayerMode && storage == null) {
+            // Client should not auto-save
+            return;
+        }
+
+        long currentTime = System.currentTimeMillis();
+        if (currentTime - lastAutoSave >= AUTO_SAVE_INTERVAL) {
+            synchronized (worldLock) {
+                for (WorldData world : worlds.values()) {
+                    if (world.isDirty()) {
+                        saveWorld(world);
+                    }
+                }
+            }
+            lastAutoSave = currentTime;
+            GameLogger.info("Auto-saved dirty worlds.");
         }
     }
 
@@ -198,8 +210,13 @@ public class WorldManager {
             }
         }
     }
-
     public void saveWorld(WorldData worldData) {
+        if (isMultiplayerMode && storage == null) {
+            // Client should not save world data
+            GameLogger.info("Client-side: Skipping world save - handled by server");
+            return;
+        }
+
         synchronized (saveLock) {
             if (worldData == null) {
                 GameLogger.error("Cannot save null world data");
@@ -207,39 +224,20 @@ public class WorldManager {
             }
 
             try {
-                // Create backup first
-
-                // Prepare save path
-                String worldPath = "worlds/singleplayer/" + worldData.getName();
-                FileHandle worldDir = Gdx.files.local(worldPath);
-                worldDir.mkdirs();
-
-                // Save to temp file first
-                FileHandle tempFile = worldDir.child("world.json.temp");
-                String jsonContent = JsonConfig.getInstance().toJson(worldData);
-                tempFile.writeString(jsonContent, false);
-
-                // Verify temp file
-                WorldData verified = JsonConfig.getInstance().fromJson(WorldData.class, tempFile.readString());
-                if (!validateWorldData(verified)) {
-                    throw new RuntimeException("Save validation failed");
+                if (isMultiplayerMode) {
+                    // Server-side save
+                    storage.saveWorld(worldData);
+                } else {
+                    // Single-player save
+                    saveSingleplayerWorld(worldData);
                 }
-
-                // Move temp to real file
-                FileHandle realFile = worldDir.child("world.json");
-                tempFile.moveTo(realFile);
-
-                // Update cache
-                worldCache.put(worldData.getName(), worldData);
-
-                GameLogger.info("Successfully saved world: " + worldData.getName());
-
             } catch (Exception e) {
                 GameLogger.error("Failed to save world: " + worldData.getName() + " - " + e.getMessage());
                 throw new RuntimeException("World save failed", e);
             }
         }
     }
+
 
     private void saveSingleplayerWorld(WorldData world) {
         try {
@@ -309,15 +307,19 @@ public class WorldManager {
         return copy;
     }
 
+
     public WorldData getWorld(String name) {
         synchronized (worldLock) {
             try {
+                if (isMultiplayerMode && storage == null) {
+                    // Client should only use the world data provided by server
+                    return worlds.get(name);
+                }
+
                 WorldData world = worlds.get(name);
                 if (world == null && !isMultiplayerMode) {
-                    // Try to load from file
                     world = JsonConfig.loadWorldData(name);
                     if (world != null) {
-                        // Apply data and update cache
                         applyWorldData(world);
                     }
                 }
@@ -326,6 +328,21 @@ public class WorldManager {
                 GameLogger.error("Error loading world: " + name + " - " + e.getMessage());
                 throw new RuntimeException("Failed to load world", e);
             }
+        }
+    }
+
+    private void createDirectoryStructure() {
+        try {
+            // Only create directories for singleplayer mode
+            if (!isMultiplayerMode) {
+                fs.createDirectory(WORLDS_BASE_DIR);
+                fs.createDirectory(baseDirectory);
+                fs.createDirectory(baseDirectory + "backups/");
+                GameLogger.info("Directory structure initialized: " + baseDirectory);
+            }
+        } catch (Exception e) {
+            GameLogger.error("Failed to create directory structure: " + e.getMessage());
+            throw new RuntimeException("Failed to initialize directory structure", e);
         }
     }
 
@@ -659,21 +676,6 @@ public class WorldManager {
             }
         } catch (Exception e) {
             GameLogger.error("Failed to create backup for world: " + world.getName());
-        }
-    }
-
-    public void checkAutoSave() {
-        long currentTime = System.currentTimeMillis();
-        if (currentTime - lastAutoSave >= AUTO_SAVE_INTERVAL) {
-            synchronized (worldLock) {
-                for (WorldData world : worlds.values()) {
-                    if (world.isDirty()) {
-                        saveWorld(world);
-                    }
-                }
-            }
-            lastAutoSave = currentTime;
-            GameLogger.info("Auto-saved dirty worlds.");
         }
     }
 }
